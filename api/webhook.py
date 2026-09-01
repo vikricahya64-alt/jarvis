@@ -78,7 +78,7 @@ class handler(BaseHTTPRequestHandler):
             task_id = _enqueue(chat_id, text, username, first_name)
             logger.info(f"Enqueued task {task_id} for chat {chat_id}")
         except Exception as exc:
-            logger.error(f"Failed to enqueue task: {exc}")
+            logger.exception(f"Failed to enqueue task: {exc}")
             return self._send_json({"ok": False, "error": "Enqueue failed"}, 200)
 
         # 4. Run the orchestrator pipeline in the background, then return
