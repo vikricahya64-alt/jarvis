@@ -181,7 +181,11 @@ def _ddg_ai_chat(messages: list, model: str = None, max_chars: int = 1500) -> st
             pass
         if not vqd:
             vqd = body.get("token")
-        log.info(f"DDG AI status OK; vqd={'yes' if vqd else 'NO'}; models={len(body.get('models') or [])}")
+        log.info(
+            f"DDG AI status: {st.status_code} vqd={'yes' if vqd else 'NO'} "
+            f"ct={st.headers.get('content-type','?')[:40]} "
+            f"body={st.text[:200]!r}"
+        )
         if not vqd:
             return "DuckDuckGo AI Chat: could not obtain vqd token (status endpoint gave none)."
 
@@ -205,7 +209,10 @@ def _ddg_ai_chat(messages: list, model: str = None, max_chars: int = 1500) -> st
         chat = c.post(
             "https://duckduckgo.com/duckchat/v1/chat", json=payload, headers=headers
         )
-        log.info(f"DDG AI chat POST -> {chat.status_code}")
+        log.info(
+            f"DDG AI chat POST -> {chat.status_code} ct={chat.headers.get('content-type','?')[:40]} "
+            f"head={chat.text[:150]!r}"
+        )
         if chat.status_code != 200:
             return (
                 f"DuckDuckGo AI Chat HTTP {chat.status_code}: "

@@ -6,16 +6,31 @@ free-tier models if the primary model is unavailable.
 """
 import os
 import json
+import time
 
 try:
-    from groq import Groq, AsyncGroq
+    from groq import Groq, AsyncGroq, RateLimitError
     GROQ_AVAILABLE = True
 except ImportError:
-    Groq = AsyncGroq = None
+    Groq = AsyncGroq = RateLimitError = None
     GROQ_AVAILABLE = False
 
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 FALLBACK_MODELS = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b", "qwen/qwen3.6-27b"]
+
+# Deadline shared across all Groq calls within one pipeline run, so a burst
+# of 429s (free tier) or slow fallbacks can never blow Vercel's 60s Hobby cap.
+_deadline_ts = None  # set by set_budget(seconds); None = no deadline
+
+
+def set_budget(seconds: float):
+    """Bound total wall-clock time for all in-flight Groq calls."""
+    global _deadline_ts
+    _deadline_ts = time.monotonic() + seconds
+
+
+def _over_deadline() -> bool:
+    return _deadline_ts is not None and time.monotonic() > _deadline_ts
 
 # Tool definitions advertised to the model (function calling)
 TOOLS = [
@@ -199,35 +214,45 @@ def sync_completion(user_input, context=None):
     """
     if not GROQ_AVAILABLE:
         raise RuntimeError("groq package not installed")
-    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
     messages = _build_messages(user_input, context)
 
-    try:
-        response = client.chat.completions.create(
-            model=MODEL,
+    def _create(model: str):
+        return client.chat.completions.create(
+            model=model,
             messages=messages,
             tools=TOOLS,
             tool_choice="auto",
             temperature=0.3,
             max_tokens=2000,
         )
-        return response
-    except Exception as exc:
-        # Attempt fallback model
-        for model in FALLBACK_MODELS:
-            try:
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    tools=TOOLS,
-                    tool_choice="auto",
-                    temperature=0.3,
-                    max_tokens=2000,
-                )
-                return response
-            except Exception:
-                continue
-        raise RuntimeError(f"Groq error: {exc}")
+
+    client = Groq(
+        api_key=os.getenv("GROQ_API_KEY"),
+        timeout=20.0,
+        max_retries=0,  # we manage retries to respect the shared budget
+    )
+
+    attempts = 0
+    while True:
+        if _over_deadline():
+            raise RuntimeError("Groq budget exhausted (deadline hit)")
+        try:
+            return _create(MODEL)
+        except RateLimitError as exc:
+            attempts += 1
+            if attempts >= 3:
+                raise RuntimeError(f"Groq rate limited after {attempts} tries: {exc}")
+            time.sleep(min(2 * attempts, 5))
+        except Exception as exc:
+            for model in FALLBACK_MODELS:
+                if _over_deadline():
+                    raise RuntimeError("Groq budget exhausted (deadline hit)")
+                try:
+                    return _create(model)
+                except Exception:
+                    continue
+            raise RuntimeError(f"Groq error: {exc}")
 
 
 async def async_completion(user_input, context=None):

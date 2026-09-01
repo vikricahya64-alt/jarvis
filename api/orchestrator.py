@@ -49,6 +49,9 @@ def _extract_tool_calls(response):
 
 def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
     """The full agentic orchestration pipeline for a single task (sync)."""
+    # Bound total Groq time so the whole task fits Vercel's Hobby 60s cap.
+    groq_client.set_budget(48)
+
     # Acquire task (mark PROCESSING).
     supabase_client.update_task(task_id, {"status": "PROCESSING"})
     telegram.send_typing(telegram_id)
@@ -73,6 +76,7 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
     max_iterations = int(os.getenv("MAX_TOOL_ITERATIONS", "3"))
 
     context = ctx
+    consecutive_failures = 0
     for iteration in range(max_iterations):
         response = groq_client.sync_completion(user_input, context=context)
         tool_calls, assistant_text = _extract_tool_calls(response)
@@ -110,6 +114,10 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
             logger.info(
                 f"Tool {name} result: {json.dumps(tool_result, ensure_ascii=False)[:300]}"
             )
+            consecutive_failures = consecutive_failures + 1 if _is_failed_result(tool_result) else 0
+            if consecutive_failures >= 2:
+                logger.info(f"Tool {name} failing repeatedly; breaking tool loop.")
+                break
             context.append({
                 "role": "tool",
                 "tool_call_id": tc.get("id", f"call_{iteration}"),
@@ -162,6 +170,16 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
 
     # 5. Send result back to Telegram.
     _notify_user(telegram_id, final_text, result_urls)
+
+
+def _is_failed_result(result) -> bool:
+    """True when a tool result signals failure so the loop stops re-calling it."""
+    try:
+        text = json.dumps(result, ensure_ascii=False).lower()
+    except Exception:
+        text = str(result).lower()
+    markers = ("error", "could not", "failed", "failed.", "no output", "rate limit")
+    return any(m in text for m in markers) and len(text) < 1200
 
 
 def _dispatch_tool(name: str, args: dict):
