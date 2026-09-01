@@ -110,6 +110,32 @@ def update_task(task_id: str, updates: dict):
         _raise_for(res, "tasks.update")
 
 
+def reclaim_stale_tasks(stale_minutes: int = 10) -> int:
+    """
+    Reset PROCESSING tasks older than stale_minutes back to PENDING so the
+    cron worker can retry them. Covers runs killed by the Vercel function
+    timeout: the handler dies mid-pipeline, so no FAILED status is ever
+    written and the task would otherwise be stuck forever.
+    """
+    base, _ = _config()
+    cutoff = (
+        datetime.datetime.utcnow() - datetime.timedelta(minutes=stale_minutes)
+    ).isoformat()
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.patch(
+            f"{base}/rest/v1/tasks",
+            params={"status": "eq.PROCESSING", "updated_at": f"lt.{cutoff}"},
+            json={"status": "PENDING"},
+            headers={**_auth_headers(), "Prefer": "return=minimal,count=exact"},
+        )
+        if res.status_code >= 400:
+            return 0
+        try:
+            return int(res.headers.get("content-range", "*/0").split("/")[1])
+        except Exception:
+            return 0
+
+
 def claim_next_pending():
     """
     Atomically claim the oldest PENDING task and mark it PROCESSING.
@@ -117,6 +143,12 @@ def claim_next_pending():
     """
     base, _ = _config()
     with httpx.Client(timeout=_TIMEOUT) as client:
+        # 0. Unstick any PROCESSING task left over from a timed-out run.
+        try:
+            reclaim_stale_tasks()
+        except Exception:
+            pass
+
         # 1. Find the oldest PENDING task.
         res = client.get(
             f"{base}/rest/v1/tasks",
@@ -140,9 +172,12 @@ def claim_next_pending():
             f"{base}/rest/v1/tasks",
             params={"id": f"eq.{task['id']}", "status": "eq.PENDING"},
             json={"status": "PROCESSING"},
-            headers=_auth_headers(),
+            headers={**_auth_headers(), "Prefer": "return=representation"},
         )
         _raise_for(res, "tasks.claim")
+        claimed = res.json()
+        if not claimed:
+            return None  # another worker claimed it first; nothing for us to do
         task["status"] = "PROCESSING"
         return task
 

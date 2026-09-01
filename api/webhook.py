@@ -32,6 +32,20 @@ def _enqueue(chat_id: int, text: str, username=None, first_name=None) -> str:
     return supabase_client.insert_task(chat_id, text, profile["id"])
 
 
+def _notify_failure(chat_id: int):
+    """Best-effort Telegram notice when a pipeline crashes mid-run."""
+    try:
+        from utils.telegram import send_message
+        send_message(
+            chat_id,
+            "Ups, terjadi kendala saat memproses permintaan Anda. "
+            "Kendala sudah tercatat dan akan saya coba tangani lagi. "
+            "Silakan ulangi jika ini terus berulang. 🙏",
+        )
+    except Exception:
+        pass
+
+
 class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
@@ -81,6 +95,14 @@ class handler(BaseHTTPRequestHandler):
             logger.info(f"Pipeline finished for task {task_id}")
         except Exception as exc:
             logger.exception(f"Pipeline failed for task {task_id}: {exc}")
+            try:
+                supabase_client.update_task(task_id, {
+                    "status": "FAILED",
+                    "error": str(exc)[:500],
+                })
+            except Exception:
+                pass
+            _notify_failure(chat_id)
 
         return self._send_json({"ok": True, "task_id": task_id}, 200)
 

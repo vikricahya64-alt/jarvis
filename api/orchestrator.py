@@ -190,12 +190,26 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
 
 def _is_failed_result(result) -> bool:
     """True when a tool result signals failure so the loop stops re-calling it."""
+    # Explicit error payloads always count, regardless of size.
+    if isinstance(result, dict):
+        if result.get("error"):
+            return True
+        if result.get("ok") is False or result.get("success") is False:
+            return True
     try:
         text = json.dumps(result, ensure_ascii=False).lower()
     except Exception:
         text = str(result).lower()
-    markers = ("error", "could not", "failed", "failed.", "no output", "rate limit")
-    return any(m in text for m in markers) and len(text) < 1200
+    if not text:
+        return True
+    # Heuristic fallback: only when the report *starts with* a failure marker.
+    # The old contains() check flagged normal tool content that merely
+    # mentioned "error"/"failed" and prematurely killed the tool loop.
+    return text.strip().startswith((
+        "error", "failed", "could not", "cannot", "no output",
+        "rate limit", "gagal", "tidak dapat", "terjadi kesalahan",
+        "unknown tool",
+    ))
 
 
 def _dispatch_tool(name: str, args: dict):

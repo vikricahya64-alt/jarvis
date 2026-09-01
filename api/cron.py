@@ -54,6 +54,15 @@ def process_one() -> dict:
             })
         except Exception:
             pass
+        try:
+            from utils.telegram import send_message
+            send_message(
+                telegram_id,
+                "Ups, terjadi kendala saat memproses permintaan Anda. "
+                "Kendala sudah tercatat dan akan saya coba lagi. 🙏",
+            )
+        except Exception:
+            pass
         return {"processed": True, "task_id": task_id, "result": "FAILED"}
 
 
