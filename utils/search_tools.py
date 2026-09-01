@@ -1,18 +1,22 @@
 """
-Research agent tools: live DuckDuckGo web search (free) and URL scraping.
+Research agent tools: live web search (free-tier APIs first, then scrapers).
 
-Search is layered for resilience against rate-limit / CAPTCHA:
-  1. duckduckgo-search library (backend 'auto' -> try api, html, lite)
-  2. manual scrape of html.duckduckgo.com/html/ (POST)
-  3. manual scrape of lite.duckduckgo.com/lite/ (POST)
-Plus DuckDuckGo AI Chat (free, no API key, OpenAI-compatible endpoint) which
-answers with live web results.
+Provider priority (rolling, cheapest/free quotas first):
+  1. Tavily (monthly, 1000) -- needs TAVILY_API_KEY
+  2. Brave Search API (monthly, 2000) -- needs BRAVE_API_KEY
+  3. Google Programmable Search (daily, 100) -- needs GOOGLE_CSE_API_KEY + GOOGLE_CSE_CX
+  4. DuckDuckGo scrapers (library api/html/lite) -- free, no key
+  5. Bing SERP scrape -- free, no key (last resort)
+
+DuckDuckGo AI Chat (free) is attempted by search_live first; when DDG blocks
+cloud IPs it falls back to the API router above.
 
 Synchronous implementation to avoid event-loop conflicts inside Vercel
 serverless functions.
 """
 import html as _html
 import json
+import os
 import re
 import urllib.parse
 
@@ -38,6 +42,10 @@ def search_web(query: str, max_results: int = 5) -> list:
     Search the web via DuckDuckGo with layered fallbacks. Returns a list of
     dicts: {title, url, snippet}.
     """
+    out = _api_search(query, max_results)
+    if out:
+        return out
+
     if DDGS_AVAILABLE:
         try:
             with DDGS() as ddgs:
@@ -205,6 +213,89 @@ def _bing_real_url(url: str) -> str:
 
 
 # ------------------------------------------------------------------
+# API providers (rolling quota). Each returns list of
+# {title, url, snippet} or [] on failure/quota-exhaustion so the
+# router can roll to the next provider.
+# ------------------------------------------------------------------
+def _tavily_search(query: str, max_results: int) -> list:
+    key = os.getenv("TAVILY_API_KEY")
+    if not key:
+        return []
+    with httpx.Client(timeout=20) as c:
+        resp = c.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": key,
+                "query": query,
+                "max_results": max_results,
+                "search_depth": "basic",
+            },
+        )
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+    return [
+        {"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("content", "")}
+        for r in data.get("results", [])[:max_results]
+    ]
+
+
+def _brave_search(query: str, max_results: int) -> list:
+    key = os.getenv("BRAVE_API_KEY")
+    if not key:
+        return []
+    with httpx.Client(
+        timeout=20,
+        headers={
+            "X-Subscription-Token": key,
+            "Accept": "application/json",
+        },
+    ) as c:
+        resp = c.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            params={"q": query, "count": str(max_results)},
+        )
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+    return [
+        {"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("description", "")}
+        for r in (data.get("web", {}) or {}).get("results", [])[:max_results]
+    ]
+
+
+def _google_cse_search(query: str, max_results: int) -> list:
+    key = os.getenv("GOOGLE_CSE_API_KEY")
+    cx = os.getenv("GOOGLE_CSE_CX")
+    if not key or not cx:
+        return []
+    with httpx.Client(timeout=20) as c:
+        resp = c.get(
+            "https://www.googleapis.com/customsearch/v1",
+            params={"key": key, "cx": cx, "q": query, "num": min(max_results, 10)},
+        )
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+    return [
+        {"title": r.get("title", ""), "url": r.get("link", ""), "snippet": r.get("snippet", "")}
+        for r in data.get("items", [])[:max_results]
+    ]
+
+
+def _api_search(query: str, max_results: int = 5) -> list:
+    """Try each configured API provider in priority order; first hits wins."""
+    for provider in (_tavily_search, _brave_search, _google_cse_search):
+        try:
+            out = provider(query, max_results)
+            if out:
+                return out
+        except Exception:
+            continue
+    return []
+
+
+# ------------------------------------------------------------------
 # DuckDuckGo AI Chat (free live web answers) + search_live tool
 # ------------------------------------------------------------------
 def search_live(query: str, max_chars: int = 1500) -> dict:
@@ -227,9 +318,10 @@ def search_live(query: str, max_chars: int = 1500) -> dict:
     except Exception:
         pass
 
-    # DDG AI Chat is blocked from cloud IPs -> fall back to live Bing results.
+    # DDG AI Chat is blocked from cloud IPs -> fall back to live results
+    # from the API router, then to DDG/Bing scrapers.
     try:
-        results = search_web(query, max_results=5)
+        results = _api_search(query, max_results=5) or search_web(query, max_results=5)
         lines = []
         for i, r in enumerate(results, 1):
             title = r.get("title") or "(no title)"
@@ -237,10 +329,10 @@ def search_live(query: str, max_chars: int = 1500) -> dict:
             url = r.get("url") or ""
             lines.append(f"{i}. {title}\n{snip}\n{url}")
         body = "\n\n".join(lines) if lines else "Tidak ada hasil."
+        provider_hint = "pencarian langsung" if not os.getenv("TAVILY_API_KEY") else "pencarian API"
         return {
             "answer": (
-                "Live Q&A tidak tersedia (DuckDuckGo memblokir IP cloud); "
-                "berikut hasil pencarian langsung:\n\n" + body
+                "Live Q&A sementara tidak tersedia; berikut hasil " + provider_hint + ":\n\n" + body
             )[:max_chars]
         }
     except Exception as exc:
