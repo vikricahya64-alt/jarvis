@@ -2,11 +2,11 @@
 Telegram Webhook Handler (entry point).
 URL: /api/webhook
 
-Receives updates from Telegram, stores the pending task in Supabase,
-returns 200 OK immediately, and runs the orchestrator pipeline in a
-background thread. This avoids depending on a Supabase Database webhook
-(which requires the supabase_admin-owned schema that free projects often
-cannot create).
+Receives updates from Telegram, stores the task in Supabase, then runs the
+orchestrator pipeline synchronously before responding. A background thread
+is unreliable on Vercel (serverless isolates stop running as soon as the
+handler returns), so we process inline. A daily cron (api/cron.py) catches
+any task that exceeds the function timeout.
 
 Everything here is synchronous: repeated asyncio.run() in one thread
 raises EBUSY inside Vercel serverless, so no event loop is used on the
@@ -16,7 +16,6 @@ import os
 import json
 import hmac
 import logging
-import threading
 from http.server import BaseHTTPRequestHandler
 
 from utils import supabase_client
@@ -31,16 +30,6 @@ def _enqueue(chat_id: int, text: str, username=None, first_name=None) -> str:
     send_typing(chat_id)
     profile = supabase_client.get_or_create_profile(chat_id, username, first_name)
     return supabase_client.insert_task(chat_id, text, profile["id"])
-
-
-def _run_in_background(task_id: str, telegram_id: int, user_input: str):
-    """Run the orchestrator pipeline on a plain background thread."""
-    try:
-        from api.orchestrator import _run_pipeline
-        _run_pipeline(task_id, telegram_id, user_input)
-        logger.info(f"Pipeline finished for task {task_id}")
-    except Exception as exc:
-        logger.exception(f"Background pipeline failed for task {task_id}: {exc}")
 
 
 class handler(BaseHTTPRequestHandler):
@@ -81,18 +70,17 @@ class handler(BaseHTTPRequestHandler):
             logger.exception(f"Failed to enqueue task: {exc}")
             return self._send_json({"ok": False, "error": "Enqueue failed"}, 200)
 
-        # 4. Run the orchestrator pipeline in the background, then return
-        #    200 immediately (Telegram expects a fast webhook response).
+        # 4. Run the orchestrator pipeline synchronously. A background thread
+        #    is unreliable on Vercel (serverless isolates stop running as soon
+        #    as the handler returns), leaving tasks PENDING forever. The daily
+        #    cron (api/cron.py) acts as a safety net for any task that exceeds
+        #    the function timeout.
         try:
-            thread = threading.Thread(
-                target=_run_in_background,
-                args=(task_id, chat_id, text),
-                daemon=True,
-            )
-            thread.start()
-            logger.info(f"Started background pipeline for task {task_id}")
+            from api.orchestrator import _run_pipeline
+            _run_pipeline(task_id, chat_id, text)
+            logger.info(f"Pipeline finished for task {task_id}")
         except Exception as exc:
-            logger.error(f"Failed to start pipeline: {exc}")
+            logger.exception(f"Pipeline failed for task {task_id}: {exc}")
 
         return self._send_json({"ok": True, "task_id": task_id}, 200)
 
