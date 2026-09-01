@@ -11,6 +11,7 @@ to Telegram) works fine — so we bypass the SDK entirely.
 """
 import os
 import base64
+import datetime
 import httpx
 
 _SUPABASE_URL = None
