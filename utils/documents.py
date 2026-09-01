@@ -92,22 +92,42 @@ def store_document(title: str, content: str, source: str = "telegram") -> dict:
 
 
 # ------------------------------------------------------------------
-# Retrieve (keyword-first)
+# Retrieve (fuzzy keyword-first)
 # ------------------------------------------------------------------
-def retrieve_docs(query: str, top_k: int = 5) -> list:
-    """
-    Search the knowledge base by keyword. Returns the most relevant chunks
-    joined with their document title. Uses ILIKE over the whole query plus
-    per-token matches for a lightweight relevance score.
-    """
-    # Use "similarity" sorting via trigram when available, else fallback.
+class _FunctionMissing(Exception):
+    """Marker for the fuzzy RPC not existing yet (fall back to ILIKE)."""
+    pass
+
+
+def _rpc_search(query: str, top_k: int = 5) -> list:
+    """Typo-tolerant search via the pg_trgm RPC search_document_chunks."""
+    base, key = supabase_client._config()
+    with httpx.Client(timeout=supabase_client._TIMEOUT) as client:
+        res = client.post(
+            f"{base}/rest/v1/rpc/search_document_chunks",
+            json={"p_query": query, "p_top_k": top_k},
+            headers=supabase_client._auth_headers(),
+        )
+    if res.status_code == 404:
+        raise _FunctionMissing()
+    supabase_client._raise_for(res, "rpc.search_document_chunks")
+    return [
+        {
+            "title": r.get("title") or "untitled",
+            "content": r.get("content") or "",
+            "score": round(float(r.get("score") or 0), 3),
+        }
+        for r in res.json()
+    ]
+
+
+def _keyword_search(query: str, top_k: int = 5) -> list:
+    """Fallback: ILIKE per token, scored by number of distinct hits."""
     text = (query or "").strip()
     if not text:
         return []
 
     base, key = supabase_client._config()
-
-    # Normalized tokens for per-keyword scoring.
     tokens = [t for t in re.split(r"\W+", text.lower()) if len(t) >= 3][:8]
 
     with httpx.Client(timeout=supabase_client._TIMEOUT) as client:
@@ -129,7 +149,6 @@ def retrieve_docs(query: str, top_k: int = 5) -> list:
                 r["_tok"] = tok
                 rows.append(r)
 
-        # Deduplicate by chunk id and score by number of distinct tokens hit.
         best = {}
         for r in rows:
             cid = r["id"]
@@ -154,3 +173,11 @@ def retrieve_docs(query: str, top_k: int = 5) -> list:
                 "score": len(item["hits"]),
             })
         return results
+
+
+def retrieve_docs(query: str, top_k: int = 5) -> list:
+    """Search the knowledge base. Prefers fuzzy RPC, else ILIKE fallback."""
+    try:
+        return _rpc_search(query, top_k)
+    except _FunctionMissing:
+        return _keyword_search(query, top_k)
