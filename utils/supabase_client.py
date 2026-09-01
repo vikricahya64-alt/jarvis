@@ -3,27 +3,45 @@ Supabase client wrapper: database access + storage upload for artifacts.
 
 Uses the service-role key server-side so the orchestrator can manage
 tasks, store chat history, and upload generated files to the Storage bucket.
-Synchronous implementation (the Supabase/PostgREST SDK is sync) to avoid
-event-loop conflicts inside Vercel serverless functions.
+
+Implemented with plain httpx calls against the PostgREST REST API. The
+official `supabase` SDK's connection pool raises `[Errno 16] Device or
+resource busy` inside Vercel serverless, even when everything else (httpx
+to Telegram) works fine — so we bypass the SDK entirely.
 """
 import os
 import base64
-import datetime
-from supabase import create_client, Client
+import httpx
 
-_supabase: Client | None = None
+_SUPABASE_URL = None
+_SUPABASE_KEY = None
+_TIMEOUT = httpx.Timeout(25)
 
 
-def get_client() -> Client:
-    """Lazily initialize the Supabase client (service role)."""
-    global _supabase
-    if _supabase is None:
-        url = os.getenv("SUPABASE_URL")
+def _config():
+    global _SUPABASE_URL, _SUPABASE_KEY
+    if _SUPABASE_URL is None:
+        url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
         key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_KEY")
         if not url or not key:
             raise RuntimeError("SUPABASE_URL and SUPABASE_KEY are required")
-        _supabase = create_client(url, key)
-    return _supabase
+        _SUPABASE_URL = url
+        _SUPABASE_KEY = key
+    return _SUPABASE_URL, _SUPABASE_KEY
+
+
+def _auth_headers(content_type: str = "application/json") -> dict:
+    _, key = _config()
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": content_type,
+    }
+
+
+def _raise_for(response: httpx.Response, ctx: str):
+    if response.status_code >= 400:
+        raise RuntimeError(f"Supabase {ctx} -> HTTP {response.status_code}: {response.text[:300]}")
 
 
 # ------------------------------------------------------------------
@@ -31,21 +49,31 @@ def get_client() -> Client:
 # ------------------------------------------------------------------
 def get_or_create_profile(telegram_id: int, username=None, first_name=None):
     """Fetch or create a profile for a Telegram user."""
-    client = get_client()
-    res = client.table("profiles") \
-        .select("*").eq("telegram_id", telegram_id).execute()
-    rows = res.data
+    base, _ = _config()
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.get(
+            f"{base}/rest/v1/profiles",
+            params={"select": "*", "telegram_id": f"eq.{telegram_id}"},
+            headers=_auth_headers(),
+        )
+        _raise_for(res, "profiles.select")
+        rows = res.json()
 
-    if rows:
-        return rows[0]
+        if rows:
+            return rows[0]
 
-    payload = {
-        "telegram_id": telegram_id,
-        "username": username,
-        "first_name": first_name,
-    }
-    res = client.table("profiles").insert(payload).execute()
-    return res.data[0]
+        payload = {
+            "telegram_id": telegram_id,
+            "username": username,
+            "first_name": first_name,
+        }
+        res = client.post(
+            f"{base}/rest/v1/profiles",
+            json=payload,
+            headers={**_auth_headers(), "Prefer": "return=representation"},
+        )
+        _raise_for(res, "profiles.insert")
+        return res.json()[0]
 
 
 # ------------------------------------------------------------------
@@ -53,19 +81,32 @@ def get_or_create_profile(telegram_id: int, username=None, first_name=None):
 # ------------------------------------------------------------------
 def insert_task(telegram_id: int, input_text: str, profile_id=None) -> str:
     """Insert a new PENDING task; returns the task id (UUID)."""
-    client = get_client()
+    base, _ = _config()
     payload = {"telegram_id": telegram_id, "input": input_text}
     if profile_id:
         payload["profile_id"] = profile_id
-    res = client.table("tasks").insert(payload).execute()
-    return res.data[0]["id"]
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.post(
+            f"{base}/rest/v1/tasks",
+            json=payload,
+            headers={**_auth_headers(), "Prefer": "return=representation"},
+        )
+        _raise_for(res, "tasks.insert")
+        return res.json()[0]["id"]
 
 
 def update_task(task_id: str, updates: dict):
     """Update a task row (status, result, error, etc.)."""
-    client = get_client()
+    base, _ = _config()
     updates.setdefault("updated_at", datetime.datetime.utcnow().isoformat())
-    client.table("tasks").update(updates).eq("id", task_id).execute()
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.patch(
+            f"{base}/rest/v1/tasks",
+            params={"id": f"eq.{task_id}"},
+            json=updates,
+            headers=_auth_headers(),
+        )
+        _raise_for(res, "tasks.update")
 
 
 # ------------------------------------------------------------------
@@ -74,25 +115,39 @@ def update_task(task_id: str, updates: dict):
 def insert_chat(telegram_id: int, role: str, content: str):
     """Insert a message into chat_history."""
     profile = get_or_create_profile(telegram_id)
-    client = get_client()
-    client.table("chat_history").insert({
+    base, _ = _config()
+    payload = {
         "telegram_id": telegram_id,
         "profile_id": profile["id"],
         "role": role,
         "content": content,
-    }).execute()
+    }
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.post(
+            f"{base}/rest/v1/chat_history",
+            json=payload,
+            headers={**_auth_headers(), "Prefer": "return=minimal"},
+        )
+        _raise_for(res, "chat_history.insert")
 
 
 def get_recent_history(telegram_id: int, limit: int = 10):
     """Fetch recent chat history for context injection."""
-    client = get_client()
-    res = client.table("chat_history") \
-        .select("role,content") \
-        .eq("telegram_id", telegram_id) \
-        .order("created_at", desc=True) \
-        .limit(limit) \
-        .execute()
-    return list(reversed(res.data))
+    base, _ = _config()
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.get(
+            f"{base}/rest/v1/chat_history",
+            params={
+                "select": "role,content",
+                "telegram_id": f"eq.{telegram_id}",
+                "order": "created_at.desc",
+                "limit": str(limit),
+            },
+            headers=_auth_headers(),
+        )
+        _raise_for(res, "chat_history.select")
+        rows = res.json()
+        return list(reversed(rows))
 
 
 # ------------------------------------------------------------------
@@ -103,9 +158,13 @@ def upload_artifact(filename: str, data_b64: str, mime: str) -> str:
     Upload a base64-encoded file to the 'artifacts' storage bucket.
     Returns the public URL.
     """
-    client = get_client()
+    base, _ = _config()
     raw = base64.b64decode(data_b64)
-    client.storage.from_("artifacts").upload(
-        filename, raw, {"content-type": mime}
-    )
-    return client.storage.from_("artifacts").get_public_url(filename)
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.put(
+            f"{base}/storage/v1/object/artifacts/{filename}",
+            content=raw,
+            headers={**_auth_headers(mime), "x-upsert": "true"},
+        )
+        _raise_for(res, "storage.upload")
+        return f"{base}/storage/v1/object/public/artifacts/{filename}"
