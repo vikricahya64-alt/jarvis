@@ -108,6 +108,23 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "search_live",
+            "description": "Get a concise, up-to-date answer based on LIVE web search via DuckDuckGo AI Chat (free, no API key). Ideal when the user needs current facts, news, prices, or a direct answer rather than a list of links. Returns a short structured answer with inline sources.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The question or topic to research live."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "store_document",
             "description": "Save a document or notes into J.A.R.V.I.S.'s persistent knowledge base (local memory). Use this when the user says 'simpan', 'ingat', 'remember', or shares reference material they want the bot to know in future answers.",
             "parameters": {
@@ -162,7 +179,10 @@ def _build_messages(user_input, context=None, system_prompt=None):
         "You also have a persistent knowledge base: when the user asks to save or "
         "remember something, call store_document; when a question may relate to "
         "previously saved notes or documents, call retrieve_docs first and answer "
-        "based on the retrieved content."
+        "based on the retrieved content. "
+        "For questions about current events, live data, prices or news, prefer "
+        "search_live (DuckDuckGo AI Chat) to get a direct, up-to-date answer; "
+        "use search_web when the user explicitly wants a list of links."
     )
 
     messages = [{"role": "system", "content": system}]

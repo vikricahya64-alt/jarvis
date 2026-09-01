@@ -19,7 +19,7 @@ import logging
 from http.server import BaseHTTPRequestHandler
 
 from utils import groq_client, supabase_client, telegram
-from utils.search_tools import search_web, scrape_url
+from utils.search_tools import search_web, scrape_url, search_live
 from utils.e2b_executor import execute_code
 from utils import documents as documents_utils
 
@@ -154,6 +154,8 @@ def _dispatch_tool(name: str, args: dict):
     """Route a tool call to its implementation."""
     if name == "search_web":
         return search_web(args.get("query", ""), args.get("max_results", 5))
+    if name == "search_live":
+        return search_live(args.get("query", ""))
     if name == "scrape_url":
         return {"content": scrape_url(args.get("url", ""))}
     if name == "execute_code":
