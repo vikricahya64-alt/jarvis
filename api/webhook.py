@@ -3,21 +3,34 @@ Telegram Webhook Handler (entry point).
 URL: /api/webhook
 
 Receives updates from Telegram, stores the pending task in Supabase,
-and returns 200 OK immediately. The actual work happens in the
-orchestrator (triggered by the Supabase database webhook).
+returns 200 OK immediately, and runs the orchestrator pipeline in a
+background thread. This avoids depending on a Supabase Database webhook
+(which requires the supabase_admin-owned schema that free projects often
+cannot create).
 """
 import os
 import json
 import hmac
 import logging
 import asyncio
+import threading
 from http.server import BaseHTTPRequestHandler
 
 from utils import supabase_client
 from utils.telegram import send_typing
+from api.orchestrator import _run_pipeline
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("webhook")
+
+
+def _run_in_background(task_id: str, telegram_id: int, user_input: str):
+    """Run the orchestrator pipeline in a new event loop on a background thread."""
+    try:
+        asyncio.run(_run_pipeline(task_id, telegram_id, user_input))
+        logger.info(f"Pipeline finished for task {task_id}")
+    except Exception as exc:
+        logger.exception(f"Background pipeline failed for task {task_id}: {exc}")
 
 
 class handler(BaseHTTPRequestHandler):
@@ -67,7 +80,19 @@ class handler(BaseHTTPRequestHandler):
             logger.error(f"Failed to enqueue task: {exc}")
             return self._send_json({"ok": False, "error": "Enqueue failed"}, 200)
 
-        # 5. Return immediately. Supabase DB webhook invokes /api/orchestrator.
+        # 5. Run the orchestrator pipeline in the background, then return
+        #    200 immediately (Telegram expects a fast webhook response).
+        try:
+            thread = threading.Thread(
+                target=_run_in_background,
+                args=(task_id, chat_id, text),
+                daemon=True,
+            )
+            thread.start()
+            logger.info(f"Started background pipeline for task {task_id}")
+        except Exception as exc:
+            logger.error(f"Failed to start pipeline: {exc}")
+
         return self._send_json({"ok": True, "task_id": task_id}, 200)
 
     def _read_json(self):
