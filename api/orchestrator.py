@@ -230,10 +230,32 @@ def _tool_calls_json():
 
 
 def _notify_user(telegram_id: int, text: str, urls: list):
-    """Send the result text and any file documents back to Telegram."""
-    telegram.send_message(telegram_id, text)
+    """Send the result text (chunked to Telegram's 4096 limit) and files."""
+    chunks = _chunk_text(text, 4000)
+    for i, chunk in enumerate(chunks):
+        telegram.send_message(telegram_id, chunk)
     for url in urls:
         telegram.send_document(telegram_id, url, caption="📎 J.A.R.V.I.S. Artifact")
+
+
+def _chunk_text(text: str, limit: int = 4000) -> list:
+    """Split text into Telegram-safe chunks on newline boundaries."""
+    if len(text) <= limit:
+        return [text]
+    chunks = []
+    current = []
+    cur_len = 0
+    for line in text.splitlines(keepends=True):
+        if cur_len + len(line) > limit:
+            chunks.append("".join(current))
+            current = [line]
+            cur_len = len(line)
+        else:
+            current.append(line)
+            cur_len += len(line)
+    if current:
+        chunks.append("".join(current))
+    return chunks or [text[:limit]]
 
 
 # ------------------------------------------------------------------
