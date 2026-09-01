@@ -130,13 +130,29 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
                     final_files.append(f)
 
     # 2. Synthesis guard: if the loop ended without any assistant text, ask
-    # Groq once more to turn the gathered tool context into an answer.
+    # Groq once more — forced to answer, no more tool calls — to turn the
+    # gathered tool context into a final reply.
     if not final_text_parts:
         try:
-            synth_resp = groq_client.sync_completion(user_input, context=context)
+            synth_resp = groq_client.sync_completion(
+                user_input,
+                context=context,
+                system_prompt=(
+                    "Answer the user's question now, directly, in the same "
+                    "language as the user. Use the tool results above as the "
+                    "basis. Do NOT call any more tools. If the results are not "
+                    "useful, say so honestly and briefly."
+                ),
+                tool_choice="none",
+            )
             _, synth_text = _extract_tool_calls(synth_resp)
             if synth_text and synth_text.strip():
                 final_text_parts.append(synth_text.strip())
+            else:
+                final_text_parts.append(
+                    "Maaf, saya belum bisa merangkum hasil pencarian yang "
+                    "relevan. Coba pertajam pertanyaan Anda."
+                )
         except Exception as exc:
             logger.error(f"Synthesis call failed: {exc}")
 

@@ -189,7 +189,7 @@ def _build_messages(user_input, context=None, system_prompt=None):
     return messages
 
 
-def sync_completion(user_input, context=None):
+def sync_completion(user_input, context=None, system_prompt=None, tool_choice="auto"):
     """
     Synchronous wrapper. In Vercel's Flask serverless this is acceptable
     for the orchestrator's bounded execution window.
@@ -197,14 +197,14 @@ def sync_completion(user_input, context=None):
     if not GROQ_AVAILABLE:
         raise RuntimeError("groq package not installed")
 
-    messages = _build_messages(user_input, context)
+    messages = _build_messages(user_input, context, system_prompt=system_prompt)
 
     def _create(model: str, max_tokens: int = 900):
         return client.chat.completions.create(
             model=model,
             messages=messages,
             tools=TOOLS,
-            tool_choice="auto",
+            tool_choice=tool_choice,
             temperature=0.3,
             max_tokens=max_tokens,
         )
