@@ -107,6 +107,9 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
             logger.info(f"Executing tool: {name} -> {args}")
 
             tool_result = _dispatch_tool(name, args)
+            logger.info(
+                f"Tool {name} result: {json.dumps(tool_result, ensure_ascii=False)[:300]}"
+            )
             context.append({
                 "role": "tool",
                 "tool_call_id": tc.get("id", f"call_{iteration}"),
@@ -118,7 +121,18 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
                 for f in tool_result.get("files", []):
                     final_files.append(f)
 
-    # 2. Builder: if files were generated, upload them to Storage.
+    # 2. Synthesis guard: if the loop ended without any assistant text, ask
+    # Groq once more to turn the gathered tool context into an answer.
+    if not final_text_parts:
+        try:
+            synth_resp = groq_client.sync_completion(user_input, context=context)
+            _, synth_text = _extract_tool_calls(synth_resp)
+            if synth_text and synth_text.strip():
+                final_text_parts.append(synth_text.strip())
+        except Exception as exc:
+            logger.error(f"Synthesis call failed: {exc}")
+
+    # 3. Builder: if files were generated, upload them to Storage.
     result_urls = []
     for f in final_files:
         try:

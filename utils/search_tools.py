@@ -159,16 +159,21 @@ def search_live(query: str, max_chars: int = 1500) -> dict:
 
 def _ddg_ai_chat(messages: list, model: str = None, max_chars: int = 1500) -> str:
     """Talk to the free DuckDuckGo AI Chat endpoint (SSE, OpenAI-ish)."""
-    with httpx.Client(
-        headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"},
-        timeout=30,
-    ) as c:
+    import logging
+
+    log = logging.getLogger("jarvis.ddg")
+    headers_base = {"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"}
+    with httpx.Client(headers=headers_base, timeout=30) as c:
         st = c.get(
             "https://duckduckgo.com/duckchat/v1/status",
             headers={"x-vqd-accept": "application/json"},
         )
         st.raise_for_status()
-        vqd = st.headers.get("x-vqd-4") or st.headers.get("x-vqd-hash")
+        vqd = (
+            st.headers.get("x-vqd-4")
+            or st.headers.get("x-vqd-hash")
+            or st.headers.get("vqd")
+        )
         body = {}
         try:
             body = st.json()
@@ -176,20 +181,36 @@ def _ddg_ai_chat(messages: list, model: str = None, max_chars: int = 1500) -> st
             pass
         if not vqd:
             vqd = body.get("token")
+        log.info(f"DDG AI status OK; vqd={'yes' if vqd else 'NO'}; models={len(body.get('models') or [])}")
+        if not vqd:
+            return "DuckDuckGo AI Chat: could not obtain vqd token (status endpoint gave none)."
+
         models = body.get("models") or []
         chosen = model or next(
             (m["id"] for m in models if str(m.get("provider", "")).lower() == "openai"),
             models[0]["id"] if models else None,
         ) or "gpt-4o-mini"
+        log.info(f"DDG AI using model {chosen}")
 
         payload = {"model": chosen, "messages": messages}
         headers = {
             "Content-Type": "application/json",
-            "x-vqd-4": vqd,
+            "x-vqd-4": str(vqd),
             "x-vqd-accept": "text/event-stream",
+            "x-feature-conversation": (
+                '{"allowed-languages":["en","id"],"allowed-ds-groups":[1,2,3,4],'
+                '"user":{},"system":""}'
+            ),
         }
-        chat = c.post("https://duckduckgo.com/duckchat/v1/chat", json=payload, headers=headers)
-        chat.raise_for_status()
+        chat = c.post(
+            "https://duckduckgo.com/duckchat/v1/chat", json=payload, headers=headers
+        )
+        log.info(f"DDG AI chat POST -> {chat.status_code}")
+        if chat.status_code != 200:
+            return (
+                f"DuckDuckGo AI Chat HTTP {chat.status_code}: "
+                f"{chat.text[:200]}"
+            )
         raw = chat.text
 
     pieces = []
