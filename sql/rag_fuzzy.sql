@@ -29,9 +29,13 @@ AS $$
       c.document_id   AS doc_id,
       d.title         AS title,
       c.content       AS content,
+      -- explicit word_similarity with a fixed threshold: not affected by
+      -- pg_trgm.word_similarity_threshold GUC (Supabase sets it to 0.6),
+      -- and set high enough to reject false positives from 1-2 shared
+      -- trigrams (0.3 matched e.g. "caroubik" vs "cari").
       word_similarity(t.tok, c.content) AS per_score
     FROM tokens t
-    JOIN document_chunks c ON t.tok <% c.content
+    JOIN document_chunks c ON word_similarity(t.tok, c.content) >= 0.4::real
     JOIN documents d      ON d.id = c.document_id
   ),
   scored AS (
