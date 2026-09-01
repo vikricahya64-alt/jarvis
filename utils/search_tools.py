@@ -137,6 +137,7 @@ def _ddg_lite(query: str, max_results: int) -> list:
 
 def _bing_search(query: str, max_results: int) -> list:
     """Scrape Bing SERP (free, no key, friendly to cloud IPs)."""
+    region, market = _bing_region(query)
     with httpx.Client(
         headers={
             "User-Agent": UA,
@@ -147,7 +148,13 @@ def _bing_search(query: str, max_results: int) -> list:
     ) as c:
         resp = c.get(
             "https://www.bing.com/search",
-            params={"q": query, "setlang": "en", "cc": "us", "count": str(max_results)},
+            params={
+                "q": query,
+                "setlang": region,
+                "cc": region,
+                "mkt": market,
+                "count": str(max_results),
+            },
         )
         resp.raise_for_status()
         page = resp.text
@@ -162,6 +169,21 @@ def _bing_search(query: str, max_results: int) -> list:
         snip = _clean(p.group(1)) if p else ""
         out.append({"title": title, "url": _bing_real_url(_html.unescape(href)), "snippet": snip})
     return out
+
+
+_ID_WORDS = {
+    "harga", "hari", "berapa", "apa", "siapa", "kapan", "mengapa", "bagaimana",
+    "cara", "untuk", "dengan", "yang", "dari", "dalam", "pada", "tanpa", "atau",
+    "tidak", "iya", "ini", "itu", "ada", "adalah", "bisa", "saya", "kamu", "pakai",
+}
+
+
+def _bing_region(query: str):
+    """Pick Bing market so results match the query language (ID vs EN)."""
+    words = set((query or "").lower().split())
+    if words & _ID_WORDS or any(len(w) > 20 for w in words):
+        return "id", "id-ID"
+    return "en", "en-US"
 
 
 def _bing_real_url(url: str) -> str:
