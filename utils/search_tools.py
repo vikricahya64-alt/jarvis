@@ -54,7 +54,7 @@ def search_web(query: str, max_results: int = 5) -> list:
         except Exception:
             pass  # fall through to manual layers
 
-    for scraper in (_ddg_html, _ddg_lite):
+    for scraper in (_ddg_html, _ddg_lite, _bing_search):
         try:
             out = scraper(query, max_results)
             if out:
@@ -135,6 +135,53 @@ def _ddg_lite(query: str, max_results: int) -> list:
     return out
 
 
+def _bing_search(query: str, max_results: int) -> list:
+    """Scrape Bing SERP (free, no key, friendly to cloud IPs)."""
+    with httpx.Client(
+        headers={
+            "User-Agent": UA,
+            "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+        },
+        timeout=20,
+        follow_redirects=True,
+    ) as c:
+        resp = c.get(
+            "https://www.bing.com/search",
+            params={"q": query, "setlang": "en", "cc": "us", "count": str(max_results)},
+        )
+        resp.raise_for_status()
+        page = resp.text
+    blocks = re.split(r'<li class="b_algo"', page)[1:]
+    out = []
+    for block in blocks[:max_results]:
+        m = re.search(r'<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block, re.S)
+        if not m:
+            continue
+        href, title = m.group(1), _clean(m.group(2))
+        p = re.search(r"<p[^>]*>(.*?)</p>", block, re.S)
+        snip = _clean(p.group(1)) if p else ""
+        out.append({"title": title, "url": _bing_real_url(_html.unescape(href)), "snippet": snip})
+    return out
+
+
+def _bing_real_url(url: str) -> str:
+    """Decode Bing /ck/a redirect URLs back to the real target."""
+    import base64
+
+    if "/ck/a" not in url:
+        return url
+    par = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+    u = (par.get("u") or [""])[0]
+    if not u.startswith("a1"):
+        return url
+    b64 = u[2:]
+    b64 += "=" * (-len(b64) % 4)
+    try:
+        return base64.urlsafe_b64decode(b64).decode("utf-8", "ignore")
+    except Exception:
+        return url
+
+
 # ------------------------------------------------------------------
 # DuckDuckGo AI Chat (free live web answers) + search_live tool
 # ------------------------------------------------------------------
@@ -152,7 +199,28 @@ def search_live(query: str, max_chars: int = 1500) -> dict:
     )
     try:
         answer = _ddg_ai_chat([{"role": "user", "content": prompt}], max_chars=max_chars)
-        return {"answer": answer}
+        if not answer.startswith("DuckDuckGo AI Chat"):
+            return {"answer": answer}
+        raise RuntimeError(answer)
+    except Exception:
+        pass
+
+    # DDG AI Chat is blocked from cloud IPs -> fall back to live Bing results.
+    try:
+        results = search_web(query, max_results=5)
+        lines = []
+        for i, r in enumerate(results, 1):
+            title = r.get("title") or "(no title)"
+            snip = r.get("snippet") or ""
+            url = r.get("url") or ""
+            lines.append(f"{i}. {title}\n{snip}\n{url}")
+        body = "\n\n".join(lines) if lines else "Tidak ada hasil."
+        return {
+            "answer": (
+                "Live Q&A tidak tersedia (DuckDuckGo memblokir IP cloud); "
+                "berikut hasil pencarian langsung:\n\n" + body
+            )[:max_chars]
+        }
     except Exception as exc:
         return {"answer": f"Could not reach DuckDuckGo AI Chat: {exc}"}
 
