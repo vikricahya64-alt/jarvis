@@ -142,7 +142,7 @@ come back from the bot.
 | `handler` "Flask entrypoint" build error | Ensure `vercel.json` sets `"framework": null` and files in `api/` are `BaseHTTPRequestHandler` classes. |
 | E2B sandbox fails | Confirm `E2B_API_KEY` is set. Check Vercel logs. |
 | 429 from Groq | Free tier has per-minute limits; `MAX_TOOL_ITERATIONS` keeps loops bounded. |
-| Files not uploaded | Confirm `artifacts` bucket was created by the SQL script and is public. |
+| Files not uploaded | Ensure a **public** `artifacts` bucket exists: Dashboard → Storage → New bucket → name `artifacts`, toggle **Public bucket** ON. (Do not create it via SQL — that needs `supabase_admin`.) |
 
 ---
 

@@ -64,10 +64,12 @@ CREATE INDEX IF NOT EXISTS tasks_telegram_idx ON tasks (telegram_id);
 
 -- ============================================================
 -- STORAGE BUCKET for file artifacts
+-- NOTE: Do NOT create this bucket via SQL. The `storage` schema is
+-- owned by `supabase_admin`, so the SQL Editor role cannot run
+-- INSERT here (error 42501: must be able to SET ROLE "supabase_admin").
+-- Create it in the Dashboard instead:
+--   Storage -> New bucket -> name: `artifacts` -> Public bucket: ON
 -- ============================================================
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('artifacts', 'artifacts', true)
-ON CONFLICT (id) DO NOTHING;
 
 -- ============================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
