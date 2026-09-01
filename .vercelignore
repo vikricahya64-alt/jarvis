@@ -1,0 +1,6 @@
+.env.example
+docs/
+sql/
+.git/
+__pycache__/
+*.pyc

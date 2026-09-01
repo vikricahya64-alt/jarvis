@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "functions": {
+    "api/webhook.py": {
+      "maxDuration": 10
+    },
+    "api/orchestrator.py": {
+      "maxDuration": 60
+    }
+  }
+}
