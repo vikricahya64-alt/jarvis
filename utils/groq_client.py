@@ -104,6 +104,48 @@ TOOLS = [
                 "required": ["filename", "content"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "store_document",
+            "description": "Save a document or notes into J.A.R.V.I.S.'s persistent knowledge base (local memory). Use this when the user says 'simpan', 'ingat', 'remember', or shares reference material they want the bot to know in future answers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "A short title for the document/notes."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The full text/content of the document to remember."
+                    }
+                },
+                "required": ["title", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "retrieve_docs",
+            "description": "Search the persistent knowledge base (local memory/documents) for relevant information to answer the user's question. Use this when the question may relate to previously stored notes or documents.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query or keywords to look up."
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Number of results to return (default 5)."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
     }
 ]
 
@@ -116,7 +158,11 @@ def _build_messages(user_input, context=None, system_prompt=None):
         "When a task requires multiple steps (search -> analyze -> generate file), "
         "call the tools in sequence and combine the results. "
         "If you need to execute code or generate a file, use the corresponding tool "
-        "and then report the resulting file URL."
+        "and then report the resulting file URL. "
+        "You also have a persistent knowledge base: when the user asks to save or "
+        "remember something, call store_document; when a question may relate to "
+        "previously saved notes or documents, call retrieve_docs first and answer "
+        "based on the retrieved content."
     )
 
     messages = [{"role": "system", "content": system}]

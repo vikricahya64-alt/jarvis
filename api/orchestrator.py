@@ -21,6 +21,7 @@ from http.server import BaseHTTPRequestHandler
 from utils import groq_client, supabase_client, telegram
 from utils.search_tools import search_web, scrape_url
 from utils.e2b_executor import execute_code
+from utils import documents as documents_utils
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("orchestrator")
@@ -159,6 +160,14 @@ def _dispatch_tool(name: str, args: dict):
         return execute_code(args.get("code", ""), args.get("language", "python"))
     if name == "generate_file":
         return _handle_generate_file(args)
+    if name == "store_document":
+        return documents_utils.store_document(
+            args.get("title", "untitled"), args.get("content", "")
+        )
+    if name == "retrieve_docs":
+        return documents_utils.retrieve_docs(
+            args.get("query", ""), args.get("top_k", 5)
+        )
     return {"error": f"Unknown tool: {name}"}
 
 
