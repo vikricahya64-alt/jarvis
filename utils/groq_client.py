@@ -6,6 +6,7 @@ free-tier models if the primary model is unavailable.
 """
 import os
 import json
+import re
 import time
 
 try:
@@ -32,153 +33,134 @@ def set_budget(seconds: float):
 def _over_deadline() -> bool:
     return _deadline_ts is not None and time.monotonic() > _deadline_ts
 
-# Tool definitions advertised to the model (function calling)
+
+def _remaining_budget() -> float:
+    if _deadline_ts is None:
+        return float("inf")
+    return max(_deadline_ts - time.monotonic(), 0.0)
+
+
+def _retry_after_seconds(message: str) -> float:
+    """Parse 'try again in 15.3s' hints from Groq 429 messages."""
+    m = re.search(r"in\s+([\d.]+)s", message or "")
+    return float(m.group(1)) if m else 0.0
+
+# Tool definitions advertised to the model (function calling).
+# Kept terse to minimize tokens per call on the free TPM budget.
 TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "search_web",
-            "description": "Search the web for real-time information using DuckDuckGo and return top results.",
+            "description": "Returns top DuckDuckGo web links for a query. Use for link lists.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query to look up."
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Maximum number of results to return (default 5)."
-                    }
+                    "query": {"type": "string", "description": "Search query."},
+                    "max_results": {"type": "integer", "description": "Default 5."},
                 },
-                "required": ["query"]
-            }
-        }
+                "required": ["query"],
+            },
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "scrape_url",
-            "description": "Fetch and extract readable text content from a URL.",
+            "description": "Fetch readable text from a URL.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "The URL to fetch content from."
-                    }
-                },
-                "required": ["url"]
-            }
-        }
+                "properties": {"url": {"type": "string", "description": "URL to fetch."}},
+                "required": ["url"],
+            },
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "execute_code",
-            "description": "Execute Python or JavaScript code in an isolated E2B sandbox. Returns stdout and generated file paths.",
+            "description": "Run Python/JS in an E2B sandbox; returns stdout and file paths.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": "The full source code to execute."
-                    },
+                    "code": {"type": "string", "description": "Full source code."},
                     "language": {
                         "type": "string",
                         "enum": ["python", "javascript"],
-                        "description": "The language of the code (default python)."
-                    }
+                        "description": "Default python.",
+                    },
                 },
-                "required": ["code"]
-            }
-        }
+                "required": ["code"],
+            },
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "generate_file",
-            "description": "Generate a file artifact (csv, json, png chart, pdf report) from a data payload and upload it to storage.",
+            "description": "Build a file artifact (csv/json/png/pdf/html) from data.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "filename": {
-                        "type": "string",
-                        "description": "Desired filename with extension (e.g. report.pdf, chart.png)."
-                    },
+                    "filename": {"type": "string", "description": "e.g. report.pdf."},
                     "content": {
                         "type": "string",
-                        "description": "The raw content or a JSON description of data to be rendered into the file."
+                        "description": "Raw content / JSON data to render.",
                     },
                     "kind": {
                         "type": "string",
                         "enum": ["csv", "json", "png", "pdf", "html"],
-                        "description": "Type of file to generate."
-                    }
+                        "description": "File type.",
+                    },
                 },
-                "required": ["filename", "content"]
-            }
-        }
+                "required": ["filename", "content"],
+            },
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "search_live",
-            "description": "Get a concise, up-to-date answer based on LIVE web search via DuckDuckGo AI Chat (free, no API key). Ideal when the user needs current facts, news, prices, or a direct answer rather than a list of links. Returns a short structured answer with inline sources.",
+            "description": "Live web answer via free DuckDuckGo AI Chat. Use for current news/prices/facts needing a direct answer with sources.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The question or topic to research live."
-                    }
+                    "query": {"type": "string", "description": "Topic to research."}
                 },
-                "required": ["query"]
-            }
-        }
+                "required": ["query"],
+            },
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "store_document",
-            "description": "Save a document or notes into J.A.R.V.I.S.'s persistent knowledge base (local memory). Use this when the user says 'simpan', 'ingat', 'remember', or shares reference material they want the bot to know in future answers.",
+            "description": "Save notes/docs to the knowledge base ('simpan', 'ingat').",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "title": {
-                        "type": "string",
-                        "description": "A short title for the document/notes."
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "The full text/content of the document to remember."
-                    }
+                    "title": {"type": "string", "description": "Short title."},
+                    "content": {"type": "string", "description": "Text to remember."},
                 },
-                "required": ["title", "content"]
-            }
-        }
+                "required": ["title", "content"],
+            },
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "retrieve_docs",
-            "description": "Search the persistent knowledge base (local memory/documents) for relevant information to answer the user's question. Use this when the question may relate to previously stored notes or documents.",
+            "description": "Search the knowledge base for saved notes related to a question.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query or keywords to look up."
-                    },
-                    "top_k": {
-                        "type": "integer",
-                        "description": "Number of results to return (default 5)."
-                    }
+                    "query": {"type": "string", "description": "Search keywords."},
+                    "top_k": {"type": "integer", "description": "Default 5."},
                 },
-                "required": ["query"]
-            }
-        }
-    }
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -217,14 +199,14 @@ def sync_completion(user_input, context=None):
 
     messages = _build_messages(user_input, context)
 
-    def _create(model: str):
+    def _create(model: str, max_tokens: int = 900):
         return client.chat.completions.create(
             model=model,
             messages=messages,
             tools=TOOLS,
             tool_choice="auto",
             temperature=0.3,
-            max_tokens=2000,
+            max_tokens=max_tokens,
         )
 
     client = Groq(
@@ -241,9 +223,10 @@ def sync_completion(user_input, context=None):
             return _create(MODEL)
         except RateLimitError as exc:
             attempts += 1
-            if attempts >= 3:
+            if attempts >= 4:
                 raise RuntimeError(f"Groq rate limited after {attempts} tries: {exc}")
-            time.sleep(min(2 * attempts, 5))
+            wait = _retry_after_seconds(str(exc)) or (2 * attempts)
+            time.sleep(min(wait, max(_remaining_budget() - 3, 1)))
         except Exception as exc:
             for model in FALLBACK_MODELS:
                 if _over_deadline():
