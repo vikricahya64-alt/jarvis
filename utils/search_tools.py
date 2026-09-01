@@ -310,6 +310,18 @@ def search_live(query: str, max_chars: int = 1500) -> dict:
         "short sections. Do not mention that you are an AI.\n\nQuestion: "
         + (query or "")
     )
+
+    # 1. Live results via the free API router (Tavily/Brave/Google) when any
+    #    key is configured — fast and reliable from cloud IPs.
+    api_results = _api_search(query, max_results=5)
+    if api_results:
+        lines = [
+            f"{i}. {r.get('title', '')}\n{r.get('snippet', '')}\n{r.get('url', '')}"
+            for i, r in enumerate(api_results, 1)
+        ]
+        return {"answer": ("Berikut hasil pencarian terbaru:\n\n" + "\n\n".join(lines))[:max_chars]}
+
+    # 2. DuckDuckGo AI Chat (free) as a synthesized live answer.
     try:
         answer = _ddg_ai_chat([{"role": "user", "content": prompt}], max_chars=max_chars)
         if not answer.startswith("DuckDuckGo AI Chat"):
@@ -318,23 +330,15 @@ def search_live(query: str, max_chars: int = 1500) -> dict:
     except Exception:
         pass
 
-    # DDG AI Chat is blocked from cloud IPs -> fall back to live results
-    # from the API router, then to DDG/Bing scrapers.
+    # 3. Last-resort scrapers (DDG lib + Bing).
     try:
-        results = _api_search(query, max_results=5) or search_web(query, max_results=5)
-        lines = []
-        for i, r in enumerate(results, 1):
-            title = r.get("title") or "(no title)"
-            snip = r.get("snippet") or ""
-            url = r.get("url") or ""
-            lines.append(f"{i}. {title}\n{snip}\n{url}")
+        results = search_web(query, max_results=5)
+        lines = [
+            f"{i}. {r.get('title', '')}\n{r.get('snippet', '')}\n{r.get('url', '')}"
+            for i, r in enumerate(results, 1)
+        ]
         body = "\n\n".join(lines) if lines else "Tidak ada hasil."
-        provider_hint = "pencarian langsung" if not os.getenv("TAVILY_API_KEY") else "pencarian API"
-        return {
-            "answer": (
-                "Live Q&A sementara tidak tersedia; berikut hasil " + provider_hint + ":\n\n" + body
-            )[:max_chars]
-        }
+        return {"answer": ("Berikut hasil pencarian terbaru:\n\n" + body)[:max_chars]}
     except Exception as exc:
         return {"answer": f"Could not reach DuckDuckGo AI Chat: {exc}"}
 
