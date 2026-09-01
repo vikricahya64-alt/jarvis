@@ -32,11 +32,10 @@ def _config():
 
 def _auth_headers(content_type: str = "application/json") -> dict:
     _, key = _config()
-    return {
-        "apikey": key,
-        "Authorization": f"Bearer {key}",
-        "Content-Type": content_type,
-    }
+    headers = {"apikey": key, "Content-Type": content_type}
+    if key.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {key}"
+    return headers
 
 
 def _raise_for(response: httpx.Response, ctx: str):
