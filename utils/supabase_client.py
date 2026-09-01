@@ -32,10 +32,11 @@ def _config():
 
 def _auth_headers(content_type: str = "application/json") -> dict:
     _, key = _config()
-    headers = {"apikey": key, "Content-Type": content_type}
-    if key.startswith("eyJ"):
-        headers["Authorization"] = f"Bearer {key}"
-    return headers
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": content_type,
+    }
 
 
 def _raise_for(response: httpx.Response, ctx: str):
@@ -106,6 +107,43 @@ def update_task(task_id: str, updates: dict):
             headers=_auth_headers(),
         )
         _raise_for(res, "tasks.update")
+
+
+def claim_next_pending():
+    """
+    Atomically claim the oldest PENDING task and mark it PROCESSING.
+    Returns the task dict, or None if there is nothing to process.
+    """
+    base, _ = _config()
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        # 1. Find the oldest PENDING task.
+        res = client.get(
+            f"{base}/rest/v1/tasks",
+            params={
+                "select": "*",
+                "status": "eq.PENDING",
+                "order": "created_at.asc",
+                "limit": "1",
+            },
+            headers=_auth_headers(),
+        )
+        _raise_for(res, "tasks.pending.select")
+        rows = res.json()
+        if not rows:
+            return None
+
+        task = rows[0]
+
+        # 2. Claim it: only transition if still PENDING (guards double-claim).
+        res = client.patch(
+            f"{base}/rest/v1/tasks",
+            params={"id": f"eq.{task['id']}", "status": "eq.PENDING"},
+            json={"status": "PROCESSING"},
+            headers=_auth_headers(),
+        )
+        _raise_for(res, "tasks.claim")
+        task["status"] = "PROCESSING"
+        return task
 
 
 # ------------------------------------------------------------------
