@@ -18,15 +18,28 @@ from http.server import BaseHTTPRequestHandler
 
 from utils import supabase_client
 from utils.telegram import send_typing
-from api.orchestrator import _run_pipeline
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("webhook")
 
 
+async def _slot_task(chat_id: int, text: str, username=None, first_name=None):
+    """All async work for one request in a single event loop (avoids EBUSY
+    from calling asyncio.run() repeatedly in the same thread)."""
+    await send_typing(chat_id)
+    profile = await supabase_client.get_or_create_profile(chat_id, username, first_name)
+    task_id = await supabase_client.insert_task(chat_id, text, profile["id"])
+    return task_id
+
+
 def _run_in_background(task_id: str, telegram_id: int, user_input: str):
-    """Run the orchestrator pipeline in a new event loop on a background thread."""
+    """Run the orchestrator pipeline in a new event loop on a background thread.
+
+    The orchestrator is imported lazily here so its (heavy) module init and
+    its own asyncio usage never touch the request thread's loop.
+    """
     try:
+        from api.orchestrator import _run_pipeline
         asyncio.run(_run_pipeline(task_id, telegram_id, user_input))
         logger.info(f"Pipeline finished for task {task_id}")
     except Exception as exc:
@@ -63,24 +76,15 @@ class handler(BaseHTTPRequestHandler):
         if not text or not chat_id:
             return self._send_json({"ok": True}, 200)
 
-        # 3. Let the user know we are working (fire-and-forget).
+        # 3. Enqueue the task in Supabase with status PENDING (one event loop).
         try:
-            asyncio.run(send_typing(chat_id))
-        except Exception:
-            pass
-
-        # 4. Enqueue the task in Supabase with status PENDING.
-        try:
-            profile = asyncio.run(
-                supabase_client.get_or_create_profile(chat_id, username, first_name)
-            )
-            task_id = asyncio.run(supabase_client.insert_task(chat_id, text, profile["id"]))
+            task_id = asyncio.run(_slot_task(chat_id, text, username, first_name))
             logger.info(f"Enqueued task {task_id} for chat {chat_id}")
         except Exception as exc:
             logger.error(f"Failed to enqueue task: {exc}")
             return self._send_json({"ok": False, "error": "Enqueue failed"}, 200)
 
-        # 5. Run the orchestrator pipeline in the background, then return
+        # 4. Run the orchestrator pipeline in the background, then return
         #    200 immediately (Telegram expects a fast webhook response).
         try:
             thread = threading.Thread(
