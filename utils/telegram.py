@@ -18,8 +18,13 @@ def get_token() -> str:
     return token
 
 
-def send_message(chat_id: int, text: str, parse_mode: str = "HTML") -> bool:
-    """Send a plain/text or HTML message to a chat."""
+def send_message(chat_id: int, text: str, parse_mode: str = None) -> bool:
+    """Send a plain/text or HTML message to a chat.
+
+    No parse_mode by default: LLM answers are Markdown, not HTML, and
+    sending Markdown with parse_mode=HTML makes Telegram reject the request
+    (HTTP 400). Plain text always succeeds; Markdown renders as-is.
+    """
     token = get_token()
     url = API_URL.format(token=token, method="sendMessage")
     payload = {"chat_id": chat_id, "text": text}
