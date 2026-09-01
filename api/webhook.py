@@ -7,12 +7,15 @@ returns 200 OK immediately, and runs the orchestrator pipeline in a
 background thread. This avoids depending on a Supabase Database webhook
 (which requires the supabase_admin-owned schema that free projects often
 cannot create).
+
+Everything here is synchronous: repeated asyncio.run() in one thread
+raises EBUSY inside Vercel serverless, so no event loop is used on the
+request path at all.
 """
 import os
 import json
 import hmac
 import logging
-import asyncio
 import threading
 from http.server import BaseHTTPRequestHandler
 
@@ -23,24 +26,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("webhook")
 
 
-async def _slot_task(chat_id: int, text: str, username=None, first_name=None):
-    """All async work for one request in a single event loop (avoids EBUSY
-    from calling asyncio.run() repeatedly in the same thread)."""
-    await send_typing(chat_id)
-    profile = await supabase_client.get_or_create_profile(chat_id, username, first_name)
-    task_id = await supabase_client.insert_task(chat_id, text, profile["id"])
-    return task_id
+def _enqueue(chat_id: int, text: str, username=None, first_name=None) -> str:
+    """Record that we are working, create the profile, insert the task."""
+    send_typing(chat_id)
+    profile = supabase_client.get_or_create_profile(chat_id, username, first_name)
+    return supabase_client.insert_task(chat_id, text, profile["id"])
 
 
 def _run_in_background(task_id: str, telegram_id: int, user_input: str):
-    """Run the orchestrator pipeline in a new event loop on a background thread.
-
-    The orchestrator is imported lazily here so its (heavy) module init and
-    its own asyncio usage never touch the request thread's loop.
-    """
+    """Run the orchestrator pipeline on a plain background thread."""
     try:
         from api.orchestrator import _run_pipeline
-        asyncio.run(_run_pipeline(task_id, telegram_id, user_input))
+        _run_pipeline(task_id, telegram_id, user_input)
         logger.info(f"Pipeline finished for task {task_id}")
     except Exception as exc:
         logger.exception(f"Background pipeline failed for task {task_id}: {exc}")
@@ -76,9 +73,9 @@ class handler(BaseHTTPRequestHandler):
         if not text or not chat_id:
             return self._send_json({"ok": True}, 200)
 
-        # 3. Enqueue the task in Supabase with status PENDING (one event loop).
+        # 3. Enqueue the task in Supabase with status PENDING.
         try:
-            task_id = asyncio.run(_slot_task(chat_id, text, username, first_name))
+            task_id = _enqueue(chat_id, text, username, first_name)
             logger.info(f"Enqueued task {task_id} for chat {chat_id}")
         except Exception as exc:
             logger.error(f"Failed to enqueue task: {exc}")

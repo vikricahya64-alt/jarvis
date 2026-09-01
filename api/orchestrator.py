@@ -1,18 +1,21 @@
 """
 Orchestrator (Planner / central controller).
 
-Triggered by Supabase Database Webhook when a new task row is inserted
-with status PENDING. It:
+Triggered by the Telegram webhook (api/webhook.py) in a background thread.
+It:
   1. Loads the task from Supabase.
   2. Calls Groq with tool definitions to decide which agent/tool to use.
   3. Executes the chosen tool (search / scrape / E2B code execution).
   4. Optionally generates a file artifact and uploads it to Storage.
   5. Updates the task status and sends the result back to Telegram.
+
+Fully synchronous implementation: Vercel serverless punishes repeated
+asyncio.run() in one thread (EBUSY), so everything here runs on a plain
+background thread owned by webhook.py.
 """
 import os
 import json
 import logging
-import asyncio
 from http.server import BaseHTTPRequestHandler
 
 from utils import groq_client, supabase_client, telegram
@@ -22,7 +25,7 @@ from utils.e2b_executor import execute_code
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("orchestrator")
 
-# Map Groq tool function names to our async implementations.
+# Map Groq tool function names to our implementations.
 TOOL_REGISTRY = {
     "search_web": search_web,
     "scrape_url": scrape_url,
@@ -43,23 +46,23 @@ def _extract_tool_calls(response):
     return tool_calls, (message.content if message else None)
 
 
-async def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
-    """The full agentic orchestration pipeline for a single task."""
+def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
+    """The full agentic orchestration pipeline for a single task (sync)."""
     # Acquire task (mark PROCESSING).
-    await supabase_client.update_task(task_id, {"status": "PROCESSING"})
-    await telegram.send_typing(telegram_id)
+    supabase_client.update_task(task_id, {"status": "PROCESSING"})
+    telegram.send_typing(telegram_id)
 
     # Load recent history for conversational context (RAG-lite).
-    history = []
+    ctx = []
     try:
-        history = await supabase_client.get_recent_history(telegram_id, limit=6)
+        history = supabase_client.get_recent_history(telegram_id, limit=6)
         ctx = [{"role": h["role"], "content": h["content"]} for h in history]
     except Exception:
         ctx = []
 
     # Store the user message for context.
     try:
-        await supabase_client.insert_chat(telegram_id, "user", user_input)
+        supabase_client.insert_chat(telegram_id, "user", user_input)
     except Exception:
         pass
 
@@ -96,14 +99,13 @@ async def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
             ],
         }
         context = list(context) + [assistant_tool_message]
-        user_input = user_input  # keep original user request available
 
         for tc in tool_calls:
             name = tc["name"]
             args = tc["arguments"]
             logger.info(f"Executing tool: {name} -> {args}")
 
-            tool_result = await _dispatch_tool(name, args)
+            tool_result = _dispatch_tool(name, args)
             context.append({
                 "role": "tool",
                 "tool_call_id": tc.get("id", f"call_{iteration}"),
@@ -119,7 +121,7 @@ async def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
     result_urls = []
     for f in final_files:
         try:
-            url = await supabase_client.upload_artifact(
+            url = supabase_client.upload_artifact(
                 f["name"], f["data_b64"], f["mime"]
             )
             result_urls.append(url)
@@ -132,11 +134,11 @@ async def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
 
     # 4. Store assistant reply for context and finish the task.
     try:
-        await supabase_client.insert_chat(telegram_id, "assistant", final_text)
+        supabase_client.insert_chat(telegram_id, "assistant", final_text)
     except Exception:
         pass
 
-    await supabase_client.update_task(task_id, {
+    supabase_client.update_task(task_id, {
         "status": "DONE",
         "result_text": final_text[:4000],
         "result_url": result_urls[0] if result_urls else None,
@@ -144,23 +146,23 @@ async def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
     })
 
     # 5. Send result back to Telegram.
-    await _notify_user(telegram_id, final_text, result_urls)
+    _notify_user(telegram_id, final_text, result_urls)
 
 
-async def _dispatch_tool(name: str, args: dict):
-    """Route a tool call to its async implementation."""
+def _dispatch_tool(name: str, args: dict):
+    """Route a tool call to its implementation."""
     if name == "search_web":
-        return await search_web(args.get("query", ""), args.get("max_results", 5))
+        return search_web(args.get("query", ""), args.get("max_results", 5))
     if name == "scrape_url":
-        return {"content": await scrape_url(args.get("url", ""))}
+        return {"content": scrape_url(args.get("url", ""))}
     if name == "execute_code":
-        return await execute_code(args.get("code", ""), args.get("language", "python"))
+        return execute_code(args.get("code", ""), args.get("language", "python"))
     if name == "generate_file":
-        return await _handle_generate_file(args)
+        return _handle_generate_file(args)
     return {"error": f"Unknown tool: {name}"}
 
 
-async def _handle_generate_file(args: dict):
+def _handle_generate_file(args: dict):
     """
     Generate a file artifact directly (CSV/JSON/PNG/PDF/HTML) via an
     E2B sandbox which materializes the file, then we read it back.
@@ -182,7 +184,7 @@ async def _handle_generate_file(args: dict):
 
     # png/pdf/html require execution -> use E2B.
     code = _artifact_code(filename, content, kind)
-    return await execute_code(code, "python")
+    return execute_code(code, "python")
 
 
 def _artifact_code(filename: str, content: str, kind: str) -> str:
@@ -227,16 +229,15 @@ def _tool_calls_json():
     return {"count": 0, "generated": datetime.datetime.utcnow().isoformat()}
 
 
-async def _notify_user(telegram_id: int, text: str, urls: list):
+def _notify_user(telegram_id: int, text: str, urls: list):
     """Send the result text and any file documents back to Telegram."""
-    sent_text = await telegram.send_message(telegram_id, text)
+    telegram.send_message(telegram_id, text)
     for url in urls:
-        await telegram.send_document(telegram_id, url, caption="📎 J.A.R.V.I.S. Artifact")
-    return sent_text
+        telegram.send_document(telegram_id, url, caption="📎 J.A.R.V.I.S. Artifact")
 
 
 # ------------------------------------------------------------------
-# Endpoint invoked by Supabase Database Webhook (on task insert)
+# Optional fallback endpoint (can also be triggered manually).
 # URL: /api/orchestrator
 # ------------------------------------------------------------------
 class handler(BaseHTTPRequestHandler):
@@ -246,9 +247,9 @@ class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """
-        Supabase database webhook posts the new row here.
-        The payload looks like:
-          {"type": "INSERT", "record": {id, telegram_id, input, ...}}
+        Accepts a webhook payload matching the tasks row shape:
+          {"record": {id, telegram_id, input, status, ...}}
+        or simply {"id": ..., "telegram_id": ..., "input": ...}.
         """
         try:
             payload = self._read_json()
@@ -263,8 +264,7 @@ class handler(BaseHTTPRequestHandler):
             if not (task_id and telegram_id and user_input):
                 return self._send_json({"ok": False, "error": "Missing fields"}, 400)
 
-            # Run the pipeline (bounded execution window).
-            asyncio.run(_run_pipeline(task_id, telegram_id, user_input))
+            _run_pipeline(task_id, telegram_id, user_input)
 
             return self._send_json({"ok": True, "task_id": task_id}, 200)
         except Exception as exc:

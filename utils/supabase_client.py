@@ -3,6 +3,8 @@ Supabase client wrapper: database access + storage upload for artifacts.
 
 Uses the service-role key server-side so the orchestrator can manage
 tasks, store chat history, and upload generated files to the Storage bucket.
+Synchronous implementation (the Supabase/PostgREST SDK is sync) to avoid
+event-loop conflicts inside Vercel serverless functions.
 """
 import os
 import base64
@@ -27,7 +29,7 @@ def get_client() -> Client:
 # ------------------------------------------------------------------
 # Profiles
 # ------------------------------------------------------------------
-async def get_or_create_profile(telegram_id: int, username=None, first_name=None):
+def get_or_create_profile(telegram_id: int, username=None, first_name=None):
     """Fetch or create a profile for a Telegram user."""
     client = get_client()
     res = client.table("profiles") \
@@ -49,7 +51,7 @@ async def get_or_create_profile(telegram_id: int, username=None, first_name=None
 # ------------------------------------------------------------------
 # Tasks (event-driven queue)
 # ------------------------------------------------------------------
-async def insert_task(telegram_id: int, input_text: str, profile_id=None) -> str:
+def insert_task(telegram_id: int, input_text: str, profile_id=None) -> str:
     """Insert a new PENDING task; returns the task id (UUID)."""
     client = get_client()
     payload = {"telegram_id": telegram_id, "input": input_text}
@@ -59,7 +61,7 @@ async def insert_task(telegram_id: int, input_text: str, profile_id=None) -> str
     return res.data[0]["id"]
 
 
-async def update_task(task_id: str, updates: dict):
+def update_task(task_id: str, updates: dict):
     """Update a task row (status, result, error, etc.)."""
     client = get_client()
     updates.setdefault("updated_at", datetime.datetime.utcnow().isoformat())
@@ -69,9 +71,9 @@ async def update_task(task_id: str, updates: dict):
 # ------------------------------------------------------------------
 # Chat history (for RAG context)
 # ------------------------------------------------------------------
-async def insert_chat(telegram_id: int, role: str, content: str):
+def insert_chat(telegram_id: int, role: str, content: str):
     """Insert a message into chat_history."""
-    profile = await get_or_create_profile(telegram_id)
+    profile = get_or_create_profile(telegram_id)
     client = get_client()
     client.table("chat_history").insert({
         "telegram_id": telegram_id,
@@ -81,7 +83,7 @@ async def insert_chat(telegram_id: int, role: str, content: str):
     }).execute()
 
 
-async def get_recent_history(telegram_id: int, limit: int = 10):
+def get_recent_history(telegram_id: int, limit: int = 10):
     """Fetch recent chat history for context injection."""
     client = get_client()
     res = client.table("chat_history") \
@@ -96,27 +98,14 @@ async def get_recent_history(telegram_id: int, limit: int = 10):
 # ------------------------------------------------------------------
 # Storage: upload artifact files
 # ------------------------------------------------------------------
-async def upload_artifact(filename: str, data_b64: str, mime: str) -> str:
+def upload_artifact(filename: str, data_b64: str, mime: str) -> str:
     """
     Upload a base64-encoded file to the 'artifacts' storage bucket.
     Returns the public URL.
     """
     client = get_client()
     raw = base64.b64decode(data_b64)
-    public_url = ""
-
-    def _upload():
-        nonlocal public_url
-        res = client.storage.from_("artifacts").upload(
-            filename, raw, {"content-type": mime}
-        )
-        public_url = client.storage.from_("artifacts").get_public_url(filename)
-        return public_url
-
-    # Storage SDK may be sync; wrap to keep async API consistent
-    return await asyncio_upload(_upload, filename, raw, mime, client)
-
-
-async def asyncio_upload(upload_fn, filename, raw, mime, client):
-    import asyncio
-    return await asyncio.to_thread(upload_fn)
+    client.storage.from_("artifacts").upload(
+        filename, raw, {"content-type": mime}
+    )
+    return client.storage.from_("artifacts").get_public_url(filename)

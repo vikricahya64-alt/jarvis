@@ -6,7 +6,6 @@ and downloads any generated files (PNG/CSV/JSON/PDF).
 """
 import os
 import base64
-import asyncio
 
 try:
     from e2b_code_interpreter import Sandbox
@@ -15,7 +14,7 @@ except ImportError:
     E2B_AVAILABLE = False
 
 
-async def execute_code(code: str, language: str = "python") -> dict:
+def execute_code(code: str, language: str = "python") -> dict:
     """
     Execute code in an E2B sandbox and return stdout + generated files.
 
@@ -43,7 +42,7 @@ async def execute_code(code: str, language: str = "python") -> dict:
             "files": [],
         }
 
-    return await asyncio.to_thread(_run_sandbox, code, language)
+    return _run_sandbox(code, language)
 
 
 def _run_sandbox(code: str, language: str) -> dict:

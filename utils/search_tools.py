@@ -2,10 +2,10 @@
 Research agent tools: Web search (DuckDuckGo) and URL scraping.
 
 Used by the Researcher agent and exposed to Groq as callable functions.
-All functions are async to keep Vercel serverless responsive.
+Synchronous implementation to avoid event-loop conflicts inside Vercel
+serverless functions.
 """
 import httpx
-import asyncio
 
 try:
     from duckduckgo_search import DDGS
@@ -14,7 +14,7 @@ except ImportError:
     DDGS_AVAILABLE = False
 
 
-async def search_web(query: str, max_results: int = 5) -> list:
+def search_web(query: str, max_results: int = 5) -> list:
     """
     Search the web via DuckDuckGo and return a cleaned list of results.
 
@@ -28,7 +28,7 @@ async def search_web(query: str, max_results: int = 5) -> list:
     if not DDGS_AVAILABLE:
         return [_offline_result(query)]
 
-    def _search_sync():
+    try:
         with DDGS() as ddgs:
             results = []
             for r in ddgs.text(query, max_results=max_results):
@@ -37,13 +37,7 @@ async def search_web(query: str, max_results: int = 5) -> list:
                     "url": r.get("href", ""),
                     "snippet": r.get("body", ""),
                 })
-            return results
-
-    try:
-        # Run blocking DDGS in a thread to avoid blocking the event loop
-        loop = asyncio.get_running_loop()
-        results = await loop.run_in_executor(None, _search_sync)
-        return results if results else [_offline_result(query)]
+            return results if results else [_offline_result(query)]
     except Exception as exc:
         return [{
             "title": "Search failed",
@@ -52,7 +46,7 @@ async def search_web(query: str, max_results: int = 5) -> list:
         }]
 
 
-async def scrape_url(url: str, max_chars: int = 4000) -> str:
+def scrape_url(url: str, max_chars: int = 4000) -> str:
     """
     Fetch a URL and return its readable text content.
 
@@ -65,8 +59,8 @@ async def scrape_url(url: str, max_chars: int = 4000) -> str:
     """
     headers = {"User-Agent": "Mozilla/5.0 (compatible; JARVIS-Bot/1.0; +https://github.com)"}
     try:
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-            resp = await client.get(url, headers=headers)
+        with httpx.Client(timeout=20, follow_redirects=True) as client:
+            resp = client.get(url, headers=headers)
             resp.raise_for_status()
 
         # Simple HTML-to-text extraction without heavy dependencies
