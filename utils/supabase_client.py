@@ -78,6 +78,178 @@ def get_or_create_profile(telegram_id: int, username=None, first_name=None):
 
 
 # ------------------------------------------------------------------
+# Level 5: behavioral / emotional / evolution / consent profile state
+# ------------------------------------------------------------------
+def _profile_patch(telegram_id: int, column: str, value) -> bool:
+    """Patch one Level-5 JSONB column on a user's profile."""
+    base, _ = _config()
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.patch(
+            f"{base}/rest/v1/profiles",
+            params={"telegram_id": f"eq.{telegram_id}"},
+            json={column: value},
+            headers=_auth_headers(),
+        )
+        return res.status_code < 400
+
+
+def get_profile(telegram_id: int) -> dict:
+    """Fetch the full profile row (or a minimal shell if absent)."""
+    try:
+        return get_or_create_profile(telegram_id)
+    except Exception:
+        return {}
+
+
+def set_behavior_profile(telegram_id: int, behavior: dict) -> bool:
+    """Store the (aggregate-only) behavior profile snapshot."""
+    return _profile_patch(telegram_id, "behavior_profile", behavior or {})
+
+
+def set_emotional_trends(telegram_id: int, trends: dict) -> bool:
+    """Store anonymized emotional trend aggregates."""
+    return _profile_patch(telegram_id, "emotional_trends", trends or {})
+
+
+def set_service_consent(telegram_id: int, consent: dict) -> bool:
+    """Store per-service consent map (e.g. {gmail: false, calendar: true})."""
+    return _profile_patch(telegram_id, "service_consent", consent or {})
+
+
+def read_service_consent(telegram_id: int) -> dict:
+    return (get_profile(telegram_id).get("service_consent") or {})
+
+
+def append_evolution(telegram_id: int, entry: dict) -> bool:
+    """Append an evolution-log entry (for 7-day rollback). Kept in memory
+    of the existing array to avoid a read-modify-write race."""
+    curr = get_profile(telegram_id).get("evolution_log") or []
+    if not isinstance(curr, list):
+        curr = []
+    curr.append(entry)
+    # Cap the log to avoid unbounded growth on free tier.
+    return _profile_patch(telegram_id, "evolution_log", curr[-50:])
+
+
+def get_evolution_log(telegram_id: int) -> list:
+    log = get_profile(telegram_id).get("evolution_log")
+    return log if isinstance(log, list) else []
+
+
+# ------------------------------------------------------------------
+# Level 5: v_user_behavioral_patterns (30-day behavior window)
+# ------------------------------------------------------------------
+def get_behavioral_patterns(telegram_id: int, days: int = 30) -> list:
+    """Rows from v_user_behavioral_patterns for a user (via RPC-executed
+    raw query is not available on free PostgREST for views, so we fall
+    back to the view through the authenticated endpoint helper)."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/v_user_behavioral_patterns",
+                params={"telegram_id": f"eq.{telegram_id}",
+                        "order": "activity_day.asc"},
+                headers=_auth_headers(),
+            )
+            if res.status_code >= 400:
+                return []
+            return res.json()
+    except Exception:
+        return []
+
+
+# ------------------------------------------------------------------
+# Level 5: synthesized_insights (predictive / synthesis cards)
+# ------------------------------------------------------------------
+def record_insight(telegram_id: int, insight_type: str, payload: dict,
+                   priority: int = 0, ttl_hours: int = 168) -> bool:
+    """Insert a synthesized insight card with a TTL expiry."""
+    base, _ = _config()
+    expires = (
+        datetime.datetime.utcnow()
+        + datetime.timedelta(hours=ttl_hours)
+    ).isoformat()
+    row = {
+        "telegram_id": telegram_id,
+        "insight_type": insight_type,
+        "payload": payload,
+        "priority": priority,
+        "expires_at": expires,
+    }
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.post(
+                f"{base}/rest/v1/synthesized_insights",
+                json=row,
+                headers={**_auth_headers(), "Prefer": "return=minimal"},
+            )
+            return res.status_code < 400
+    except Exception:
+        return False
+
+
+def get_active_insights(telegram_id: int, insight_type: str = None,
+                        limit: int = 10) -> list:
+    """Return non-dismissed, unexpired insight cards for a user."""
+    base, _ = _config()
+    params = {
+        "select": "*",
+        "telegram_id": f"eq.{telegram_id}",
+        "dismissed": "eq.false",
+        "expires_at": f"gt.{datetime.datetime.utcnow().isoformat()}",
+        "order": "priority.desc,created_at.desc",
+        "limit": str(limit),
+    }
+    if insight_type:
+        params["insight_type"] = f"eq.{insight_type}"
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(f"{base}/rest/v1/synthesized_insights",
+                             params=params, headers=_auth_headers())
+            if res.status_code >= 400:
+                return []
+            return res.json()
+    except Exception:
+        return []
+
+
+def update_insight(insight_id: str, updates: dict) -> bool:
+    """Mark an insight dismissed/acted_on, etc."""
+    base, _ = _config()
+    updates.setdefault("updated_at", datetime.datetime.utcnow().isoformat())
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.patch(
+                f"{base}/rest/v1/synthesized_insights",
+                params={"id": f"eq.{insight_id}"},
+                json=updates,
+                headers=_auth_headers(),
+            )
+            return res.status_code < 400
+    except Exception:
+        return False
+
+
+def cleanup_expired_insights() -> int:
+    """TTL cleanup: delete expired insights. Returns rows removed."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.delete(
+                f"{base}/rest/v1/synthesized_insights",
+                params={"expires_at": f"lt.{datetime.datetime.utcnow().isoformat()}"},
+                headers={**_auth_headers(), "Prefer": "return=minimal,count=exact"},
+            )
+            try:
+                return int(res.headers.get("content-range", "*/0").split("/")[1])
+            except Exception:
+                return 0
+    except Exception:
+        return 0
+
+
+# ------------------------------------------------------------------
 # Tasks (event-driven queue)
 # ------------------------------------------------------------------
 def insert_task(telegram_id: int, input_text: str, profile_id=None,

@@ -1,0 +1,60 @@
+name: predictive-triggers
+
+on:
+  schedule:
+    # Every 30 minutes — separate from the 15-min autonomy cron, per the
+    # Level 5 spec (predictive triggers run on their own cadence).
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Sweep mode (predictive|synthesis|cleanup)"
+        required: false
+        default: "predictive"
+
+concurrency:
+  group: predictive-triggers
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run predictive/synthesis sweep
+        id: predict
+        run: |
+          mode="${INPUT_MODE:-predictive}"
+          status=$(curl -s -o /tmp/predict_body.json -w "%{http_code}" \
+            -X POST https://jarvis-sigma-navy.vercel.app/api/analytics/sweep \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"mode\":\"$mode\"}")
+          echo "sweep ($mode) HTTP $status: $(cat /tmp/predict_body.json)"
+          if [ "$status" -ne 200 ]; then
+            echo "predictive sweep failed with HTTP $status" >&2
+            exit 1
+          fi
+
+      - name: TTL cleanup (once per run)
+        if: ${{ github.event_name == 'schedule' && github.event.inputs.mode == '' }}
+        run: |
+          status=$(curl -s -o /tmp/clean_body.json -w "%{http_code}" \
+            -X POST https://jarvis-sigma-navy.vercel.app/api/analytics/sweep \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d '{"mode":"cleanup"}')
+          echo "cleanup HTTP $status: $(cat /tmp/clean_body.json)"
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          OWNER_CHAT_ID: ${{ secrets.OWNER_CHAT_ID }}
+        run: |
+          if [ -n "$TELEGRAM_TOKEN" ] && [ -n "$OWNER_CHAT_ID" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+              -d chat_id="$OWNER_CHAT_ID" \
+              -d text="⚠️ Predictive sweep JARVIS gagal (repo workflow predictive-triggers)." >/dev/null
+          else
+            echo "TELEGRAM_TOKEN/OWNER_CHAT_ID secrets absent - skipping notify"
+          fi

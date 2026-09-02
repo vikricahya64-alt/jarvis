@@ -38,6 +38,15 @@
     },
     "api/webhook_multimodal.py": {
       "maxDuration": 60
+    },
+    "api/analytics/behavior.py": {
+      "maxDuration": 60
+    },
+    "api/analytics/predict.py": {
+      "maxDuration": 60
+    },
+    "api/analytics/sweep.py": {
+      "maxDuration": 60
     }
   }
 }

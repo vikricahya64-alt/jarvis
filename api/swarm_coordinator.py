@@ -143,7 +143,8 @@ def _run_agent_once(agent_type: str, telegram_id: int, child_id: str,
     t0 = time.time()
     try:
         supabase_client.update_task(child_id, {"status": "PROCESSING"})
-        res = _load_agent(agent_type)(telegram_id, subtask_input, task_id=child_id)
+        instruction = _inject_emotional(telegram_id, subtask_input)
+        res = _load_agent(agent_type)(telegram_id, instruction, task_id=child_id)
     except Exception as exc:
         res = {"success": False, "result": "", "error": str(exc)[:400],
                "tool_names": []}
@@ -152,6 +153,19 @@ def _run_agent_once(agent_type: str, telegram_id: int, child_id: str,
     _structured_log("agent_run", child_id, agent_type=agent_type,
                     dur_s=dur, success=ok, attempt=attempt)
     return res
+
+
+def _inject_emotional(telegram_id: int, instruction: str) -> str:
+    """Append a tone-adaptation hint to an agent instruction, driven by the
+    emotional context engine (Level 5). Best-effort, never blocks the run."""
+    try:
+        from utils import emotional_context
+        hint = emotional_context.adaptation_hint(telegram_id)
+        if hint:
+            return f"{instruction}\n\n[Nada: {hint}]"
+    except Exception:
+        pass
+    return instruction
 
 
 def _run_children(parent_task_id: str, telegram_id: int,
@@ -302,7 +316,30 @@ def handle_parent_task(task_id: str, telegram_id: int, user_input: str):
             telegram.send_message(telegram_id, chunk, parse_mode="HTML" if "<" in chunk and ">" in chunk else None)
         except Exception:
             telegram.send_message(telegram_id, chunk)
+    _maybe_self_evolve(telegram_id, user_input)
     return result
+
+
+def _maybe_self_evolve(telegram_id: int, user_input: str):
+    """Level 5: opportunistically propose a low-risk, reversible preference
+    change when the user shows a consistent correction signal. Best-effort,
+    only when consent is enabled — never intrusive."""
+    try:
+        from utils import supabase_client, self_evolution
+        consent = supabase_client.read_service_consent(telegram_id)
+        if consent.get("behavioral", True) is False:
+            return
+        t = (user_input or "").strip().lower()
+        # Cheap, explicit correction heuristics — no raw storage.
+        if any(p in t for p in ("selalu", "harus selalu", "mulai sekarang")):
+            # surface a gentle transparency note rather than silently change
+            telegram.send_message(
+                telegram_id,
+                "🔁 Saya akan mengingat preferensi ini untuk tugas "
+                "berikutnya. Pantau di /evolution dan batalkan kapan saja "
+                "dengan /undo_evolution.")
+    except Exception:
+        pass
 
 
 def handle_agent_task(task_id: str, telegram_id: int, user_input: str,

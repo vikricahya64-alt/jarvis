@@ -73,6 +73,11 @@ def handle_command(chat_id: int, text: str, telegram_id: int) -> bool:
         "/initautonomi": _cmd_init_autonomi,
         "/login": _cmd_login,
         "/logoutprov": _cmd_logout_provider,
+        # Level 5
+        "/privacy": _cmd_privacy,
+        "/profil": _cmd_profile,
+        "/undo_evolution": _cmd_undo_evolution,
+        "/evolution": _cmd_evolution,
     }
     handler = TABLE.get(cmd)
     if not handler:
@@ -87,6 +92,36 @@ def handle_command(chat_id: int, text: str, telegram_id: int) -> bool:
 def handle_callback(chat_id: int, callback_id: str, data: str,
                     telegram_id: int) -> bool:
     """Handle inline-keyboard callback. Returns True if handled."""
+    # Level 5 callbacks: pv:dismiss (predictive), syn:act / syn:dismiss
+    # (cross-platform synthesis cards). These are short data strings, so we
+    # route them before the todos parser (which demands td:action:id).
+    if data in ("pv:dismiss", "pv:dismiss_all", "syn:dismiss", "syn:act"):
+        from utils import supabase_client
+        if data == "pv:dismiss":
+            for row in supabase_client.get_active_insights(telegram_id,
+                                                           "predictive", 1):
+                supabase_client.update_insight(row["id"], {"dismissed": True})
+            telegram.answer_callback_query(
+                callback_id, "🔕 Wawasan proaktif ditutup.", show_alert=False)
+            telegram.edit_message(
+                chat_id, _callback_message_id(callback_id),
+                "🔕 Kartu ini diberhentikan. Sesuaikan di /privacy.")
+            return True
+        if data == "syn:dismiss":
+            for row in supabase_client.get_active_insights(telegram_id,
+                                                           "synthesis", 1):
+                supabase_client.update_insight(row["id"], {"dismissed": True})
+            telegram.answer_callback_query(callback_id, "🗑 Dismissed")
+            telegram.edit_message(chat_id, _callback_message_id(callback_id),
+                                  "🗑 Kartu ditutup.")
+            return True
+        if data == "syn:act":
+            telegram.answer_callback_query(
+                callback_id,
+                "Aksi: buka sumber terkait. Detail layanan perlu "
+                "terhubung di /login.")
+            return True
+
     parts = data.split(":", 2)
     if len(parts) < 3 or parts[0] != "td":
         return False
@@ -440,3 +475,107 @@ def _cmd_logout_provider(chat_id, tid, args):
     ok = authz.disconnect_connection(tid, provider)
     telegram.send_message(chat_id, "🗑 Terputus."
                           if ok else f"❌ Tidak ada koneksi {provider}.")
+
+
+# ------------------------------------------------------------------
+# Level 5: privacy / profile / self-evolution commands
+# ------------------------------------------------------------------
+def _read_service_consent(tid) -> dict:
+    from utils import supabase_client
+    return supabase_client.read_service_consent(tid)
+
+
+_CONSENT_FIELDS = (
+    ("behavioral",   "Analisis perilaku & profil otomatis"),
+    ("predictive",   "Wawasan proaktif / prediktif"),
+    ("emotional",    "Analisis nada emosional"),
+    ("gmail",        "Baca sinyal Gmail (unread)"),
+    ("calendar",     "Baca kalender"),
+    ("notion",       "Baca Notion"),
+    ("drive",        "Baca Drive"),
+)
+
+
+def _cmd_privacy(chat_id, tid, args):
+    """/privacy — lihat & kelola izin analitik Level 5 (opt-in)."""
+    from utils import supabase_client
+    consent = _read_service_consent(tid)
+    args = args.strip().lower()
+
+    if args.startswith("on") or args.startswith("off"):
+        parts = args.split(maxsplit=1)
+        toggle = "on" if parts[0] == "on" else "off"
+        target = parts[1].strip() if len(parts) > 1 else ""
+        field = None
+        for f, _label in _CONSENT_FIELDS:
+            if target == f or target in f:
+                field = f
+                break
+        if not field:
+            return telegram.send_message(
+                chat_id, "Atur: /privacy on/off <fitur>.\nFitur: "
+                         + ", ".join(f for f, _l in _CONSENT_FIELDS))
+        consent[field] = (toggle == "on")
+        from utils import supabase_client as sc
+        sc.set_service_consent(tid, consent)
+        state = "🟢 aktif" if toggle == "on" else "⚪ nonaktif"
+        label = dict(_CONSENT_FIELDS)[field]
+        return telegram.send_message(
+            chat_id, f"✅ {label}: {state}.\n"
+                     "Perubahan langsung berlaku untuk fitur proaktif.")
+
+    lines = ["🔒 *Pengaturan privasi Level 5*\n"
+             "Saya hanya menyimpan agregat, bukan pesan mentah.\n\n"]
+    for f, label in _CONSENT_FIELDS:
+        state = "🟢" if consent.get(f, False) else "⚪"
+        lines.append(f"{state} {label} → /privacy on/off {f}")
+    lines.append("\nIni bersifat opt-in: matikan semua untuk mode tidak "
+                 "proaktif (hanya jawab saat diminta).")
+    telegram.send_message(chat_id, "\n".join(lines))
+
+
+def _cmd_profile(chat_id, tid, args):
+    """/profil — lihat profil perilaku (agregat) atau hapus."""
+    from utils import behavior_analyzer
+    if args.strip().lower() in ("delete", "hapus"):
+        behavior_analyzer.delete_profile(tid)
+        return telegram.send_message(
+            chat_id, "🗑 Profil perilaku dihapus. Fitur proaktif tetap "
+                     "terkendali /privacy.")
+    profile = behavior_analyzer.get_or_update_profile(tid)
+    if not profile:
+        return telegram.send_message(
+            chat_id,
+            "📊 Belum cukup data untuk menyusun profil perilaku "
+            "(min. beberapa hari aktivitas). Aktifkan /privacy on behavioral "
+            "agar saya bisa menyusunnya.")
+    ref = profile.get("_ref") or {}
+    lines = [
+        "📊 *Profil perilaku (agregat)*",
+        f"• Agen dominan: {profile.get('dominant_agent')}",
+        f"• Topik umum: {', '.join((profile.get('common_topics') or [])[:3])}",
+        f"• Jam aktif: {', '.join((profile.get('active_hours') or [])[:3])}",
+        f"• Saran produktivitas: {profile.get('productivity_hint')}",
+        f"\nSampel: {ref.get('samples')} hari · ",
+        f"task selesai: {round((ref.get('done_ratio') or 0) * 100)}%",
+        "\nHapus dengan: /profil delete",
+    ]
+    telegram.send_message(chat_id, "\n".join(lines))
+
+
+def _cmd_undo_evolution(chat_id, tid, args):
+    """/undo_evolution — batalkan perubahan self-evolution terakhir."""
+    from utils import self_evolution
+    res = self_evolution.undo_latest(tid)
+    if res.get("success"):
+        return telegram.send_message(
+            chat_id, f"↩️ Dibatalkan: *{res['reverted']}*.\n{res['note']}")
+    telegram.send_message(chat_id, f"ℹ️ {res.get('error', 'Tidak ada.')} "
+                                   "Gunakan /evolution untuk ringkasan.")
+
+
+def _cmd_evolution(chat_id, tid, args):
+    """/evolution — ringkasan transparan self-evolution 7 hari."""
+    from utils import self_evolution
+    telegram.send_message(chat_id,
+                          self_evolution.weekly_digest(tid))
