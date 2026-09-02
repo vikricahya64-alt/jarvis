@@ -6,6 +6,7 @@ them instant and TPM-free. Returns True if handled (caller should return
 immediately), False if not a recognized command.
 """
 import datetime
+import os
 from zoneinfo import ZoneInfo
 
 from utils import supabase_client, todos, telegram
@@ -53,6 +54,17 @@ _HELP = (
     "/pause_swarm — pause semua swarm secara darurat\n"
     "/clear_sensors — buang cache sensor/tmpfs\n"
     "/reset_intuition — reset prior Bayesian (safety override)\n\n"
+    "Symbiotic Consciousness (L9):\n"
+    "/constitution_status — status konstitusi & amandemen\n"
+    "/amend_constitution <seksi> <isi> — usulkan amandemen nilai\n"
+    "/legacy_setup <action> — set legasi digital (transfer|delete|release|archive|none)\n"
+    "/legacy_test — status dead man's switch (dry-run)\n"
+    "/value_drift_report — sinyal drift nilai pengguna\n"
+    "/confirm_value <id> | /reject_value <id> — setujui/tolak proposal nilai\n"
+    "/decision_journal — lihat journal keputusan (append-only)\n"
+    "/undo_decision <id> — balik keputusan (journal tetap utuh)\n"
+    "/existential_check — audit eksistensial jujur (radical honesty)\n"
+    "/terminate_system — mulai protokol penghentian (+72 jam, 2 kontak)\n\n"
     "Kirim pesan suara 🎤 — saya ubah jadi teks & jawab.\n"
     "Kirim foto 🖼 — saya analisis: deskripsi, baca teks, jawab pertanyaan "
     "lewat caption.\n"
@@ -121,6 +133,19 @@ def handle_command(chat_id: int, text: str, telegram_id: int) -> bool:
         "/pause_swarm": _cmd_pause_swarm,
         "/clear_sensors": _cmd_clear_sensors,
         "/reset_intuition": _cmd_reset_intuition,
+        # Level 9: Symbiotic Consciousness (constitution / legacy / values /
+        # journal / audit / termination)
+        "/constitution_status": _cmd_constitution_status,
+        "/amend_constitution": _cmd_amend_constitution,
+        "/legacy_setup": _cmd_legacy_setup,
+        "/legacy_test": _cmd_legacy_test,
+        "/value_drift_report": _cmd_value_drift_report,
+        "/confirm_value": _cmd_confirm_value,
+        "/reject_value": _cmd_reject_value,
+        "/decision_journal": _cmd_decision_journal,
+        "/undo_decision": _cmd_undo_decision,
+        "/existential_check": _cmd_existential_check,
+        "/terminate_system": _cmd_terminate_system,
     }
     handler = TABLE.get(cmd)
     if not handler:
@@ -1040,3 +1065,211 @@ def _cmd_reset_intuition(chat_id, tid, args):
     else:
         telegram.send_message(chat_id, "ℹ️ Reset intuition: "
                                        "tidak ada data untuk direset.")
+
+
+# ---------------------------------------------------------------------------
+# Level 9 — Symbiotic Consciousness
+# (constitutional guard / legacy vault / value alignment / offload / audit)
+# ---------------------------------------------------------------------------
+def _cmd_constitution_status(chat_id, tid, args):
+    """/constitution_status — status konstitusi & amandemen terkini."""
+    from utils import constitutional_guard as cg
+    from utils import supabase_client as sc
+    row = sc.latest_constitution(tid) if sc else {}
+    if not row:
+        telegram.send_message(
+            chat_id, "📜 *Konstitusi belum ada.* Guard dalam mode FAIL-CLOSED: "
+                     "semua aksi non-whitelist diblokir hingga konstitusi "
+                     "didefinisikan.\nGunakan /amend_constitution <seksi> <isi> "
+                     "untuk menulis, atau lihat template "
+                     "`data/personal_constitution.md`.")
+        return
+    hist = cg.list_amendments(tid) or []
+    content = cg.load_constitution(tid)
+    lines = [
+        f"📜 *Konstitusi v{row.get('version')}* (diamandemen "
+        f"{str(row.get('amended_at'))[:10]})",
+        "",
+        f"Prinsip (cuplikan): {_trim(content, 300)}",
+        "",
+        f"Jumlah amandemen tersimpan: {len(hist)}",
+    ]
+    if hist:
+        lines.append("Amendemen terakhir:")
+        lines.extend(
+            (f"• v{h.get('version')} '"
+             f"{_trim(str(h.get('amendment_rationale') or ''), 60)}'"
+             if h.get("amendment_rationale") else f"• v{h.get('version')}")
+            for h in hist[-3:])
+    telegram.send_message(chat_id, "\n".join(lines))
+
+
+def _cmd_amend_constitution(chat_id, tid, args):
+    """/amend_constitution <seksi> <isi> — usulkan/terapkan amandemen baris."""
+    from utils import constitutional_guard as cg
+    arg = args.strip()
+    if not arg:
+        telegram.send_message(
+            chat_id, "Gunakan: /amend_constitution <seksi> <isi baru>\n"
+                     "Seksi contoh: Privacy.PII, FinancialLimit.cap, "
+                     "Autonomy.kill, Forget.request.")
+        return
+    seksi, _, isi = arg.partition(" ")
+    if not isi:
+        telegram.send_message(chat_id, "Amandemen butuh isi. Contoh:\n"
+                                       "/amend_constitution Privacy.PII Jangan "
+                                       "rnbagikan data saya ke pihak ketiga.")
+        return
+    ok, msg = cg.amend_constitution(tid, seksi.strip(), isi.strip())
+    telegram.send_message(chat_id, ("✅ " if ok else "❌ ") + msg)
+
+
+def _cmd_legacy_setup(chat_id, tid, args):
+    """/legacy_setup <action e.g. transfer|delete|release|archive|none> —
+    setel plan legasi (generik; konten dienkripsi)."""
+    from utils import legacy_vault as lv
+    action = args.strip().lower().split()[0] if args.strip() else ""
+    if action not in ("transfer", "delete", "release", "archive", "none"):
+        telegram.send_message(
+            chat_id, "Gunakan: /legacy_setup transfer|delete|release|archive|none\n"
+                     "Ini menyimpan INTENT legasi (kuasa digital) secara "
+                     "terenkripsi. Konten bersih dienkripsi (AES-256-GCM) dan "
+                     "tak pernah plaintext.")
+        return
+    if lv.supabase_client is None:
+        telegram.send_message(chat_id, "Supabase tidak tersedia — vault "
+                                       "tidak aktif.")
+        return
+    lv.store_plan(tid, {"intent": {"action": action},
+                        "trusted_contacts": [],
+                        "trigger_conditions": {},
+                        "pii_ref": ""},
+                  os.getenv("BACKUP_PASSPHRASE"))
+    telegram.send_message(
+        chat_id, f"🧩 *Legacy plan* diatur ke `{action}` (intent terenkripsi).\n"
+                 "Konten hanya didekripsi in-memory setelah multisig 2+ "
+                 "kontak tepercaya. Tambah kontak & jendela via /legacy_test.")
+
+
+def _cmd_legacy_test(chat_id, tid, args):
+    """/legacy_test — status dead man's switch + simulasi dry-run."""
+    from utils import legacy_vault as lv
+    state = lv.switch_state(tid) if lv.supabase_client else {
+        "armed": False, "elapsed_days": 0, "intent": "unknown"}
+    armed = state.get("armed")
+    telegram.send_message(
+        chat_id, "⏲️ *Dead Man's Switch*\n"
+                 f"Arm: {'🔴 ARMED' if armed else '🟢 tenang'}\n"
+                 f"Hari sejak aktivitas: {state.get('elapsed_days')} "
+                 f"(grace {state.get('grace_days')} hari)\n"
+                 f"Intent: `{state.get('intent')}`\n"
+                 f"Multisig: {state.get('multisig', {}).get('count', 0)}/"
+                 f"{state.get('multisig', {}).get('threshold', 2)} kontak\n"
+                 "Ini DRY-RUN — tidak ada yang dieksekusi.")
+
+
+def _cmd_value_drift_report(chat_id, tid, args):
+    """/value_drift_report — sinyal drift nilai + proposal pending."""
+    from utils import value_alignment as va
+    rep = va.drift_report(tid)
+    pending = rep.get("pending_proposals") or []
+    lines = ["🌊 *Value Drift Report*",
+             f"Threshold: {rep['threshold']} koreksi / {rep['window_days']} hari; "
+             f"TTL proposal {rep['ttl_days']} hari"]
+    if rep.get("drift_signals"):
+        lines.append("Sinyal per domain:")
+        lines.extend(f"• {d}: {c} koreksi"
+                     for d, c in rep["drift_signals"].items())
+    else:
+        lines.append("Tidak ada drift terdeteksi.")
+    if pending:
+        lines.append(f"\nProposal pending ({len(pending)}):")
+        for p in pending:
+            lines.append(f"• `{p.get('id')}` {str(p.get('value') or '')[:60]}")
+        lines.append("\nBalas /confirm_value <id> atau /reject_value <id>.")
+    telegram.send_message(chat_id, "\n".join(lines))
+
+
+def _cmd_confirm_value(chat_id, tid, args):
+    """/confirm_value <id> — konfirmasi proposal nilai (wajib consent)."""
+    from utils import value_alignment as va
+    pid = args.strip().split()[0] if args.strip() else ""
+    if not pid:
+        telegram.send_message(chat_id, "Gunakan: /confirm_value <id>")
+        return
+    if va.confirm(tid, pid):
+        telegram.send_message(chat_id, "✅ Nilai terk-confirmasi & diterapkan "
+                                       "ke interpretasi aktif.")
+    else:
+        telegram.send_message(chat_id, "❌ Gagal konfirmasi (id tidak valid / "
+                                       "sudah kedaluwarsa).")
+
+
+def _cmd_reject_value(chat_id, tid, args):
+    """/reject_value <id> — tolak proposal nilai."""
+    from utils import value_alignment as va
+    pid = args.strip().split()[0] if args.strip() else ""
+    if not pid:
+        telegram.send_message(chat_id, "Gunakan: /reject_value <id>")
+        return
+    if va.reject(tid, pid):
+        telegram.send_message(chat_id, "🚫 Nilai ditolak — interpretasi lama "
+                                       "dipertahankan.")
+    else:
+        telegram.send_message(chat_id, "❌ Gagal menolak (id tidak valid).")
+
+
+def _cmd_decision_journal(chat_id, tid, args):
+    """/decision_journal [n] — lihat decision journal (append-only)."""
+    from utils import cognitive_offload as co
+    n = 10
+    if args.strip().isdigit():
+        n = min(int(args.strip()), 50)
+    rows = co.journal(tid, limit=n)
+    if not rows:
+        telegram.send_message(chat_id, "📗 Decision journal kosong — belum ada "
+                                       "keputusan otonom tercatat.")
+        return
+    lines = [f"📗 *Decision journal* (terbaru {len(rows)}):"]
+    for r in rows:
+        rev = "↩︎ dibalik" if r.get("outcome") == "reversed" else ""
+        lines.append(f"• `{r.get('id')}` {str(r.get('domain') or '')[:12]}: "
+                     f"{str(r.get('decision_json') or '')[:40]}{rev}")
+    lines.append("\nAppend-only — reversal lewat /undo_decision dari backend.")
+    telegram.send_message(chat_id, "\n".join(lines))
+
+
+def _cmd_undo_decision(chat_id, tid, args):
+    """/undo_decision <id> — balik keputusan (journal tetap utuh)."""
+    from utils import cognitive_offload as co
+    did = args.strip().split()[0] if args.strip() else ""
+    if not did:
+        telegram.send_message(chat_id, "Gunakan: /undo_decision <id>")
+        return
+    res = co.undo(tid, did)
+    telegram.send_message(chat_id, ("✅ Keputusan dibalik." if res.get("ok")
+                                    else "❌ Gagal membalik keputusan."))
+
+
+def _cmd_existential_check(chat_id, tid, args):
+    """/existential_check — jalankan audit eksistensial (radical honesty)."""
+    from utils import existential_audit as ea
+    audit = ea.run(tid)
+    telegram.send_message(chat_id, ea.presentation(audit))
+
+
+def _cmd_terminate_system(chat_id, tid, args):
+    """/terminate_system — mulai protokol penghapusan tak-terbalikkan
+    (scrubbed; window 72 jam + 2 kontak tepercaya)."""
+    from utils import legacy_vault as lv
+    res = lv.request_terminate(tid)
+    telegram.send_message(
+        chat_id, "☠️ *Permintaan penghentian dicatat.*\n"
+                 f"Jendela konfirmasi: {res['window_hours']} jam.\n"
+                 "BUTUH 2 kontak tepercaya untuk menyetujui (multisig).\n"
+                 "Belum ada yang dieksekusi. Batalkan kapan pun lewat pesan.")
+
+
+def _trim(text, n):
+    text = text or ""
+    return text if len(text) <= n else text[:n - 1] + "…"

@@ -1381,3 +1381,257 @@ def reset_intuition(telegram_id: int, domain: str = "") -> bool:
             return res.status_code < 400
     except Exception:
         return False
+
+
+# ------------------------------------------------------------------
+# Level 9: Symbiotic Consciousness (constitution / legacy / value /
+# decision journal / existential audit)
+# ------------------------------------------------------------------
+def latest_constitution(telegram_id: int) -> dict:
+    """Most recent version of a user's personal constitution."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/personal_constitution",
+                params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                        "order": "version.desc", "limit": "1"},
+                headers=_auth_headers())
+            rows = res.json() if res.status_code < 400 else []
+            return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+def constitution_history(telegram_id: int, limit: int = 10) -> list:
+    """Version history of the constitution (most recent first)."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/personal_constitution",
+                params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                        "order": "version.desc", "limit": str(limit)},
+                headers=_auth_headers())
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
+
+
+def list_violations(telegram_id: int, limit: int = 25) -> list:
+    """Append-only constitutional violation log (most recent first)."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/constitutional_violations",
+                params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                        "order": "blocked_at.desc", "limit": str(limit)},
+                headers=_auth_headers())
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
+
+
+def record_violation(telegram_id: int, action_hash: str, intent: str,
+                     principle: str, reasoning: str, confidence: float,
+                     module: str = "") -> bool:
+    try:
+        return _insert_json("constitutional_violations", {
+            "telegram_id": telegram_id, "action_hash": (action_hash or "")[:32],
+            "intent": (intent or "")[:500], "violated_principle": principle[:200],
+            "reasoning": (reasoning or "")[:1000],
+            "confidence": round(confidence, 3), "origin_module": (module or "")[:60],
+        })
+    except Exception:
+        return False
+
+
+# --- legacy plans ---
+def save_legacy_plan(telegram_id: int, encrypted_blob: bytes, cipher: str,
+                     intent: str, trigger_conditions: dict,
+                     trusted_contacts: list, name: str = "main",
+                     pii_ref: str = "") -> bool:
+    import base64 as _b64
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            client.post(f"{base}/rest/v1/legacy_plans", json={
+                "telegram_id": telegram_id, "name": name,
+                "encrypted_blob": _b64.b64encode(encrypted_blob).decode("ascii"),
+                "cipher_algorithm": cipher, "intent": intent,
+                "trigger_conditions": trigger_conditions,
+                "trusted_contacts": trusted_contacts, "pii_ref": pii_ref,
+                "status": "armed",
+            }, headers=_auth_headers())
+            return True
+    except Exception:
+        return False
+
+
+def list_legacy_plans(telegram_id: int, limit: int = 10) -> list:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/legacy_plans",
+                params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                        "order": "created_at.desc", "limit": str(limit)},
+                headers=_auth_headers())
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
+
+
+def update_legacy_plan_status(telegram_id: int, plan_id: str,
+                              status: str) -> bool:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            client.patch(f"{base}/rest/v1/legacy_plans?id=eq.{plan_id}",
+                         json={"status": status, "updated_at":
+                               datetime.datetime.utcnow().isoformat()},
+                         headers=_auth_headers())
+            return True
+    except Exception:
+        return False
+
+
+# --- value interpretations ---
+def propose_value(telegram_id: int, domain: str, old: str, proposal: str,
+                  rationale: str, confidence: float) -> bool:
+    try:
+        return _insert_json("value_interpretations", {
+            "telegram_id": telegram_id, "domain": domain[:120],
+            "old_interpretation": old[:1000], "new_proposal": proposal[:1000],
+            "rationale": (rationale or "")[:1000], "confidence": round(confidence, 3),
+            "status": "pending",
+        })
+    except Exception:
+        return False
+
+
+def pending_proposals(telegram_id: int, limit: int = 25) -> list:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/value_interpretations",
+                params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                        "status": "eq.pending",
+                        "order": "created_at.desc", "limit": str(limit)},
+                headers=_auth_headers())
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
+
+
+def confirm_value(telegram_id: int, proposal_id: str, confirm: bool) -> bool:
+    base, _ = _config()
+    status = "confirmed" if confirm else "rejected"
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            patch = {"status": status}
+            if confirm:
+                patch["confirmed_at"] = datetime.datetime.utcnow().isoformat()
+            client.patch(f"{base}/rest/v1/value_interpretations?id=eq.{proposal_id}",
+                         json=patch, headers=_auth_headers())
+            return True
+    except Exception:
+        return False
+
+
+def expire_value(telegram_id: int, proposal_id: str) -> bool:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            client.patch(f"{base}/rest/v1/value_interpretations?id=eq.{proposal_id}",
+                         json={"status": "expired"}, headers=_auth_headers())
+            return True
+    except Exception:
+        return False
+
+
+# --- decision journal (immutable append-only) ---
+def append_decision(telegram_id: int, context_json: dict, decision_json: dict,
+                    rationale: str, domain: str = "misc",
+                    reversible: bool = True) -> bool:
+    try:
+        return _insert_json("decision_journal", {
+            "telegram_id": telegram_id, "context_json": context_json,
+            "decision_json": decision_json, "rationale": (rationale or "")[:1000],
+            "outcome": "pending", "reversible_flag": reversible,
+            "domain": domain[:60],
+        })
+    except Exception:
+        return False
+
+
+def list_decisions(telegram_id: int, domain: str = "", outcome: str = "",
+                   limit: int = 50) -> list:
+    base, _ = _config()
+    params = {"select": "*", "telegram_id": f"eq.{telegram_id}",
+              "order": "created_at.desc", "limit": str(limit)}
+    if domain:
+        params["domain"] = f"eq.{domain}"
+    if outcome:
+        params["outcome"] = f"eq.{outcome}"
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(f"{base}/rest/v1/decision_journal", params=params,
+                             headers=_auth_headers())
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
+
+
+def reverse_decision(telegram_id: int, decision_id: str) -> bool:
+    """Mark a decision as reversed (outcome). Journal stays append-only; user
+    RLS only allows INSERT+SELECT, so reversal is a backend-service operation."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            client.patch(f"{base}/rest/v1/decision_journal?id=eq.{decision_id}",
+                         json={"outcome": "reversed"}, headers=_auth_headers())
+            return True
+    except Exception:
+        return False
+
+
+# --- existential audits ---
+def record_audit(telegram_id: int, reflections: dict,
+                 follow_up: list = None) -> bool:
+    try:
+        return _insert_json("existential_audits", {
+            "telegram_id": telegram_id, "reflections_json": reflections,
+            "user_response": "pending", "follow_up_actions": follow_up or [],
+        })
+    except Exception:
+        return False
+
+
+def latest_audit(telegram_id: int) -> dict:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/existential_audits",
+                params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                        "order": "audit_date.desc", "limit": "1"},
+                headers=_auth_headers())
+            rows = res.json() if res.status_code < 400 else []
+            return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+def update_audit_response(telegram_id: int, audit_id: str,
+                          response: str) -> bool:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            client.patch(f"{base}/rest/v1/existential_audits?id=eq.{audit_id}",
+                         json={"user_response": response}, headers=_auth_headers())
+            return True
+    except Exception:
+        return False
