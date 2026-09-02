@@ -102,6 +102,28 @@ class handler(BaseHTTPRequestHandler):
         if not text or not chat_id:
             return self._send_json({"ok": True}, 200)
 
+        # Photos: understand via Groq vision (Qwen multimodal), using the
+        # caption as the instruction if present.
+        if message.get("photo"):
+            try:
+                send_typing(chat_id)
+                from utils.vision import analyze_photo, _largest_photo
+                from utils.telegram import send_message
+                file_id = _largest_photo(message)
+                answer = analyze_photo(file_id, text or "")
+                send_message(chat_id, f"🖼 {answer[:3500]}")
+                return self._send_json({"ok": True, "handled": "vision"}, 200)
+            except Exception as exc:
+                logger.exception(f"Photo analysis failed: {exc}")
+                try:
+                    from utils.telegram import send_message
+                    send_message(
+                        chat_id,
+                        "Maaf, saya gagal menganalisis foto Anda. 🙏")
+                except Exception:
+                    pass
+                return self._send_json({"ok": True}, 200)
+
         # 3a. Direct commands run without the agentic pipeline.
         try:
             from utils import commands as commands_utils
