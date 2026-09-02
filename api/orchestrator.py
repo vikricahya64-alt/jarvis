@@ -22,7 +22,7 @@ from utils import groq_client, supabase_client, telegram
 from utils.search_tools import search_web, scrape_url, search_live
 from utils.e2b_executor import execute_code
 from utils import documents as documents_utils
-from utils import misc_tools
+from utils import misc_tools, todos
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("orchestrator")
@@ -104,7 +104,7 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
             args = tc["arguments"]
             logger.info(f"Executing tool: {name} -> {args}")
 
-            tool_result = _dispatch_tool(name, args)
+            tool_result = _dispatch_tool(name, args, telegram_id)
             logger.info(
                 f"Tool {name} result: {json.dumps(tool_result, ensure_ascii=False)[:300]}"
             )
@@ -112,16 +112,18 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
             if consecutive_failures >= 2:
                 logger.info(f"Tool {name} failing repeatedly; breaking tool loop.")
                 break
+
+            # Capture generated files (E2B, make_qr, generate_file) and send
+            # only a compact summary back to the model (never the base64 blob).
+            payload = tool_result.get("files", []) if isinstance(tool_result, dict) else []
+            if isinstance(payload, list):
+                for f in payload:
+                    final_files.append(f)
             context.append({
                 "role": "tool",
                 "tool_call_id": tc.get("id", f"call_{iteration}"),
-                "content": json.dumps(tool_result, ensure_ascii=False)[:3000],
+                "content": _tool_context_payload(name, tool_result),
             })
-
-            # Capture generated files from E2B execution.
-            if name == "execute_code":
-                for f in tool_result.get("files", []):
-                    final_files.append(f)
 
     # 2. Synthesis guard: if the loop ended without any assistant text, ask
     # Groq once more — forced to answer, no more tool calls — to turn the
@@ -182,6 +184,17 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
     _notify_user(telegram_id, final_text, result_urls)
 
 
+def _tool_context_payload(name: str, result) -> str:
+    """Compact summary of a tool result for the model (no base64 blobs)."""
+    if isinstance(result, dict) and "files" in result and not result.get("error"):
+        files = result["files"]
+        names = [f.get("name", "?") for f in files if isinstance(f, dict)] if isinstance(files, list) else []
+        slim = {k: v for k, v in result.items() if k != "files"}
+        slim["files"] = f"{len(names)} file(s): {', '.join(names)}" if names else "no files"
+        return json.dumps(slim, ensure_ascii=False)[:3000]
+    return json.dumps(result, ensure_ascii=False)[:3000]
+
+
 def _is_failed_result(result) -> bool:
     """True when a tool result signals failure so the loop stops re-calling it."""
     # Explicit error payloads always count, regardless of size.
@@ -206,7 +219,7 @@ def _is_failed_result(result) -> bool:
     ))
 
 
-def _dispatch_tool(name: str, args: dict):
+def _dispatch_tool(name: str, args: dict, telegram_id: int = None):
     """Route a tool call to its implementation."""
     if name == "search_web":
         return search_web(args.get("query", ""), args.get("max_results", 5))
@@ -247,6 +260,23 @@ def _dispatch_tool(name: str, args: dict):
         )
     if name == "world_time":
         return misc_tools.world_time(args.get("zone", ""))
+    if name == "calculate":
+        return misc_tools.calculate(args.get("expression", ""))
+    if name == "convert_units":
+        return misc_tools.convert_units(
+            args.get("value", 0), args.get("from_unit", ""),
+            args.get("to_unit", ""),
+        )
+    if name == "make_qr":
+        return misc_tools.make_qr(args.get("data", ""))
+    if name == "add_todo":
+        return todos.add_todo(telegram_id, args.get("text", ""))
+    if name == "list_todos":
+        return todos.list_todos(telegram_id, args.get("show", "pending"))
+    if name == "done_todo":
+        return todos.done_todo(telegram_id, args.get("match", ""))
+    if name == "remove_todo":
+        return todos.remove_todo(telegram_id, args.get("match", ""))
     return {"error": f"Unknown tool: {name}"}
 
 

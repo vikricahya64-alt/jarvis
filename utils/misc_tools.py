@@ -6,6 +6,9 @@ calls so they fit inside Vercel serverless. Every function returns a plain
 dict (never raises) so the orchestrator loop can keep going.
 """
 import os
+import ast
+import math
+import operator
 import httpx
 import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -289,3 +292,182 @@ def world_time(zone: str = "") -> dict:
         "utc_now": datetime.datetime.now(datetime.timezone.utc)
         .strftime("%Y-%m-%d %H:%M UTC"),
     })
+
+
+# ------------------------------------------------------------------
+# Safe calculator (pure Python AST, no network)
+# ------------------------------------------------------------------
+_CALC_BINOPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+    ast.Div: operator.truediv, ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod, ast.Pow: operator.pow,
+    ast.BitAnd: operator.and_, ast.BitOr: operator.or_,
+    ast.BitXor: operator.xor, ast.LShift: operator.lshift,
+    ast.RShift: operator.rshift,
+}
+_CALC_UNARYOPS = {ast.UAdd: operator.pos, ast.USub: operator.neg,
+                  ast.Invert: operator.invert}
+_CALC_NAMES = {
+    "pi": math.pi, "e": math.e, "tau": math.tau,
+    "sqrt": math.sqrt, "abs": abs, "round": round, "min": min, "max": max,
+    "floor": math.floor, "ceil": math.ceil, "sin": math.sin, "cos": math.cos,
+    "tan": math.tan, "log": math.log, "log10": math.log10, "exp": math.exp,
+    "degrees": math.degrees, "radians": math.radians,
+}
+
+
+def _calc_eval(node):
+    if isinstance(node, ast.Expression):
+        return _calc_eval(node.body)
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.BinOp):
+        op = _CALC_BINOPS.get(type(node.op))
+        if op is None:
+            raise ValueError(f"operator tidak didukung: {type(node.op).__name__}")
+        return op(_calc_eval(node.left), _calc_eval(node.right))
+    if isinstance(node, ast.UnaryOp):
+        op = _CALC_UNARYOPS.get(type(node.op))
+        if op is None:
+            raise ValueError(f"operator tidak didukung: {type(node.op).__name__}")
+        return op(_calc_eval(node.operand))
+    if isinstance(node, ast.Name):
+        if node.id in _CALC_NAMES:
+            return _CALC_NAMES[node.id]
+        raise ValueError(f"konstanta/fungsi tidak dikenal: {node.id}")
+    if isinstance(node, ast.Call):
+        fn = _CALC_NAMES.get(node.func.id) if isinstance(node.func, ast.Name) else None
+        if fn is None:
+            raise ValueError("hanya fungsi aritmatika dasar yang diizinkan")
+        args = [_calc_eval(a) for a in node.args]
+        return fn(*args)
+    raise ValueError(f"ekspresi tidak didukung: {type(node).__name__}")
+
+
+def calculate(expression: str) -> dict:
+    """Evaluate a math expression safely (no exec/eval of arbitrary code)."""
+    try:
+        tree = ast.parse((expression or "").strip(), mode="eval")
+        value = _calc_eval(tree)
+        if isinstance(value, float):
+            result = f"{value:,.12g}"
+        else:
+            result = str(value)
+        return _ok({"expression": (expression or "").strip(),
+                    "value": value, "result": result})
+    except (SyntaxError, ValueError, TypeError, ZeroDivisionError) as exc:
+        return _err(f"Perhitungan gagal: {exc}")
+
+
+# ------------------------------------------------------------------
+# Unit converter (pure Python, no network)
+# ------------------------------------------------------------------
+# Normalized aliases -> (kind, factor to base, base name)
+_UNITS = {
+    # length -> base meter
+    "m": ("length", 1, "meter"), "meter": ("length", 1, "meter"),
+    "meters": ("length", 1, "meter"), "metre": ("length", 1, "meter"),
+    "km": ("length", 1000, "meter"), "kilometer": ("length", 1000, "meter"),
+    "kilometers": ("length", 1000, "meter"),
+    "cm": ("length", 0.01, "meter"), "centimeter": ("length", 0.01, "meter"),
+    "mm": ("length", 0.001, "meter"), "millimeter": ("length", 0.001, "meter"),
+    "in": ("length", 0.0254, "meter"), "inch": ("length", 0.0254, "meter"),
+    "ft": ("length", 0.3048, "meter"), "foot": ("length", 0.3048, "meter"),
+    "yd": ("length", 0.9144, "meter"), "yard": ("length", 0.9144, "meter"),
+    "mile": ("length", 1609.344, "meter"), "mi": ("length", 1609.344, "meter"),
+    # mass -> base gram
+    "g": ("mass", 1, "gram"), "gram": ("mass", 1, "gram"),
+    "kg": ("mass", 1000, "gram"), "kilogram": ("mass", 1000, "gram"),
+    "mg": ("mass", 0.001, "gram"), "milligram": ("mass", 0.001, "gram"),
+    "lb": ("mass", 453.59237, "gram"), "pound": ("mass", 453.59237, "gram"),
+    "oz": ("mass", 28.349523, "gram"), "ounce": ("mass", 28.349523, "gram"),
+    "ton": ("mass", 1e6, "gram"), "tonne": ("mass", 1e6, "gram"),
+    # speed -> base m/s
+    "m/s": ("speed", 1, "m/s"), "km/h": ("speed", 1 / 3.6, "m/s"),
+    "kmh": ("speed", 1 / 3.6, "m/s"), "kph": ("speed", 1 / 3.6, "m/s"),
+    "mph": ("speed", 0.44704, "m/s"), "knot": ("speed", 0.514444, "m/s"),
+    "kn": ("speed", 0.514444, "m/s"),
+    # data -> base byte
+    "b": ("data", 1, "byte"), "byte": ("data", 1, "byte"),
+    "kb": ("data", 1000, "byte"), "kilobyte": ("data", 1000, "byte"),
+    "mb": ("data", 1e6, "byte"), "megabyte": ("data", 1e6, "byte"),
+    "gb": ("data", 1e9, "byte"), "gigabyte": ("data", 1e9, "byte"),
+    "tb": ("data", 1e12, "byte"), "terabyte": ("data", 1e12, "byte"),
+    "kib": ("data", 1024, "byte"), "kibibyte": ("data", 1024, "byte"),
+    "mib": ("data", 1048576, "byte"), "mebibyte": ("data", 1048576, "byte"),
+    "gib": ("data", 1073741824, "byte"),
+}
+
+
+def convert_units(value: float, from_unit: str, to_unit: str) -> dict:
+    """Convert between length/mass/speed/data units; temperature uses (c,f,k)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return _err(f"Nilai tidak valid: {value!r}")
+
+    src = (from_unit or "").strip().lower().replace(" ", "")
+    dst = (to_unit or "").strip().lower().replace(" ", "")
+
+    # Temperature is affine, handle separately.
+    temp_aliases = {"c": "c", "celsius": "c", "f": "f", "fahrenheit": "f",
+                    "k": "k", "kelvin": "k"}
+    if src in temp_aliases and dst in temp_aliases:
+        c = f = k = None
+        u = temp_aliases[src]
+        if u == "c":
+            c = v
+        elif u == "f":
+            c = (v - 32) * 5 / 9
+        else:
+            c = v - 273.15
+        f = c * 9 / 5 + 32
+        k = c + 273.15
+        labels = {"c": "°C", "f": "°F", "k": "K"}
+        out = {"c": c, "f": f, "k": k}[temp_aliases[dst]]
+        return _ok({
+            "from": f"{v} {src}", "to": f"{out:,.4g} {labels[temp_aliases[dst]]}",
+            "result": f"{v:,.4g} {src} = {out:,.4g} {labels[temp_aliases[dst]]}",
+        })
+
+    if src in temp_aliases or dst in temp_aliases:
+        return _err("Campuran suhu dan satuan lain tidak bisa dikonversi.")
+
+    su = _UNITS.get(src)
+    du = _UNITS.get(dst)
+    if su is None or du is None:
+        return _err(
+            f"Satuan tidak dikenal: '{from_unit}' / '{to_unit}'. "
+            "Contoh: km, mile, kg, lb, km/h, mph, mb, gb, c, f."
+        )
+    if su[0] != du[0]:
+        return _err(f"Jenis satuan berbeda: {su[2]} vs {du[2]}.")
+    out = v * su[1] / du[1]
+    return _ok({
+        "from": f"{v:,.4g} {src}", "to": f"{out:,.4g} {dst}",
+        "result": f"{v:,.4g} {src} = {out:,.4g} {dst}",
+    })
+
+
+# ------------------------------------------------------------------
+# QR code (via E2B sandbox -> PNG artifact)
+# ------------------------------------------------------------------
+def make_qr(data: str) -> dict:
+    """Generate a QR code PNG for arbitrary data using an E2B sandbox."""
+    from utils.e2b_executor import execute_code
+    if not (data or "").strip():
+        return _err("Data QR kosong.")
+    code = (
+        "import qrcode\n"
+        "qr = qrcode.QRCode(border=2)\n"
+        f"qr.add_data({data!r})\n"
+        "qr.make(fit=True)\n"
+        "img = qr.make_image(fill_color='black', back_color='white')\n"
+        "img.save('/home/user/qr_code.png')\n"
+        "print('saved')"
+    )
+    result = execute_code(code, "python")
+    if not result.get("success"):
+        return _err(result.get("stderr") or "E2B gagal membuat QR.")
+    return _ok({"data": data, "files": result.get("files", []),
+                "note": "File QR siap diunggah."})

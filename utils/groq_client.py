@@ -255,6 +255,94 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate",
+            "description": "Evaluate a math expression safely (e.g. '2*pi*5', 'sqrt(144)+3').",
+            "parameters": {
+                "type": "object",
+                "properties": {"expression": {"type": "string", "description": "Math expression."}},
+                "required": ["expression"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "convert_units",
+            "description": "Convert units: length, mass, speed, data, temperature (c/f/k).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "value": {"type": "number", "description": "Numeric value."},
+                    "from_unit": {"type": "string", "description": "e.g. km, mile, kg, lb, mph, mb, c."},
+                    "to_unit": {"type": "string", "description": "e.g. m, km, g, kg, km/h, gb, f."},
+                },
+                "required": ["value", "from_unit", "to_unit"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "make_qr",
+            "description": "Generate a QR code PNG image for any text/URL/link.",
+            "parameters": {
+                "type": "object",
+                "properties": {"data": {"type": "string", "description": "Text or URL to encode."}},
+                "required": ["data"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_todo",
+            "description": "Save a personal to-do/reminder item for the user.",
+            "parameters": {
+                "type": "object",
+                "properties": {"text": {"type": "string", "description": "Task description."}},
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_todos",
+            "description": "List the user's to-do items.",
+            "parameters": {
+                "type": "object",
+                "properties": {"show": {"type": "string", "description": "pending (default), done, or all."}},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "done_todo",
+            "description": "Mark a to-do item as done (match by text or number).",
+            "parameters": {
+                "type": "object",
+                "properties": {"match": {"type": "string", "description": "Text/number of the item."}},
+                "required": ["match"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_todo",
+            "description": "Delete a to-do item (match by text or number).",
+            "parameters": {
+                "type": "object",
+                "properties": {"match": {"type": "string", "description": "Text/number of the item."}},
+                "required": ["match"],
+            },
+        },
+    },
 ]
 
 
@@ -277,7 +365,11 @@ def _build_messages(user_input, context=None, system_prompt=None):
         "Use the utility tools for fast free data: get_weather for forecasts, "
         "convert_currency for exchange rates, crypto_price for crypto prices, "
         "geo_info for IP location, shorten_url for short links, translate for "
-        "translations, and world_time for current time in any timezone."
+        "translations, and world_time for current time in any timezone. "
+        "For math use calculate; for unit conversions (length/mass/speed/data/"
+        "temperature) use convert_units; for QR codes use make_qr. "
+        "You retain a per-user to-do list: add_todo to save a task, "
+        "list_todos to show it, done_todo/remove_todo to change it."
     )
 
     messages = [{"role": "system", "content": system}]
