@@ -21,3 +21,9 @@ CREATE POLICY "Todos: service-role access"
   ON todos FOR ALL
   USING (true)
   WITH CHECK (true);
+
+-- PostgREST needs explicit privileges even where RLS is bypassed by the
+-- service key; default privileges may not cover brand-new tables.
+GRANT SELECT, INSERT, UPDATE, DELETE ON todos TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON todos TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON todos TO authenticated;
