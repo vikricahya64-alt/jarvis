@@ -78,6 +78,27 @@ class handler(BaseHTTPRequestHandler):
         username = message.get("from", {}).get("username")
         first_name = message.get("from", {}).get("first_name")
 
+        # Voice memos: transcribe via Groq Whisper, then answer the text.
+        voice = message.get("voice") or message.get("audio")
+        if voice and not text:
+            try:
+                send_typing(chat_id)
+                from utils.audio import transcribe_voice
+                transcript = transcribe_voice(voice.get("file_id"))
+                if transcript:
+                    text = f"[pesan suara] {transcript}"
+                else:
+                    return self._send_json({"ok": True}, 200)
+            except Exception as exc:
+                logger.exception(f"Voice transcription failed: {exc}")
+                try:
+                    from utils.telegram import send_message
+                    send_message(chat_id,
+                                 "Maaf, saya gagal membaca pesan suara Anda. 🙏")
+                except Exception:
+                    pass
+                return self._send_json({"ok": True}, 200)
+
         if not text or not chat_id:
             return self._send_json({"ok": True}, 200)
 

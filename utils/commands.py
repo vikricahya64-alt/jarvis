@@ -34,7 +34,9 @@ _HELP = (
     "/kurs <dari> <ke> — konversi mata uang\n"
     "/kripto <simbol> — harga koin (contoh: /kripto BTC)\n"
     "/ingat <judul>: <isi> — simpan catatan\n"
-    "/cari <query> — pencarian web langsung\n\n"
+    "/cari <query> — pencarian web langsung\n"
+    "/ringkas <url> — ringkas halaman web\n\n"
+    "Kirim pesan suara 🎤 — saya ubah jadi teks & jawab.\n"
     "Ketik pesan biasa untuk bicara dengan saya lewat AI."
 ).format(name=_BOT_NAME)
 
@@ -61,6 +63,7 @@ def handle_command(chat_id: int, text: str, telegram_id: int) -> bool:
         "/ingat": _cmd_ingat,
         "/cari": _cmd_cari,
         "/search": _cmd_cari,
+        "/ringkas": _cmd_ringkas,
     }
     handler = TABLE.get(cmd)
     if not handler:
@@ -134,7 +137,7 @@ def _cmd_add(chat_id, tid, args):
             telegram.send_message(chat_id, f"✅ Ditambahkan: {args}")
     else:
         telegram.send_message(chat_id, f"❌ {res.get('error', 'Gagal')}")
-    _refresh_todo_message(chat_id, tid)
+
 
 
 def _cmd_done(chat_id, tid, args):
@@ -145,7 +148,7 @@ def _cmd_done(chat_id, tid, args):
     telegram.send_message(chat_id,
                           f"✅ Selesai: {res['done']}" if res.get("success")
                           else f"❌ {res.get('error', 'Gagal')}")
-    _refresh_todo_message(chat_id, tid)
+
 
 
 def _cmd_hapus(chat_id, tid, args):
@@ -156,12 +159,7 @@ def _cmd_hapus(chat_id, tid, args):
     telegram.send_message(chat_id,
                           f"🗑 Dihapus: {res['removed']}" if res.get("success")
                           else f"❌ {res.get('error', 'Gagal')}")
-    _refresh_todo_message(chat_id, tid)
 
-
-def _refresh_todo_message(chat_id, tid):
-    """Update the last todo message if any, otherwise no-op."""
-    pass  # handled by caller sending new list
 
 
 def _cmd_status(chat_id, tid, args):
@@ -288,3 +286,28 @@ def _cmd_cari(chat_id, tid, args):
         telegram.send_message(chat_id, f"🔍 {res['answer'][:3500]}")
     else:
         telegram.send_message(chat_id, "❌ Tidak ada hasil.")
+
+
+def _cmd_ringkas(chat_id, tid, args):
+    if not args:
+        return telegram.send_message(chat_id, "Format: /ringkas <url>")
+    url = args if args.startswith("http") else "https://" + args
+    telegram.send_typing(chat_id)
+    from utils.search_tools import scrape_url
+    content = scrape_url(url, max_chars=8000)
+    if content.startswith("Error"):
+        return telegram.send_message(chat_id, f"❌ {content}")
+    if len(content.strip()) < 80:
+        return telegram.send_message(chat_id, "❌ Halaman terlalu pendek/berbayar.")
+    from utils.groq_client import sync_completion
+    prompt = (
+        "Ringkas halaman web berikut dalam bahasa Indonesia. Maksimal 6 poin, "
+        "tanpa kalimat pembuka, tanpa menyebut teks HTML.\n\n"
+        f"URL: {url}\n\nISI HALAMAN:\n{content}"
+    )
+    try:
+        response = sync_completion(prompt, system_prompt=None)
+        summary = (response.choices[0].message.content or "").strip()
+    except Exception as exc:
+        return telegram.send_message(chat_id, f"❌ Gagal merangkum: {exc}")
+    telegram.send_message(chat_id, f"📄 {url}\n\n{summary[:3500]}")
