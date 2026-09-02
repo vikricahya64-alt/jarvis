@@ -110,6 +110,24 @@ def update_task(task_id: str, updates: dict):
         _raise_for(res, "tasks.update")
 
 
+def count_tasks(status: str) -> int:
+    """Count tasks with a given status (used by /status)."""
+    base, _ = _config()
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.get(
+            f"{base}/rest/v1/tasks",
+            params={"select": "id", "status": f"eq.{status}", "limit": "0"},
+            headers={**_auth_headers(), "Prefer": "count=exact"},
+        )
+        if res.status_code >= 400:
+            return -1
+        cr = res.headers.get("content-range", "*/0")
+        try:
+            return int(cr.split("/")[1])
+        except Exception:
+            return -1
+
+
 def reclaim_stale_tasks(stale_minutes: int = 10) -> int:
     """
     Reset PROCESSING tasks older than stale_minutes back to PENDING so the
@@ -221,6 +239,73 @@ def get_recent_history(telegram_id: int, limit: int = 10):
         _raise_for(res, "chat_history.select")
         rows = res.json()
         return list(reversed(rows))
+
+
+# ------------------------------------------------------------------
+# Chat history helpers for memory compaction
+# ------------------------------------------------------------------
+def get_all_chat_telegram_ids() -> list:
+    """Distinct telegram_ids that have any chat history."""
+    base, _ = _config()
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.get(
+            f"{base}/rest/v1/chat_history",
+            params={"select": "telegram_id", "order": "created_at.asc"},
+            headers=_auth_headers(),
+        )
+        _raise_for(res, "chat_history.ids")
+        seen = set()
+        for row in res.json():
+            seen.add(row.get("telegram_id"))
+        return list(seen)
+
+
+def count_chat(telegram_id: int) -> int:
+    """Number of chat_history rows for a user."""
+    base, _ = _config()
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.get(
+            f"{base}/rest/v1/chat_history",
+            params={"select": "id", "telegram_id": f"eq.{telegram_id}",
+                    "limit": "0"},
+            headers={**_auth_headers(), "Prefer": "count=exact"},
+        )
+        if res.status_code >= 400:
+            return 0
+        cr = res.headers.get("content-range", "*/0")
+        try:
+            return int(cr.split("/")[1])
+        except Exception:
+            return 0
+
+
+def get_oldest_chat(telegram_id: int, limit: int = 40):
+    """Oldest chat_history rows (id, role, content) for compaction."""
+    base, _ = _config()
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.get(
+            f"{base}/rest/v1/chat_history",
+            params={"select": "id,role,content",
+                    "telegram_id": f"eq.{telegram_id}",
+                    "order": "created_at.asc", "limit": str(limit)},
+            headers=_auth_headers(),
+        )
+        _raise_for(res, "chat_history.oldest")
+        return res.json()
+
+
+def delete_chat_ids(ids: list) -> bool:
+    """Delete chat_history rows by primary-key id (used after compaction)."""
+    if not ids:
+        return True
+    base, _ = _config()
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.delete(
+            f"{base}/rest/v1/chat_history",
+            params={"id": f"in.({','.join(ids)})"},
+            headers=_auth_headers(),
+        )
+        return res.status_code < 400
 
 
 # ------------------------------------------------------------------

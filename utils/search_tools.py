@@ -300,9 +300,33 @@ def _api_search(query: str, max_results: int = 5) -> list:
 # ------------------------------------------------------------------
 def search_live(query: str, max_chars: int = 1500) -> dict:
     """
-    Get a concise, live-web-based answer via DuckDuckGo AI Chat (free, no key).
+    Get a concise, live-web-based answer via the free API router
+    (Tavily/Brave/Google), with DuckDuckGo AI Chat and scrapers as fallback.
+    Results cached in Supabase for repeated queries.
     Returns {'answer': text}.
     """
+    # Cache miss-safe: return cached answer when fresh and available.
+    try:
+        from utils.search_cache import get_cached, set_cache
+        cached = get_cached(query, ttl_seconds=3600)
+        if cached and cached.get("answer"):
+            return cached
+    except Exception:
+        cached = None
+
+    result = _search_live_uncached(query, max_chars)
+
+    # Persist the answer for future identical queries (best-effort).
+    if result.get("answer") and "Could not" not in result["answer"]:
+        try:
+            set_cache(query, result)
+        except Exception:
+            pass
+    return result
+
+
+def _search_live_uncached(query: str, max_chars: int = 1500) -> dict:
+    """The actual live search, without the cache layer."""
     prompt = (
         "Return a concise, fact-based answer to the question below, based on "
         "live web search results. Cite the source domain(s) inline like "

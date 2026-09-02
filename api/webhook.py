@@ -64,6 +64,11 @@ class handler(BaseHTTPRequestHandler):
             logger.error(f"Bad JSON: {exc}")
             return self._send_json({"ok": False, "error": "Bad JSON"}, 400)
 
+        # 2b. Callback query (inline keyboard taps on todo buttons).
+        cb = update.get("callback_query")
+        if cb:
+            return self._handle_callback(cb)
+
         message = update.get("message") or update.get("edited_message")
         if not message:
             return self._send_json({"ok": True}, 200)
@@ -76,7 +81,16 @@ class handler(BaseHTTPRequestHandler):
         if not text or not chat_id:
             return self._send_json({"ok": True}, 200)
 
-        # 3. Enqueue the task in Supabase with status PENDING.
+        # 3a. Direct commands run without the agentic pipeline.
+        try:
+            from utils import commands as commands_utils
+            if commands_utils.handle_command(chat_id, text, chat_id):
+                logger.info(f"Command handled for chat {chat_id}: {text}")
+                return self._send_json({"ok": True, "handled": "command"}, 200)
+        except Exception as exc:
+            logger.exception(f"Command handler failed: {exc}")
+
+        # 3b. Enqueue the task in Supabase with status PENDING.
         try:
             task_id = _enqueue(chat_id, text, username, first_name)
             logger.info(f"Enqueued task {task_id} for chat {chat_id}")
@@ -105,6 +119,27 @@ class handler(BaseHTTPRequestHandler):
             _notify_failure(chat_id)
 
         return self._send_json({"ok": True, "task_id": task_id}, 200)
+
+    def _handle_callback(self, cb):
+        chat = cb.get("message", {}).get("chat", {})
+        chat_id = chat.get("id")
+        callback_id = cb.get("id")
+        data = cb.get("data", "")
+        telegram_id = cb.get("from", {}).get("id")
+        message_id = cb.get("message", {}).get("message_id", 0)
+        if not chat_id or not callback_id:
+            return self._send_json({"ok": True}, 200)
+        try:
+            from utils import commands as commands_utils
+            commands_utils._cache_callback_message(callback_id, message_id)
+            handled = commands_utils.handle_callback(
+                chat_id, callback_id, data, telegram_id)
+            if not handled:
+                from utils.telegram import answer_callback_query
+                answer_callback_query(callback_id, "Aksi tidak dikenali")
+        except Exception as exc:
+            logger.exception(f"Callback failed: {exc}")
+        return self._send_json({"ok": True}, 200)
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length", 0) or 0)

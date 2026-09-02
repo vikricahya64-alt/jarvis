@@ -21,10 +21,54 @@ def _fmt(items, show: str):
     if not items:
         return "Belum ada item."
     lines = []
-    for it in items:
+    for i, it in enumerate(items, 1):
         mark = "x" if it.get("status") == "done" else " "
-        lines.append(f"[{mark}] {it.get('text', '')}")
+        lines.append(f"[{mark}] {i}. {it.get('text', '')}")
     return "\n".join(lines)
+
+
+def _get_items(telegram_id: int, status_filter: str = None) -> list:
+    params = {
+        "select": "id,text,status,created_at",
+        "telegram_id": f"eq.{telegram_id}",
+        "order": "created_at.asc",
+    }
+    if status_filter:
+        params["status"] = f"eq.{status_filter}"
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            r = client.get(_todos_url(), params=params, headers=_auth_headers())
+            if r.status_code >= 400:
+                return []
+            return r.json()
+    except Exception:
+        return []
+
+
+def render_todo_list(telegram_id: int) -> str:
+    """Plain text list of pending todos."""
+    items = _get_items(telegram_id, "pending")
+    return _fmt(items, "pending")
+
+
+def render_todo_keyboard(telegram_id: int):
+    """Return (text, reply_markup) with inline buttons for pending todos."""
+    items = _get_items(telegram_id, "pending")
+    rows = []
+    for it in items:
+        tid = it["id"]
+        rows.append([
+            {"text": f"✅ {it['text']}", "callback_data": f"td:done:{tid}"},
+            {"text": "🗑", "callback_data": f"td:del:{tid}"},
+        ])
+    if not rows:
+        text = "Daftar todo kosong. Tambah dengan: /add <tugas>"
+        markup = {"inline_keyboard": []}
+    else:
+        text = _fmt(items, "pending")
+        text += "\n\nTap ✅ = selesai, 🗑 = hapus"
+        markup = {"inline_keyboard": rows}
+    return text, markup
 
 
 def add_todo(telegram_id: int, text: str) -> dict:
