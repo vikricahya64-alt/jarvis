@@ -182,7 +182,7 @@ export async function wipeLegacy(env: Env): Promise<number> {
   let removed = 0;
   for (const k of results) {
     try {
-      await env.R2_VAULT.delete(k.r2_key);
+      if (env.R2_VAULT) await env.R2_VAULT.delete(k.r2_key);
       removed++;
     } catch (e) {
       console.error("[dms] r2 delete failed", k.r2_key, (e as Error).message);

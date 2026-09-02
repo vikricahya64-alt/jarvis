@@ -28,15 +28,16 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "jarvis"
-database_id = "<REPLACE_WITH_YOUR_D1_ID>"
+database_id = "21da51ad-244e-46dc-9b5f-60e79ac60b25"
 
-[[r2_buckets]]
-binding = "R2_VAULT"
-bucket_name = "jarvis-vault"
+# R2_VAULT disabled (R2 not yet activated on account)
+# [[r2_buckets]]
+# binding = "R2_VAULT"
+# bucket_name = "jarvis-vault"
 
 [[kv_namespaces]]
 binding = "CONFIG_KV"
-id = "<REPLACE_WITH_YOUR_KV_ID>"
+id = "c6476e44ee25411c88ba81aee3012e9c"
 
 [[queues.producers]]
 binding = "TASKS"
@@ -56,7 +57,7 @@ queue = "jarvis-tasks-dlq"
 # Vars: non-secret configuration (secrets go in `wrangler secret put`)
 #------------------------------------------------------------------------------
 [vars]
-OWNER_TELEGRAM_ID = "0"
+OWNER_TELEGRAM_ID = "6812604983"
 APP_ENV = "production"
 # Telegram webhook secret (should be a secret, but kept here minimal for demo;
 # in production use `wrangler secret put TELEGRAM_SECRET`).
@@ -76,4 +77,4 @@ QUEUE_RETRY_BACKOFF_MS = "1000"
 # The single Worker dispatches by scheduled cron name (see src/index.ts).
 #------------------------------------------------------------------------------
 [triggers]
-crons = ["0 */6 * * *", "0 3 * * *", "0 8 * * 0"]
+crons = ["0 */6 * * *", "0 3 * * *", "0 8 * * *"]

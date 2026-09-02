@@ -77,8 +77,11 @@ export default {
         // Value alignment: expire stale unconfirmed proposals (TTL 7 days).
         const expired = await sweepExpiredProposals(env);
         console.log(`[cron] value_alignment: ${expired} expired (${Date.now() - start}ms)`);
-      } else if (cron === "0 8 * * 0") {
-        console.log(`[cron] obedience_report: scheduled (${Date.now() - start}ms)`);
+      } else if (cron === "0 8 * * *") {
+        // Weekly obedience report — Cloudflare disallows `*` DOM + numeric DOW,
+        // so this runs daily and only dispatches on Sunday.
+        const isSunday = new Date().getUTCDay() === 0;
+        console.log(`[cron] obedience_report: ${isSunday ? "dispatch" : "skip"} (${Date.now() - start}ms)`);
       }
     } catch (e) {
       console.error(`[cron:${cron}] failed`, (e as Error).message);
