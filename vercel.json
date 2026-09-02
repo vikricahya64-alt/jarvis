@@ -1,6 +1,16 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
+  "rewrites": [
+    {
+      "source": "/api/analytics/:path*",
+      "destination": "/api/analytics"
+    },
+    {
+      "source": "/api/device_gateway/:path*",
+      "destination": "/api/device_gateway"
+    }
+  ],
   "crons": [
     {
       "path": "/api/cron",
@@ -39,13 +49,7 @@
     "api/webhook_multimodal.py": {
       "maxDuration": 60
     },
-    "api/analytics/behavior.py": {
-      "maxDuration": 60
-    },
-    "api/analytics/predict.py": {
-      "maxDuration": 60
-    },
-    "api/analytics/sweep.py": {
+    "api/analytics.py": {
       "maxDuration": 60
     },
     "api/device_gateway.py": {

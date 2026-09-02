@@ -186,47 +186,34 @@ def flush_batch(telegram_id: int) -> dict:
 
 
 # ------------------------------------------------------------------
-# HTTP endpoint (/api/simulate)
+# Library functions (imported by api/simulator.py, not an endpoint)
 # ------------------------------------------------------------------
 class handler(BaseHTTPRequestHandler):
+    """Stub — this file is a library module, not a serverless endpoint.
+    Use run_simulation() or add_to_batch() / flush_batch() from other code."""
 
     def do_GET(self):
-        self._send_json({"ok": True, "service": "jarvis-simulate"}, 200)
+        _send_json(self, {"ok": True, "service": "jarvis-simulate"}, 200)
 
     def do_POST(self):
         try:
-            body = self._read_json()
+            body = _read_json(self)
             code = body.get("code", "")
             params = body.get("params")
             telegram_id = int(body.get("telegram_id") or
                               self.headers.get("X-Telegram-Id") or 0)
-            mode = body.get("mode", "run")  # "run" | "batch" | "flush"
-
+            mode = body.get("mode", "run")
             if mode == "batch":
                 res = add_to_batch(telegram_id, code, params)
-                return self._send_json({"ok": True, **res}, 200)
+                return _send_json(self, {"ok": True, **res}, 200)
             if mode == "flush":
                 res = flush_batch(telegram_id)
-                return self._send_json({"ok": True, **res}, 200)
-            # Default: run immediately
+                return _send_json(self, {"ok": True, **res}, 200)
             res = run_simulation(code, params)
-            return self._send_json({"ok": True, **res}, 200)
+            _send_json(self, {"ok": True, **res}, 200)
         except Exception as exc:
             logger.exception("simulate failed")
-            return self._send_json({"ok": False, "error": str(exc)}, 500)
-
-    def _read_json(self):
-        length = int(self.headers.get("Content-Length", 0) or 0)
-        body = self.rfile.read(length) if length else b""
-        return json.loads(body or b"{}")
-
-    def _send_json(self, payload, status):
-        data = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+            _send_json(self, {"ok": False, "error": str(exc)}, 500)
 
     def log_message(self, format, *args):
         logger.info("%s - %s" % (self.address_string(), format % args))
