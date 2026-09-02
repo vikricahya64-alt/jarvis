@@ -41,6 +41,15 @@ def _extract_tool_calls(response):
     return tool_calls, (message.content if message else None)
 
 
+def _is_tool_call_markup(text: str) -> bool:
+    """True when the text channel contains raw <tool_call>/<function= markup
+    instead of a real answer (some models echo the call AND emit structured
+    tool_calls). Never let that become the final user-facing reply."""
+    if not text:
+        return False
+    return "<tool_call>" in text or "<function=" in text
+
+
 def _run_pipeline(task_id: str, telegram_id: int, user_input: str,
                   autonomous: bool = False):
     """The full agentic orchestration pipeline for a single task (sync).
@@ -111,8 +120,8 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str,
                                                extra_system=_extra_system())
         tool_calls, assistant_text = _extract_tool_calls(response)
 
-        # Accumulate any direct assistant text.
-        if assistant_text:
+        # Accumulate any direct assistant text (skip raw <tool_call> markup).
+        if assistant_text and not _is_tool_call_markup(assistant_text):
             final_text_parts.append(assistant_text.strip())
 
         if not tool_calls:
