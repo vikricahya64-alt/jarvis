@@ -77,6 +77,7 @@ class handler(BaseHTTPRequestHandler):
         text = message.get("text") or message.get("caption")
         username = message.get("from", {}).get("username")
         first_name = message.get("from", {}).get("first_name")
+        photo = message.get("photo")
 
         # Voice memos: transcribe via Groq Whisper, then answer the text.
         voice = message.get("voice") or message.get("audio")
@@ -99,12 +100,53 @@ class handler(BaseHTTPRequestHandler):
                     pass
                 return self._send_json({"ok": True}, 200)
 
+        # Text documents: read .txt/.md/.csv/.json and merge into the prompt.
+        doc = message.get("document")
+        if doc:
+            caption_text = text or ""
+            fname = (doc.get("file_name") or "").lower()
+            mime = (doc.get("mime_type") or "").lower()
+            if (fname.endswith((".txt", ".md", ".csv", ".json", ".log"))
+                    or mime.startswith("text/")):
+                try:
+                    send_typing(chat_id)
+                    from utils.download import download_file
+                    data = download_file(doc["file_id"])
+                    content = data.decode("utf-8", errors="replace")[:6000]
+                    if not content.strip():
+                        return self._send_json({"ok": True}, 200)
+                    text = (f"[dokumen: {doc.get('file_name') or 'file'}]\n"
+                            f"{content.strip()}")
+                    if caption_text:
+                        text += f"\n\nPenjelasan user: {caption_text.strip()}"
+                except Exception as exc:
+                    logger.exception(f"Document read failed: {exc}")
+                    try:
+                        from utils.telegram import send_message
+                        send_message(
+                            chat_id,
+                            "Maaf, saya gagal membaca dokumen Anda. 🙏")
+                    except Exception:
+                        pass
+                    return self._send_json({"ok": True}, 200)
+            else:
+                try:
+                    from utils.telegram import send_message
+                    send_message(
+                        chat_id,
+                        "Dokumen ini belum bisa saya baca. Kirim format "
+                        ".txt/.md/.csv/.json agar saya dapat memprosesnya. 🙏",
+                    )
+                except Exception:
+                    pass
+                return self._send_json({"ok": True}, 200)
+
         if not text or not chat_id:
             return self._send_json({"ok": True}, 200)
 
         # Photos: understand via Groq vision (Qwen multimodal), using the
         # caption as the instruction if present.
-        if message.get("photo"):
+        if photo:
             try:
                 send_typing(chat_id)
                 from utils.vision import analyze_photo, _largest_photo
