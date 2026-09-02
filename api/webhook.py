@@ -32,6 +32,15 @@ def _enqueue(chat_id: int, text: str, username=None, first_name=None) -> str:
     return supabase_client.insert_task(chat_id, text, profile["id"])
 
 
+def _has_media(message: dict) -> bool:
+    """True when the update carries a non-text attachment best handled by the
+    multimodal pipeline (photo/voice/audio/document)."""
+    if not message:
+        return False
+    return bool(message.get("photo") or message.get("voice")
+                or message.get("audio") or message.get("document"))
+
+
 def _notify_failure(chat_id: int):
     """Best-effort Telegram notice when a pipeline crashes mid-run."""
     try:
@@ -72,6 +81,18 @@ class handler(BaseHTTPRequestHandler):
         message = update.get("message") or update.get("edited_message")
         if not message:
             return self._send_json({"ok": True}, 200)
+
+        # 2c. Non-text media (photo/voice/audio/document): hand off to the
+        # dedicated multimodal bridge (rate-limited, size-guarded, its own
+        # pipeline) instead of the old inline handlers.
+        if _has_media(message):
+            try:
+                from api import webhook_multimodal
+                payload, status = webhook_multimodal.process_update(update)
+                return self._send_json(payload, status)
+            except Exception as exc:
+                logger.exception(f"Multimodal routing failed: {exc}")
+                return self._send_json({"ok": True, "handled": "multimodal_error"}, 200)
 
         chat_id = message.get("chat", {}).get("id")
         text = message.get("text") or message.get("caption")

@@ -66,6 +66,54 @@ def process_one() -> dict:
         return {"processed": True, "task_id": task_id, "result": "FAILED"}
 
 
+def process_swarm_one() -> dict:
+    """Claim and process one PENDING swarm row (agent child or parent).
+
+    Runs after the normal text cron, so child rows no longer starve. Uses
+    include_agents=True to pick up rows with agent_type != null that the main
+    worker deliberately skips.
+    """
+    task = supabase_client.claim_next_pending(include_agents=True)
+    if task is None:
+        return {"processed": False, "reason": "no pending swarm rows"}
+
+    task_id = task["id"]
+    telegram_id = task.get("telegram_id")
+    user_input = task.get("input")
+    agent_type = task.get("agent_type")
+
+    if not (telegram_id and user_input):
+        try:
+            supabase_client.update_task(task_id, {
+                "status": "FAILED",
+                "error": "Missing required fields (telegram_id/input)",
+            })
+        except Exception:
+            pass
+        return {"processed": True, "task_id": task_id, "result": "FAILED: missing fields"}
+
+    try:
+        from api import swarm_coordinator
+        if agent_type:
+            res = swarm_coordinator.handle_agent_task(
+                task_id, telegram_id, user_input, agent_type)
+            return {"processed": True, "task_id": task_id,
+                    "result": "DONE" if res.get("success") else "FAILED"}
+        result = swarm_coordinator.handle_parent_task(task_id, telegram_id, user_input)
+        return {"processed": True, "task_id": task_id,
+                "result": "DONE" if result.get("status") == "DONE" else "FAILED"}
+    except Exception as exc:
+        logger.exception(f"Swarm cron pipeline failed for task {task_id}")
+        try:
+            supabase_client.update_task(task_id, {
+                "status": "FAILED",
+                "error": str(exc)[:500],
+            })
+        except Exception:
+            pass
+        return {"processed": True, "task_id": task_id, "result": "FAILED"}
+
+
 class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
@@ -79,6 +127,15 @@ class handler(BaseHTTPRequestHandler):
         try:
             summary = process_one()
             logger.info(f"Cron result: {summary}")
+            # Also drain one swarm/agent row so child tasks (agent_type !=
+            # null) don't starve behind the text worker.
+            try:
+                swarm_summary = process_swarm_one()
+                logger.info(f"Cron swarm result: {swarm_summary}")
+                summary["swarm"] = swarm_summary
+            except Exception as exc:
+                logger.exception(f"Swarm cron sub-step failed: {exc}")
+                summary["swarm"] = {"processed": False, "reason": f"error: {exc}"}
             self._send_json({"ok": True, **summary}, 200)
         except Exception as exc:
             logger.exception("Cron worker failed")

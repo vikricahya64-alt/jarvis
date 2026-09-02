@@ -403,6 +403,20 @@ TOOLS = [
             },
         },
     },
+{
+        "type": "function",
+        "function": {
+            "name": "deep_reason",
+            "description": "Deep iterative analysis: plan+Python code, execute in E2B sandbox, self-check, fix and retry until validated. Use for math, data processing, simulations, algorithmic questions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "problem": {"type": "string", "description": "The analytical/computational problem to solve."},
+                },
+                "required": ["problem"],
+            },
+        },
+    },
 ]
 
 
@@ -497,6 +511,59 @@ def sync_completion(user_input, context=None, system_prompt=None,
                     raise RuntimeError("Groq budget exhausted (deadline hit)")
                 try:
                     return _create(model)
+                except Exception:
+                    continue
+            raise RuntimeError(f"Groq error: {exc}")
+
+
+def plain_completion(system_prompt: str, user_input: str,
+                     max_tokens: int = 900, temperature: float = 0.2) -> str:
+    """
+    Plain chat completion WITHOUT tool definitions (planner/reviewer/writer
+    and the deep-reasoning evaluator all use this). Synchronous, fallback
+    models, deadline-aware — identical retry semantics to sync_completion.
+    """
+    if not GROQ_AVAILABLE:
+        raise RuntimeError("groq package not installed")
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_input},
+    ]
+
+    def _create(model: str):
+        return client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+    client = Groq(
+        api_key=os.getenv("GROQ_API_KEY"),
+        timeout=20.0,
+        max_retries=0,
+    )
+
+    attempts = 0
+    while True:
+        if _over_deadline():
+            raise RuntimeError("Groq budget exhausted (deadline hit)")
+        try:
+            resp = _create(MODEL)
+            return resp.choices[0].message.content or ""
+        except RateLimitError as exc:
+            attempts += 1
+            if attempts >= 4:
+                raise RuntimeError(f"Groq rate limited after {attempts} tries: {exc}")
+            wait = _retry_after_seconds(str(exc)) or (2 * attempts)
+            time.sleep(min(wait, max(_remaining_budget() - 3, 1)))
+        except Exception as exc:
+            for model in FALLBACK_MODELS:
+                if _over_deadline():
+                    raise RuntimeError("Groq budget exhausted (deadline hit)")
+                try:
+                    resp = _create(model)
+                    return resp.choices[0].message.content or ""
                 except Exception:
                     continue
             raise RuntimeError(f"Groq error: {exc}")

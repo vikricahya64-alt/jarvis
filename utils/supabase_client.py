@@ -80,19 +80,63 @@ def get_or_create_profile(telegram_id: int, username=None, first_name=None):
 # ------------------------------------------------------------------
 # Tasks (event-driven queue)
 # ------------------------------------------------------------------
-def insert_task(telegram_id: int, input_text: str, profile_id=None) -> str:
-    """Insert a new PENDING task; returns the task id (UUID)."""
+def insert_task(telegram_id: int, input_text: str, profile_id=None,
+                agent=None, agent_type=None) -> str:
+    """Insert a new PENDING task; returns the task id (UUID).
+
+    `agent="swarm"` marks a parent swarm task; `agent_type` marks a child agent
+    row (researcher/coder/reviewer/writer). Both columns are Level-4 only and
+    are omitted when the migration hasn't run (PostgREST ignores unknowns? No —
+    it rejects them, hence callers guard with `_insert_task_columns`).
+    """
     base, _ = _config()
     payload = {"telegram_id": telegram_id, "input": input_text}
     if profile_id:
         payload["profile_id"] = profile_id
+    sane_agent_types = ("researcher", "coder", "reviewer", "writer")
+    if agent == "swarm":
+        payload["agent"] = "swarm"
+    if agent_type in sane_agent_types:
+        payload["agent_type"] = agent_type
     with httpx.Client(timeout=_TIMEOUT) as client:
         res = client.post(
             f"{base}/rest/v1/tasks",
             json=payload,
             headers={**_auth_headers(), "Prefer": "return=representation"},
         )
+        if res.status_code == 400 and "agent_type" in res.text and agent_type:
+            # Pre-migration database: drop the swarm columns, retry once.
+            payload.pop("agent_type", None)
+            payload.pop("agent", None)
+            res = client.post(
+                f"{base}/rest/v1/tasks",
+                json=payload,
+                headers={**_auth_headers(), "Prefer": "return=representation"},
+            )
         _raise_for(res, "tasks.insert")
+        return res.json()[0]["id"]
+
+
+def insert_child_task(telegram_id: int, parent_task_id: str,
+                      agent_type: str, input_text: str) -> str:
+    """Insert a PENDING child agent row (parent_task_id + agent_type filled)."""
+    valid = ("researcher", "coder", "reviewer", "writer")
+    if agent_type not in valid:
+        raise ValueError(f"agent_type harus salah satu {valid}")
+    base, _ = _config()
+    payload = {
+        "telegram_id": telegram_id,
+        "input": input_text,
+        "parent_task_id": parent_task_id,
+        "agent_type": agent_type,
+    }
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.post(
+            f"{base}/rest/v1/tasks",
+            json=payload,
+            headers={**_auth_headers(), "Prefer": "return=representation"},
+        )
+        _raise_for(res, "child_tasks.insert")
         return res.json()[0]["id"]
 
 
@@ -154,10 +198,14 @@ def reclaim_stale_tasks(stale_minutes: int = 10) -> int:
             return 0
 
 
-def claim_next_pending():
+def claim_next_pending(include_agents: bool = False):
     """
-    Atomically claim the oldest PENDING task and mark it PROCESSING.
+    Atomically claim the oldest PENDING root task and mark it PROCESSING.
     Returns the task dict, or None if there is nothing to process.
+
+    Child agent rows (agent_type != null) and swarm parents are excluded by
+    default — they are handled by the swarm coordinator / its own cron worker.
+    Pass include_agents=True to claim them (used by the swarm cron path).
     """
     base, _ = _config()
     with httpx.Client(timeout=_TIMEOUT) as client:
@@ -167,15 +215,19 @@ def claim_next_pending():
         except Exception:
             pass
 
-        # 1. Find the oldest PENDING task.
+        # 1. Find the oldest PENDING root task.
+        params = {
+            "select": "*",
+            "status": "eq.PENDING",
+            "order": "created_at.asc",
+            "limit": "1",
+        }
+        if not include_agents:
+            params["parent_task_id"] = "is.null"
+            params["agent_type"] = "is.null"
         res = client.get(
             f"{base}/rest/v1/tasks",
-            params={
-                "select": "*",
-                "status": "eq.PENDING",
-                "order": "created_at.asc",
-                "limit": "1",
-            },
+            params=params,
             headers=_auth_headers(),
         )
         _raise_for(res, "tasks.pending.select")

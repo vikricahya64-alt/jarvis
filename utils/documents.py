@@ -54,20 +54,37 @@ def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) 
 # ------------------------------------------------------------------
 # Store
 # ------------------------------------------------------------------
-def store_document(title: str, content: str, source: str = "telegram") -> dict:
-    """Chunk a document, store it in Supabase, return a summary."""
+def store_document(title: str, content: str, source: str = "telegram",
+                   metadata: dict = None) -> dict:
+    """Chunk a document, store it in Supabase, return a summary.
+
+    `metadata` (dict) is stored on the document row if the `documents.metadata`
+    JSONB column exists (Level-4 hybrid-RAG upgrade); it is dropped gracefully
+    when the migration hasn't run yet (suppresses PostgREST 400 on unknown col).
+    """
     base, key = supabase_client._config()
     chunks = chunk_text(content)
     if not chunks:
         return {"success": False, "error": "Empty document"}
 
+    doc_payload = {"title": title, "source": source}
+    if metadata:
+        doc_payload["metadata"] = metadata
+
     with httpx.Client(timeout=supabase_client._TIMEOUT) as client:
         headers = {**supabase_client._auth_headers(), "Prefer": "return=representation"}
         res = client.post(
             f"{base}/rest/v1/documents",
-            json={"title": title, "source": source},
+            json=doc_payload,
             headers=headers,
         )
+        if res.status_code == 400 and metadata:
+            # Pre-migration: no metadata column yet. Retry without it.
+            res = client.post(
+                f"{base}/rest/v1/documents",
+                json={"title": title, "source": source},
+                headers=headers,
+            )
         supabase_client._raise_for(res, "documents.insert")
         doc = res.json()[0]
 

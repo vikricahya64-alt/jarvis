@@ -284,6 +284,9 @@ def _dispatch_tool(name: str, args: dict, telegram_id: int = None):
         return {"content": scrape_url(args.get("url", ""))}
     if name == "execute_code":
         return execute_code(args.get("code", ""), args.get("language", "python"))
+    if name == "deep_reason":
+        from utils.deep_reasoning import deep_reason_tool
+        return deep_reason_tool(args)
     if name == "generate_file":
         return _handle_generate_file(args)
     if name == "store_document":
