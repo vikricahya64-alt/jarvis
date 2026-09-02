@@ -1,50 +1,91 @@
-# Fly.io app for J.A.R.V.I.S. Level 9 — Dead Man's Switch monitor.
-#
-# Deploy (from repo root):
-#   fly launch --no-deploy                          # creates app, uses this file
-#   fly secrets set SUPABASE_URL=... SUPABASE_SERVICE_KEY=... \
-#     BACKUP_PASSPHRASE=... TELEGRAM_TOKEN=... JARVIS_DMS_GRACE_DAYS=30 \
-#     JARVIS_MULTISIG_THRESHOLD=2 JARVIS_TERMINATE_WINDOW_H=72
-#   fly deploy
-#
-# First deploy WITHOUT --execute keeps monitor fail-safe (logs /healthz only).
-# When you are ready to allow the DMS to act once armed + multisig, redeploy
-# with CMD override:  fly deploy --build-arg CMD="--execute"   (see entrypoint)
-# or set JARVIS_DMS_EXECUTE=1 in secrets and uncomment the entry section.
+# =============================================================================
+# J.A.R.V.I.S. Level 10 — Ubiquitous Sentience (Fly.io)
+# Primary: Singapore (sin) for Indonesia proximity.
+# Failover regions: nrt (Tokyo), ord (Chicago).
+# FREE TIER: max 3 shared-cpu-1x 256MB VMs + 3GB volume TOTAL. All region
+# capacity must fit inside that. fly.toml declares the PRIMARY machine; extra
+# failover machines are created on demand by ephemeral_worker/failover_manager
+# and are destroyed when idle. Keep each instance at 256MB.
+# =============================================================================
+app = "jarvis-ubiquitous"
 
-app = "jarvis-legacy-monitor"
-primary_region = "nrt"   # Tokyo (closest to ap-southeast-2 uses)
+primary_region = "sin"
 
 [build]
-  # We use a minimal python image + repo via Dockerfile. If you already have a
-  # registry image, point `image` here instead.
-  builder = "paketobuildpacks/builder:base"
-  buildpacks = ["paketo-buildpacks/python"]
+  # Multi-stage Dockerfile (<150MB final image).
+  dockerfile = "Dockerfile"
 
 [env]
-  JARVIS_DMS_GRACE_DAYS = "30"
-  JARVIS_MULTISIG_THRESHOLD = "2"
-  JARVIS_TERMINATE_WINDOW_H = "72"
-  JARVIS_DMS_EXECUTE = "0"     # 1 -> enable once you trust monitoring
+  FLY_REGION = "sin"
+  PRIMARY_REGION = "sin"
+  SUPABASE_URL = "https://vujhyhvmibdkartmrepv.supabase.co"
+  # Keys/passphrases MUST come from `fly secrets set`, not here.
+  LOG_LEVEL = "INFO"
+  JARVIS_HEALTH_SKIP_DEPCHECK = "0"
 
-[[services]]
-  protocol = "tcp"
-  internal_port = 8080        # healthz server
+[deploy]
+  strategy = "rolling"
+  max_unavailable = 1
+  release_command = "mkdir -p /data/jarvis && chown jarvis:jarvis /data/jarvis"
+
+[mounts]
+  source = "jarvis_state"
+  destination = "/data/jarvis"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "256mb"
   processes = ["app"]
 
+# Primary HTTP service
+[[services]]
+  protocol = "tcp"
+  internal_port = 8080
+  processes = ["app"]
+  auto_stop_machines = true
+  auto_start_machines = true
+
   [services.concurrency]
-    type = "heavy"
-    hard_limit = 1                # single instance, keep cost ~0
-    soft_limit = 1
+    type = "connections"
+    hard_limit = 40
+    soft_limit = 20
 
   [[services.ports]]
     handlers = ["http"]
     port = 80
     force_https = true
 
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [[services.http_checks]]
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+
   [[services.http_checks]]
     interval = "1m"
     timeout = "5s"
-    grace_period = "5s"
+    grace_period = "10s"
     method = "GET"
     path = "/healthz"
+
+# Health checks for the machine (container-level)
+[checks]
+  [checks.http_health]
+    port = 8080
+    type = "http"
+    interval = "15s"
+    timeout = "3s"
+    path = "/healthz"
+
+# Optional: internal WireGuard mesh only for inter-service (no public port).
+# Inter-service calls use <svc>.internal DNS; only the webhook is public.
+# Restrict cross-region via a scaled second machine created on demand — do NOT
+# statically scale beyond free tier. Two on-demand failover machines (nrt/ord)
+# are managed by tools/level10/failover.py live.

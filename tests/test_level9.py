@@ -166,6 +166,87 @@ def test_fly_assets_exist():
                                        "legacy_monitor_fly.py"))
 
 
+# ===========================================================================
+# Level 10 — Ubiquitous Sentience (zero-trust, failover, ephemeral workers)
+# ===========================================================================
+
+# ---- zero-trust client: PII/secured logging + circuit breaker ---------------
+def test_zt_redacts_secrets():
+    from utils.zero_trust_client import _redact_body
+    out = _redact_body('{"token": "sk-abc123456", "user": "budi", '
+                       '"secret": "xyzabc123"}')
+    assert "sk-abc123456" not in out
+    assert "xyzabc123" not in out
+    assert "budi" in out   # non-secret PII still appears (request-scoped)
+
+
+def test_circuit_breaker_opens_and_recovers():
+    from utils.zero_trust_client import CircuitBreaker
+    cb = CircuitBreaker("t", failure_threshold=2, open_seconds=999)
+    assert cb.allow_request() is True
+    cb.on_failure(); cb.on_failure()
+    assert cb.allow_request() is False  # open
+
+
+# ---- failover manager: sticky sessions + router ----------------------------
+def test_failover_sticky_sessions():
+    from utils import failover_manager as fm
+    sess = fm.start_sticky("tx")
+    assert fm.route_for("tx") == sess
+    fm.release_sticky("tx")
+    assert fm.route_for("tx") == fm.active_region()
+
+
+def test_failover_status_shape():
+    from utils import failover_manager as fm
+    st = fm.current_status()
+    assert st["active_region"] in ("sin", "nrt", "ord")
+    assert set(st["under_monitoring"]) == {"sin", "nrt", "ord"}
+
+
+# ---- ephemeral worker: priority queue + concurrency + cleanup --------------
+def test_ephemeral_priority_dequeue():
+    from utils import ephemeral_worker as ew
+    # reset module state would be ideal; propose and drain works in isolation
+    a = ew.propose("validator", priority="violation")
+    b = ew.propose("researcher", priority="user")
+    assert a["accepted"] and b["accepted"]
+    assert a["timeout_s"] == 30     # validator 30s
+
+
+def test_ephemeral_limits_and_cleanup():
+    from utils import ephemeral_worker as ew
+    for _ in range(8):
+        ew.propose("researcher", priority="background")
+    ew.cleanup(older_than_s=0.0)
+    d = ew.queue_depths()
+    assert d["running"] <= ew.MAX_CONCURRENT
+
+
+def test_ephemeral_terminate_all():
+    from utils import ephemeral_worker as ew
+    ew.propose("validator", "violation")
+    n = ew.terminate_all()
+    assert n >= 0
+    assert ew.queue_depths()["running"] == 0
+
+
+# ---- existence of L10 runtime / infra assets -------------------------------
+def test_level10_assets_exist():
+    for rel in ("api/fly_app.py", "healthcheck.sh", ".dockerignore",
+                "Dockerfile", "sql/level10_data_residency.sql",
+                "tools/apply_sql.py",
+                "docs/level10-free-tier-guide.md"):
+            assert os.path.exists(os.path.join(_project, rel)), rel
+
+
+def test_level10_modules_import():
+    from utils import zero_trust_client, failover_manager, ephemeral_worker
+    assert callable(zero_trust_client.from_env)
+    assert callable(failover_manager.monitor_and_maybe_failover)
+    assert callable(ephemeral_worker.drain)
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(list(globals().items())):

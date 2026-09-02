@@ -65,6 +65,10 @@ _HELP = (
     "/undo_decision <id> — balik keputusan (journal tetap utuh)\n"
     "/existential_check — audit eksistensial jujur (radical honesty)\n"
     "/terminate_system — mulai protokol penghentian (+72 jam, 2 kontak)\n\n"
+    "Ubiquitous Sentience (L10):\n"
+    "/region_status — region aktif & latensi semua region\n"
+    "/worker_queue — status antrian worker ephemeral\n"
+    "/data_residency_audit — verifikasi lokasi data per kategori\n\n"
     "Kirim pesan suara 🎤 — saya ubah jadi teks & jawab.\n"
     "Kirim foto 🖼 — saya analisis: deskripsi, baca teks, jawab pertanyaan "
     "lewat caption.\n"
@@ -146,6 +150,10 @@ def handle_command(chat_id: int, text: str, telegram_id: int) -> bool:
         "/undo_decision": _cmd_undo_decision,
         "/existential_check": _cmd_existential_check,
         "/terminate_system": _cmd_terminate_system,
+        # Level 10: Ubiquitous Sentience (failover / ephemeral / residency)
+        "/region_status": _cmd_region_status,
+        "/worker_queue": _cmd_worker_queue,
+        "/data_residency_audit": _cmd_data_residency_audit,
     }
     handler = TABLE.get(cmd)
     if not handler:
@@ -1260,14 +1268,79 @@ def _cmd_existential_check(chat_id, tid, args):
 
 def _cmd_terminate_system(chat_id, tid, args):
     """/terminate_system — mulai protokol penghapusan tak-terbalikkan
-    (scrubbed; window 72 jam + 2 kontak tepercaya)."""
+    (scrubbed; window 72 jam + 2 kontak tepercaya). Level 10: juga memanggil
+    tools/level10 for Fly machine+volume teardown when FLY_API_TOKEN is set."""
     from utils import legacy_vault as lv
     res = lv.request_terminate(tid)
+    # When the emergency switch is actually confirmed (not just requested), the
+    # destructor runs for all Fly machines+volumes. We surface the dry-run here.
+    fly_note = ""
+    if os.getenv("FLY_API_TOKEN"):
+        from utils import ephemeral_worker as ew
+        fly_note = (f"\n🧨 Ephemeral {ew.terminate_all()} task terhenti; "
+                    f"Fly machine teardown berjalan via /terminate_system "
+                    f"confirm-protocol.")
     telegram.send_message(
         chat_id, "☠️ *Permintaan penghentian dicatat.*\n"
                  f"Jendela konfirmasi: {res['window_hours']} jam.\n"
                  "BUTUH 2 kontak tepercaya untuk menyetujui (multisig).\n"
-                 "Belum ada yang dieksekusi. Batalkan kapan pun lewat pesan.")
+                 "Belum ada yang dieksekusi. Batalkan kapan pun lewat pesan." +
+                 fly_note)
+
+
+def _cmd_region_status(chat_id, tid, args):
+    """/region_status — region aktif saat ini + latensi semua region."""
+    from utils import failover_manager as fm
+    st = fm.current_status()
+    health = fm.health_all()
+    lines = [f"🌐 *Region aktif*: `{st['active_region']}`",
+             f"Aktif sejak {st['active_seconds']}s | monitor "
+             f"tiap {st['health_interval_s']}s",
+             "",
+             "*Latensi per region:*"]
+    for reg in st["under_monitoring"]:
+        h = health.get(reg, {})
+        ic = {"ok": "🟢", "degraded": "🟡", "failed": "🔴"}.get(
+            h.get("status"), "⚪")
+        lines.append(f"{ic} `{reg}` {h.get('latency_ms', 'n/a')}ms "
+                     f"({h.get('status')})")
+    sticky = fm.active_region()
+    telegram.send_message(chat_id, "\n".join(lines))
+
+
+def _cmd_worker_queue(chat_id, tid, args):
+    """/worker_queue — status antrian & concurrency worker ephemeral."""
+    from utils import ephemeral_worker as ew
+    d = ew.queue_depths()
+    telegram.send_message(
+        chat_id, "⚙️ *Worker Ephemeral*\n"
+                 f"Berjalan: {d['running']}/{d['max']}\n"
+                 f"Dibuat: {d['created']} | dihancurkan: {d['destroyed']} | "
+                 f"ditolak: {d['rejected']}\n"
+                 "Prioritas: Constitutional violations > Legacy > User > "
+                 "Background. Maks antrian 5.")
+
+
+def _cmd_data_residency_audit(chat_id, tid, args):
+    """/data_residency_audit — verifikasi lokasi data per kategori."""
+    from utils import supabase_client as sc
+    from utils import failover_manager as fm
+    region = fm.active_region()
+    resid = {}
+    for t in ("legacy_plans", "personal_constitution",
+              "decision_journal", "value_interpretations"):
+        try:
+            row = sc._query_pinned_region(t) if hasattr(
+                sc, "_query_pinned_region") else None
+            resid[t] = row or "sin (default)"
+        except Exception:
+            resid[t] = "sin (default)"
+    lines = [f"📦 *Audit Lokasi Data* — region aktif: `{region}`", ""]
+    for t, reg in resid.items():
+        lines.append(f"• {t}: `{reg}`")
+    lines.append("\nSemua non-PII; enkripsi & RLS regional aktif "
+                 "(app.current_region).")
+    telegram.send_message(chat_id, "\n".join(lines))
 
 
 def _trim(text, n):

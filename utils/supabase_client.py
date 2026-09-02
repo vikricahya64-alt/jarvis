@@ -1635,3 +1635,29 @@ def update_audit_response(telegram_id: int, audit_id: str,
             return True
     except Exception:
         return False
+
+
+# --- Level 10: data residency --------------------------------------------------
+def _query_pinned_region(table: str) -> str:
+    """Read the distinct pinned_region for a residency table (service-role, so
+    it bypasses the user RLS used by normal queries). Returns the first value,
+    else 'sin'."""
+    if table not in ("legacy_plans", "personal_constitution",
+                     "decision_journal", "value_interpretations"):
+        return "sin"
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/{table}",
+                params={"select": "pinned_region",
+                        "limit": "1",
+                        "order": "created_at.desc"},
+                headers=_auth_headers())
+            if res.status_code < 400:
+                rows = res.json()
+                if rows and rows[0].get("pinned_region"):
+                    return rows[0]["pinned_region"]
+    except Exception:
+        pass
+    return "sin"

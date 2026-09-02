@@ -1,0 +1,51 @@
+# ── Level 10 dockerignore ──
+# Keep the build context (and final image) as lean as possible.
+
+# VCS
+.git/
+.gitignore
+
+# Python caches / venvs
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Hidden secrets / env
+.env
+.env.*
+*.secret
+secrets/
+
+# Local data that must not ship (keys/secrets live in Supabase Vault)
+data/*.asc
+data/*.gpg
+data/*.pgp
+*.pem
+keys/
+
+# Tests & docs needed only for dev (not runtime)
+tests/
+docs/
+
+# Edge-device / training dirs not required in the cloud worker image
+device/
+scripts/*.ipynb
+scripts/*_qlora*.py
+
+# Fly metadata
+.fly/
+fly.toml
+
+# Editor / OS noise
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Build artifacts
+/tmp
+/tmp/
+*.log
+*.whl
