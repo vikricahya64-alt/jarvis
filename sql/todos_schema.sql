@@ -17,6 +17,8 @@ CREATE INDEX IF NOT EXISTS todos_status_idx ON todos (telegram_id, status);
 
 ALTER TABLE todos ENABLE ROW LEVEL SECURITY;
 
+-- Re-runnable: drop any old policy first (CREATE POLICY has no IF NOT EXISTS).
+DROP POLICY IF EXISTS "Todos: service-role access" ON todos;
 CREATE POLICY "Todos: service-role access"
   ON todos FOR ALL
   USING (true)
