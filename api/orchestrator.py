@@ -22,16 +22,10 @@ from utils import groq_client, supabase_client, telegram
 from utils.search_tools import search_web, scrape_url, search_live
 from utils.e2b_executor import execute_code
 from utils import documents as documents_utils
+from utils import misc_tools
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("orchestrator")
-
-# Map Groq tool function names to our implementations.
-TOOL_REGISTRY = {
-    "search_web": search_web,
-    "scrape_url": scrape_url,
-    "execute_code": execute_code,
-}
 
 
 def _extract_tool_calls(response):
@@ -232,6 +226,27 @@ def _dispatch_tool(name: str, args: dict):
         return documents_utils.retrieve_docs(
             args.get("query", ""), args.get("top_k", 5)
         )
+    if name == "get_weather":
+        return misc_tools.get_weather(args.get("city", ""))
+    if name == "convert_currency":
+        return misc_tools.convert_currency(
+            args.get("amount", 0), args.get("from_currency", ""),
+            args.get("to_currency", ""),
+        )
+    if name == "crypto_price":
+        return misc_tools.crypto_price(
+            args.get("coin", ""), args.get("currency", "usd")
+        )
+    if name == "geo_info":
+        return misc_tools.geo_info(args.get("ip", ""))
+    if name == "shorten_url":
+        return misc_tools.shorten_url(args.get("url", ""))
+    if name == "translate":
+        return misc_tools.translate(
+            args.get("text", ""), args.get("target_lang", "id")
+        )
+    if name == "world_time":
+        return misc_tools.world_time(args.get("zone", ""))
     return {"error": f"Unknown tool: {name}"}
 
 

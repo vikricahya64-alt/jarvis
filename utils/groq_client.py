@@ -161,6 +161,100 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Current weather + today's forecast for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string", "description": "City name, e.g. Bandung."}},
+                "required": ["city"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "convert_currency",
+            "description": "Convert an amount between ISO currencies (USD, IDR, EUR...).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "amount": {"type": "number", "description": "Amount to convert."},
+                    "from_currency": {"type": "string", "description": "ISO code, e.g. USD."},
+                    "to_currency": {"type": "string", "description": "ISO code, e.g. IDR."},
+                },
+                "required": ["amount", "from_currency", "to_currency"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "crypto_price",
+            "description": "Current price of a crypto coin (BTC, ETH, SOL...) in a currency.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "coin": {"type": "string", "description": "Coin name/symbol, e.g. BTC."},
+                    "currency": {"type": "string", "description": "Default usd."},
+                },
+                "required": ["coin"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "geo_info",
+            "description": "Location details (city/country/timezone) for an IP address.",
+            "parameters": {
+                "type": "object",
+                "properties": {"ip": {"type": "string", "description": "IP address; empty = caller IP."}},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shorten_url",
+            "description": "Shorten a long URL (is.gd/TinyURL).",
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "URL to shorten."}},
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "translate",
+            "description": "Translate text into a target language (e.g. en, id, ja).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Text to translate."},
+                    "target_lang": {"type": "string", "description": "Default id."},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "world_time",
+            "description": "Current local time for a zone/city (jakarta, tokyo, london...).",
+            "parameters": {
+                "type": "object",
+                "properties": {"zone": {"type": "string", "description": "Zone or city alias; empty = default."}},
+                "required": [],
+            },
+        },
+    },
 ]
 
 
@@ -179,7 +273,11 @@ def _build_messages(user_input, context=None, system_prompt=None):
         "based on the retrieved content. "
         "For questions about current events, live data, prices or news, prefer "
         "search_live (DuckDuckGo AI Chat) to get a direct, up-to-date answer; "
-        "use search_web when the user explicitly wants a list of links."
+        "use search_web when the user explicitly wants a list of links. "
+        "Use the utility tools for fast free data: get_weather for forecasts, "
+        "convert_currency for exchange rates, crypto_price for crypto prices, "
+        "geo_info for IP location, shorten_url for short links, translate for "
+        "translations, and world_time for current time in any timezone."
     )
 
     messages = [{"role": "system", "content": system}]
