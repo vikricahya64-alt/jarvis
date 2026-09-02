@@ -169,6 +169,94 @@ def test_meta_cognition_pause_blocks_low_risk_apply():
 
 
 # ------------------------------------------------------------------
+# 9. supabase_client L7 helpers (mocked httpx: no live network)
+# ------------------------------------------------------------------
+def test_supabase_count_self_repair_sends_count_exact():
+    """Regression: count_self_repair must ask PostgREST for an exact count
+    via 'Prefer: return=minimal,count=exact', else Content-Range is '*/0'."""
+    import httpx
+    from utils import supabase_client as sc
+
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+        headers = {"content-range": "0-0/3"}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, params=None, headers=None):
+            captured["url"] = url
+            captured["params"] = params
+            captured["headers"] = headers
+            return FakeResp()
+
+    sc._config  # ensure module importable
+    sc._config = lambda: ("https://x.supabase.co", "test-key")
+    orig_client = httpx.Client
+    httpx.Client = FakeClient
+    try:
+        sc._SUPABASE_URL = "https://x.supabase.co"
+        sc._SUPABASE_KEY = "test-key"
+        n = sc.count_self_repair()
+    finally:
+        httpx.Client = orig_client
+    assert n == 3, f"expected 3, got {n}"
+    hdr = captured.get("headers") or {}
+    assert hdr.get("Prefer") == "return=minimal,count=exact", hdr
+
+
+def test_supabase_latest_meta_audit_returns_single_dict():
+    """Regression: latest_meta_audit must return the newest row as a dict
+    (not a list), matching latest_genetic_archive's contract."""
+    import httpx
+    from utils import supabase_client as sc
+
+    row = {"id": 1, "week": "2026-W35", "risk": "low", "status": "proposed"}
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return [row]
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, params=None, headers=None):
+            captured["url"] = url
+            return FakeResp()
+
+    orig_client = httpx.Client
+    httpx.Client = FakeClient
+    try:
+        sc._config = lambda: ("https://x.supabase.co", "test-key")
+        sc._SUPABASE_URL = "https://x.supabase.co"
+        sc._SUPABASE_KEY = "test-key"
+        res = sc.latest_meta_audit(12345)
+    finally:
+        httpx.Client = orig_client
+    assert isinstance(res, dict), f"expected dict, got {type(res)}"
+    assert res["week"] == "2026-W35"
+
+
+# ------------------------------------------------------------------
 # Runner (plain `python tests/test_level7.py`)
 # ------------------------------------------------------------------
 if __name__ == "__main__":

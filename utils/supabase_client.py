@@ -845,7 +845,9 @@ def count_self_repair(status: str = None) -> int:
     try:
         with httpx.Client(timeout=_TIMEOUT) as client:
             res = client.get(f"{base}/rest/v1/self_repair_log",
-                             params=params, headers=_auth_headers(),
+                             params=params,
+                             headers={**_auth_headers(),
+                                      "Prefer": "return=minimal,count=exact"},
                              )
             if res.status_code >= 400:
                 return 0
@@ -993,9 +995,10 @@ def latest_meta_audit(telegram_id: int) -> dict:
                         "order": "created_at.desc", "limit": "3"},
                 headers=_auth_headers(),
             )
-            return res.json() if res.status_code < 400 else []
+            rows = res.json() if res.status_code < 400 else []
+            return rows[0] if rows else {}
     except Exception:
-        return []
+        return {}
 
 
 # ------------------------------------------------------------------
