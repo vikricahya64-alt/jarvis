@@ -164,12 +164,13 @@ def _collect(full: bool = False, repair: bool = False) -> dict:
 
 
 def _overall(checks: dict) -> str:
-    statuses = [{"up": "ok", "down": "down", "skipped": "warn", "unconfigured": "warn"}
-                .get(s, "warn") for s in checks.values()]
-    if "down" in statuses:
+    """ok = everything healthy; down = can't operate (Supabase/Groq down);
+    degraded = a secondary dependency is down but the bot still works."""
+    if checks.get("supabase") == "down" or checks.get("groq") == "down":
         return "down"
-    if "warn" in statuses:
-        return "degraded"
+    for name, value in checks.items():
+        if value == "down":
+            return "degraded"
     return "ok"
 
 
