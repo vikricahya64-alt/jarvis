@@ -369,7 +369,11 @@ def _build_messages(user_input, context=None, system_prompt=None):
         "For math use calculate; for unit conversions (length/mass/speed/data/"
         "temperature) use convert_units; for QR codes use make_qr. "
         "You retain a per-user to-do list: add_todo to save a task, "
-        "list_todos to show it, done_todo/remove_todo to change it."
+        "list_todos to show it, done_todo/remove_todo to change it. "
+        "ALWAYS base answers about to-dos, search results, prices, weather, "
+        "calculations, and any data on the exact tool output you just "
+        "received — never on memory, prior chats, or guesses. If a tool "
+        "result is empty, say it's empty; do not invent items."
     )
 
     messages = [{"role": "system", "content": system}]
