@@ -84,8 +84,56 @@ python3 tests/test_level9.py          # plain asserts
 ## Dead Man's Switch — 24/7 host (Fly.io / Render)
 
 Vercel Hobby sleeps between requests, so the heartbeat monitor must live on an
-always-on worker. The module ships `FLY_TOML`; create `fly.toml` and point the
-`[env]` at the Supabase + Telegram vars, then have the worker call
-`legacy_vault.monitor(telegram_id, execute=...)` on a schedule (e.g. every 6 h).
-Fail-safe: `monitor` never executes unless the switch is armed AND multisig is
-satisfied AND the intent is not `none`/`archive` AND `execute=True`.
+always-on worker. The repo ships a ready scaffold:
+
+- `tools/legacy_monitor_fly.py` — loop that evaluates the DMS + serves
+  `/healthz`. **Fail-safe by default**: without `--execute` it never acts even
+  when armed.
+- `fly.toml` + `Dockerfile.fly` — single tiny instance (Tokyo, `nrt`).
+
+### Deploy to Fly.io
+
+```bash
+cd /workspace/jarvis
+fly launch --no-deploy                 # creates app, reads fly.toml
+fly secrets set \
+  SUPABASE_URL=https://vujhyhvmibdkartmrepv.supabase.co \
+  SUPABASE_SERVICE_KEY="<secret>" \
+  SUPABASE_KEY="<anon>" \
+  BACKUP_PASSPHRASE="<secret>" \
+  TELEGRAM_TOKEN="<secret>" \
+  JARVIS_DMS_GRACE_DAYS=30 \
+  JARVIS_MULTISIG_THRESHOLD=2 \
+  JARVIS_TERMINATE_WINDOW_H=72 \
+  JARVIS_TG_OWNER=0 \
+  JARVIS_DMS_INTERVAL_S=21600
+fly deploy
+fly open
+```
+
+First deploy runs **dry-run** (`JARVIS_DMS_EXECUTE=0`, the default in
+`fly.toml`), so the monitor only logs and exposes `/healthz`. To let the switch
+actually act once armed AND multisig-met, flip the flag and deploy purely with
+`fly secrets set JARVIS_DMS_EXECUTE=1` (do this only after you trust the
+monitoring and have set `BACKUP_PASSPHRASE`).
+
+Failure behaviour is safe: the monitor never auto-triggers destruction; a
+runtime error logs and defers. Destructive escalation still requires the
+`terminate_system` 72h window + 2 trusted contacts via the bot.
+
+### Dry run (no Fly) to sanity-check
+
+```bash
+python3 tools/legacy_monitor_fly.py --once    # prints JSON, never acts
+```
+
+### Design invariants (fail-safe, not fail-open)
+
+| Invariant | Guarantee |
+|---|---|
+| No destructive action without `--execute`/`JARVIS_DMS_EXECUTE=1` | monitor stays dry-run |
+| `encrypted_blob` is AES-256-GCM | legacy content never plaintext at rest |
+| Decrypt only after multisig threshold | 2+ trusted contacts, in-memory only |
+| `decision_journal` INSERT+SELECT only | immutable, reversal is a backend patch, never a delete |
+| Value proposals need explicit confirm | never auto-applied; TTL 7d expire |
+| No constitution / engine error | guard blocks (`no_constitution` / `validation_unavailable`) |

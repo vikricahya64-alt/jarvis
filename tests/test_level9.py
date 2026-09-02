@@ -131,6 +131,41 @@ def test_fly_toml_has_grace_config():
     assert "app =" in lv.FLY_TOML
 
 
+# ------------------------------------------------------------------
+# 8. 24/7 monitor (legacy_monitor_fly) fail-safe dry-run
+# ------------------------------------------------------------------
+def _import_monitor():
+    sys.path.insert(0, os.path.join(_project, "tools"))
+    from tools import legacy_monitor_fly as m
+    return m
+
+
+def test_monitor_once_defaults_to_dry_run():
+    m = _import_monitor()
+    res = m.run_once(0, execute=False)
+    assert res["mode"] == "dry_run"
+    assert res["action"] == "noop"
+    assert res["armed"] in (True, False)
+
+
+def test_monitor_once_even_execute_is_safe_without_supabase():
+    m = _import_monitor()
+    res = m.run_once(0, execute=True)
+    # Without live Supabase the state is not armed -> never destructive.
+    assert res["mode"] == "execute"
+    assert res["monitor"]["executed"] is False
+
+
+# ------------------------------------------------------------------
+# 9. Fly healthz / Dockerfile presence
+# ------------------------------------------------------------------
+def test_fly_assets_exist():
+    assert os.path.exists(os.path.join(_project, "fly.toml"))
+    assert os.path.exists(os.path.join(_project, "Dockerfile.fly"))
+    assert os.path.exists(os.path.join(_project, "tools",
+                                       "legacy_monitor_fly.py"))
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(list(globals().items())):

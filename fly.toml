@@ -1,0 +1,50 @@
+# Fly.io app for J.A.R.V.I.S. Level 9 — Dead Man's Switch monitor.
+#
+# Deploy (from repo root):
+#   fly launch --no-deploy                          # creates app, uses this file
+#   fly secrets set SUPABASE_URL=... SUPABASE_SERVICE_KEY=... \
+#     BACKUP_PASSPHRASE=... TELEGRAM_TOKEN=... JARVIS_DMS_GRACE_DAYS=30 \
+#     JARVIS_MULTISIG_THRESHOLD=2 JARVIS_TERMINATE_WINDOW_H=72
+#   fly deploy
+#
+# First deploy WITHOUT --execute keeps monitor fail-safe (logs /healthz only).
+# When you are ready to allow the DMS to act once armed + multisig, redeploy
+# with CMD override:  fly deploy --build-arg CMD="--execute"   (see entrypoint)
+# or set JARVIS_DMS_EXECUTE=1 in secrets and uncomment the entry section.
+
+app = "jarvis-legacy-monitor"
+primary_region = "nrt"   # Tokyo (closest to ap-southeast-2 uses)
+
+[build]
+  # We use a minimal python image + repo via Dockerfile. If you already have a
+  # registry image, point `image` here instead.
+  builder = "paketobuildpacks/builder:base"
+  buildpacks = ["paketo-buildpacks/python"]
+
+[env]
+  JARVIS_DMS_GRACE_DAYS = "30"
+  JARVIS_MULTISIG_THRESHOLD = "2"
+  JARVIS_TERMINATE_WINDOW_H = "72"
+  JARVIS_DMS_EXECUTE = "0"     # 1 -> enable once you trust monitoring
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 8080        # healthz server
+  processes = ["app"]
+
+  [services.concurrency]
+    type = "heavy"
+    hard_limit = 1                # single instance, keep cost ~0
+    soft_limit = 1
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+    force_https = true
+
+  [[services.http_checks]]
+    interval = "1m"
+    timeout = "5s"
+    grace_period = "5s"
+    method = "GET"
+    path = "/healthz"

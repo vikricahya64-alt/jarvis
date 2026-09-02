@@ -1,0 +1,20 @@
+# Level 9 legacy monitor — python runtime.
+# Used together with fly.toml (Paketo Buildpacks). The default process runs the
+# monitor in fail-safe dry-run; set FLY_PROCESS args or JARVIS_DMS_EXECUTE=1 to
+# arm the destructive path only after you trust monitoring.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+ENV PYTHONUNBUFFERED=1
+
+# fly.toml [services].processes = ["app"] runs this. Env-expanded shell form.
+CMD sh -c 'python3 tools/legacy_monitor_fly.py \
+  --telegram-id "${JARVIS_TG_OWNER:-0}" \
+  --interval "${JARVIS_DMS_INTERVAL_S:-21600}" \
+  ${JARVIS_DMS_EXECUTE:+--execute}'
