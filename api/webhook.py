@@ -41,6 +41,19 @@ def _has_media(message: dict) -> bool:
                 or message.get("audio") or message.get("document"))
 
 
+def hybrid_tag(decision: str) -> str:
+    """Human-visible execution location indicator (Level 6)."""
+    try:
+        from api.hybrid_router import location_tag
+        return location_tag(decision)
+    except Exception:
+        return {"local": "🛡️ Local (Private)",
+                "force_local": "🛡️ Local (Forced)",
+                "fallback": "⚠️ Fallback (Cloud)",
+                "force_cloud": "🔵 Cloud (Forced)"}.get(
+            decision, "🔵 Cloud (Powerful)")
+
+
 def _notify_failure(chat_id: int):
     """Best-effort Telegram notice when a pipeline crashes mid-run."""
     try:
@@ -223,14 +236,42 @@ class handler(BaseHTTPRequestHandler):
             logger.exception(f"Failed to enqueue task: {exc}")
             return self._send_json({"ok": False, "error": "Enqueue failed"}, 200)
 
-        # 4. Run the orchestrator pipeline synchronously. A background thread
-        #    is unreliable on Vercel (serverless isolates stop running as soon
-        #    as the handler returns), leaving tasks PENDING forever. The daily
-        #    cron (api/cron.py) acts as a safety net for any task that exceeds
-        #    the function timeout.
+        # 4. Hybrid router decides local vs cloud (Level 6). If the local
+        #    device is not configured/unreachable, this degrades to cloud.
+        #    A background thread is unreliable on Vercel (serverless isolates
+        #    stop running as soon as the handler returns), leaving tasks
+        #    PENDING forever. The daily cron (api/cron.py) acts as a safety
+        #    net for any task that exceeds the function timeout.
+        decision = "cloud"
+        try:
+            from api.hybrid_router import decide, route_and_execute
+            d = decide(chat_id, text)
+            decision = d["decision"]
+        except Exception as exc:
+            logger.info(f"hybrid router unavailable ({exc}); using cloud")
+
+        # If routed local, try the device first; route_and_execute falls back
+        # to cloud automatically when the device is unreachable.
+        try:
+            if decision in ("local", "force_local"):
+                from api.hybrid_router import route_and_execute
+                loc_decision, ok, err, _ = route_and_execute(
+                    task_id, chat_id, text)
+                if ok:
+                    logger.info(f"Local execution ({loc_decision}) for {task_id}")
+                    supabase_client.update_task(task_id, {"status": "DONE"})
+                    return self._send_json({"ok": True, "task_id": task_id,
+                                            "decision": loc_decision}, 200)
+                logger.warning(
+                    f"Local failed ({err}); seamless fallback for {task_id}")
+                decision = "fallback"
+        except Exception as exc:
+            logger.warning(f"Local dispatch error ({exc}); using cloud")
+
         try:
             from api.orchestrator import _run_pipeline
-            _run_pipeline(task_id, chat_id, text)
+            _run_pipeline(task_id, chat_id, text,
+                          execution_location=hybrid_tag(decision))
             logger.info(f"Pipeline finished for task {task_id}")
         except Exception as exc:
             logger.exception(f"Pipeline failed for task {task_id}: {exc}")

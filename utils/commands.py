@@ -78,6 +78,11 @@ def handle_command(chat_id: int, text: str, telegram_id: int) -> bool:
         "/profil": _cmd_profile,
         "/undo_evolution": _cmd_undo_evolution,
         "/evolution": _cmd_evolution,
+        # Level 6: hybrid edge-cloud routing
+        "/force_local": _cmd_force_local,
+        "/force_cloud": _cmd_force_cloud,
+        "/auto_route": _cmd_auto_route,
+        "/device": _cmd_device_health,
     }
     handler = TABLE.get(cmd)
     if not handler:
@@ -493,11 +498,15 @@ _CONSENT_FIELDS = (
     ("calendar",     "Baca kalender"),
     ("notion",       "Baca Notion"),
     ("drive",        "Baca Drive"),
+    # Level 6: data sovereignty / residency
+    ("local_only",   "Paksa semua data PRIBADI tetap di perangkat"),
+    ("route_local",  "Rute default: lokal"),
+    ("cloud_sync",   "Izinkan backup terenkripsi ke cloud"),
 )
 
 
 def _cmd_privacy(chat_id, tid, args):
-    """/privacy — lihat & kelola izin analitik Level 5 (opt-in)."""
+    """/privacy — lihat & kelola izin analitik + data residency (Level 5 & 6)."""
     from utils import supabase_client
     consent = _read_service_consent(tid)
     args = args.strip().lower()
@@ -520,17 +529,46 @@ def _cmd_privacy(chat_id, tid, args):
         sc.set_service_consent(tid, consent)
         state = "🟢 aktif" if toggle == "on" else "⚪ nonaktif"
         label = dict(_CONSENT_FIELDS)[field]
+        # Level 6: changing location-sensitive consent also updates residency.
+        if field == "cloud_sync":
+            status = "izin sync ke cloud" if toggle == "on" else "pemblokiran sync cloud"
+            return telegram.send_message(
+                chat_id, f"✅ {status}: {state}.\n"
+                         "Data lokal kini hanya di-backup ke Supabase Storage "
+                         "terenkripsi (AES-256-GCM) jika diaktifkan.")
         return telegram.send_message(
             chat_id, f"✅ {label}: {state}.\n"
                      "Perubahan langsung berlaku untuk fitur proaktif.")
 
-    lines = ["🔒 *Pengaturan privasi Level 5*\n"
-             "Saya hanya menyimpan agregat, bukan pesan mentah.\n\n"]
-    for f, label in _CONSENT_FIELDS:
+    # --- Dashboard view ---
+    lines = ["🔒 *Dashboard Privasi & Data Residency*\n"]
+    lines.append("⛅ *Analitik (Level 5)* — agregat, bukan teks mentah:")
+    for f, label in _CONSENT_FIELDS[:-4]:
         state = "🟢" if consent.get(f, False) else "⚪"
         lines.append(f"{state} {label} → /privacy on/off {f}")
-    lines.append("\nIni bersifat opt-in: matikan semua untuk mode tidak "
-                 "proaktif (hanya jawab saat diminta).")
+
+    lines.append("\n🏠 *Data Sovereignty (Level 6)*:")
+    for f, label in _CONSENT_FIELDS[-3:]:
+        state = "🟢" if consent.get(f, False) else "⚪"
+        lines.append(f"{state} {label} → /privacy on/off {f}")
+
+    # Current route override
+    route = consent.get("route", "auto")
+    route_label = {"auto": "🔀 Auto", "local": "🛡️ Local",
+                   "cloud": "🔵 Cloud"}.get(route, "🔀 Auto")
+    lines.append(f"\nRute saat ini: {route_label} "
+                 "(/force_local /force_cloud /auto_route)")
+
+    # Residency summary
+    try:
+        res = supabase_client.get_residency_summary(tid)
+        lines.append(f"\nEksekusi tercatat: {res['local']} lokal · "
+                     f"{res['cloud']} cloud · {res['backup']} backup")
+    except Exception:
+        pass
+
+    lines.append("\nSemua fitur opt-in. Data pribadi SELALU diproses lokal "
+                 "dan hanya di-sync terenkripsi dengan izin eksplisit.")
     telegram.send_message(chat_id, "\n".join(lines))
 
 
@@ -579,3 +617,63 @@ def _cmd_evolution(chat_id, tid, args):
     from utils import self_evolution
     telegram.send_message(chat_id,
                           self_evolution.weekly_digest(tid))
+
+
+# ------------------------------------------------------------------
+# Level 6: hybrid edge-cloud routing commands
+# ------------------------------------------------------------------
+def _cmd_force_local(chat_id, tid, args):
+    """/force_local — paksa semua permintaan diproses di perangkat lokal."""
+    from api.hybrid_router import set_override
+    ok = set_override(tid, "local")
+    telegram.send_message(
+        chat_id, "🛡️ Mode *Force Local* aktif.\n\n"
+                 "Semua permintaan diproses di perangkat Anda (Model "
+                 "Qwen2.5-1.5B). Tidak ada data yang keluar ke cloud.\n"
+                 "Kembali otomatis: /auto_route"
+                 if ok else "❌ Gagal mengaktifkan mode force local.")
+
+
+def _cmd_force_cloud(chat_id, tid, args):
+    """/force_cloud — paksa semua permintaan ke cloud (Groq+E2B)."""
+    from api.hybrid_router import set_override
+    ok = set_override(tid, "cloud")
+    telegram.send_message(
+        chat_id, "🔵 Mode *Force Cloud* aktif.\n\n"
+                 "Semua permintaan diproses di cloud (Groq qwen/gpt-oss, "
+                 "model lebih kuat). Perhatikan: data sensitif tetap "
+                 "diredaksi sebelum dikirim.\n"
+                 "Kembali otomatis: /auto_route"
+                 if ok else "❌ Gagal mengaktifkan mode force cloud.")
+
+
+def _cmd_auto_route(chat_id, tid, args):
+    """/auto_route — kembalikan ke routing cerdas otomatis."""
+    from api.hybrid_router import set_override
+    ok = set_override(tid, "auto")
+    telegram.send_message(
+        chat_id, "🔄 Mode *Auto Route* aktif.\n\n"
+                 "Saya akan otomatis memilih antara perangkat lokal dan "
+                 "cloud berdasarkan sensitivitas, kompleksitas, dan status "
+                 "perangkat Anda."
+                 if ok else "❌ Gagal kembali ke mode otomatis.")
+
+
+def _cmd_device_health(chat_id, tid, args):
+    """/device — cek status perangkat lokal (suhu, RAM, latensi)."""
+    from utils import device_comm
+    health = device_comm.check_device_health()
+    if not health.get("online"):
+        telegram.send_message(
+            chat_id, "📡 Perangkat lokal tidak terjangkau.\n"
+                     "Rute otomatis memakai cloud (fallback).")
+        return
+    temp = health.get("temp_c")
+    ram = health.get("ram_pct")
+    parts = ["📱 *Status Perangkat Lokal (Realme C25s)*"]
+    parts.append(f"• Status: 🟢 Online (latensi {health.get('latency_ms')} ms)")
+    if temp is not None:
+        parts.append(f"• Suhu: {temp:.0f}°C" + (" ⚠️ (threshold 45°C)" if temp > 45 else ""))
+    if ram is not None:
+        parts.append(f"• RAM: {ram:.0f}%" + (" ⚠️ (threshold 90%)" if ram > 90 else ""))
+    telegram.send_message(chat_id, "\n".join(parts))

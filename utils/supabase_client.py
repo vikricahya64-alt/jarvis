@@ -77,6 +77,227 @@ def get_or_create_profile(telegram_id: int, username=None, first_name=None):
         return res.json()[0]
 
 
+def log_routing(telegram_id: int, message_hash: str, decision: str,
+                complexity: float, sensitivity: float, latency_ms: int,
+                device_status: dict) -> bool:
+    """Append a hybrid-router decision to routing_log (audit trail)."""
+    try:
+        return _insert_json("routing_log", {
+            "telegram_id": telegram_id,
+            "message_hash": message_hash,
+            "decision": decision,
+            "complexity": complexity,
+            "sensitivity": sensitivity,
+            "latency_ms": int(latency_ms),
+            "device_status": device_status or {},
+        })
+    except Exception:
+        return False
+
+
+def log_residency(telegram_id: int, record_id: str, location: str,
+                  pii_detected: bool, pii_types: list,
+                  redacted_fields: list, note: str = "") -> bool:
+    """Append a data-residency audit entry (compliance trail)."""
+    try:
+        return _insert_json("data_residency_audit", {
+            "telegram_id": telegram_id,
+            "record_id": record_id,
+            "location": location,
+            "pii_detected": bool(pii_detected),
+            "pii_types": pii_types or [],
+            "redacted_fields": redacted_fields or [],
+            "execution_note": note or "",
+        })
+    except Exception:
+        return False
+
+
+def get_latest_routing(telegram_id: int, limit: int = 5) -> list:
+    """Most recent routing decisions for a user (privacy dashboard)."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/routing_log",
+                params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                        "order": "created_at.desc", "limit": str(limit)},
+                headers=_auth_headers(),
+            )
+            if res.status_code >= 400:
+                return []
+            return res.json()
+    except Exception:
+        return []
+
+
+def get_residency_summary(telegram_id: int) -> dict:
+    """Counts of local vs cloud executions for the /privacy dashboard."""
+    base, _ = _config()
+    counts = {"local": 0, "cloud": 0, "backup": 0}
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            rows = client.get(
+                f"{base}/rest/v1/data_residency_audit",
+                params={"select": "location", "telegram_id": f"eq.{telegram_id}"},
+                headers=_auth_headers(),
+            ).json()
+            for r in rows:
+                loc = r.get("location")
+                if loc in counts:
+                    counts[loc] += 1
+    except Exception:
+        pass
+    return counts
+
+
+def _insert_json(table: str, row: dict) -> bool:
+    """Minimal insert helper used by the audit loggers (service role)."""
+    base, _ = _config()
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.post(
+            f"{base}/rest/v1/{table}",
+            json=row,
+            headers={**_auth_headers(), "Prefer": "return=minimal"},
+        )
+        return res.status_code < 400
+
+
+# ------------------------------------------------------------------
+# Level 6: device heartbeat + device task queue
+# ------------------------------------------------------------------
+def store_device_heartbeat(telegram_id: int, status: dict) -> bool:
+    """Upsert the Realme C25s heartbeat (written by the device poller)."""
+    base, _ = _config()
+    row = {
+        "telegram_id": telegram_id,
+        "online": True,
+        "temp_c": status.get("temp_c"),
+        "ram_pct": status.get("ram_pct"),
+        "threads": status.get("threads"),
+        "latency_ms": status.get("latency_ms"),
+        "model": status.get("model", "Qwen2.5-1.5B"),
+    }
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            # Upsert: insert-or-ignore then patch by PK.
+            client.post(f"{base}/rest/v1/device_status", json=row,
+                        headers={**_auth_headers(),
+                                 "Prefer": "resolution=merge-duplicates"})
+            return True
+    except Exception:
+        return False
+
+
+def read_device_health(telegram_id: int, fresh_win_s: int = 60) -> dict:
+    """Read the cached device heartbeat. `online=False` when absent/stale."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/device_status",
+                params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                        "limit": "1"},
+                headers=_auth_headers(),
+            )
+            if res.status_code >= 400:
+                return {"online": False}
+            rows = res.json()
+            if not rows:
+                return {"online": False}
+            st = rows[0]
+            from datetime import datetime, timezone
+            updated = st.get("updated_at")
+            try:
+                dt = datetime.fromisoformat(str(updated).replace("Z", "+00:00"))
+                age = (datetime.now(timezone.utc) - dt).total_seconds()
+            except Exception:
+                age = 9999
+            return {
+                "online": age <= fresh_win_s,
+                "temp_c": st.get("temp_c"),
+                "ram_pct": st.get("ram_pct"),
+                "threads": st.get("threads"),
+                "latency_ms": st.get("latency_ms"),
+                "model": st.get("model") or "",
+                "age_s": int(age),
+            }
+    except Exception:
+        return {"online": False}
+
+
+def enqueue_device_task(telegram_id: int, envelope: dict,
+                        task_id: str = None) -> bool:
+    """Queue an encrypted payload for the local device to pick up."""
+    base, _ = _config()
+    row = {"telegram_id": telegram_id, "envelope": envelope, "status": "PENDING"}
+    if task_id:
+        row["task_id_fk"] = task_id
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.post(
+                f"{base}/rest/v1/device_queue",
+                json=row,
+                headers={**_auth_headers(), "Prefer": "return=minimal"},
+            )
+            return res.status_code < 400
+    except Exception:
+        return False
+
+
+def dequeue_device_task(telegram_id: int) -> dict:
+    """Device poller: atomically claim the oldest PENDING task + mark SENT."""
+    base, _ = _config()
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        res = client.get(
+            f"{base}/rest/v1/device_queue",
+            params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                    "status": "eq.PENDING", "order": "created_at.asc",
+                    "limit": "1"},
+            headers=_auth_headers(),
+        )
+        if res.status_code >= 400:
+            return None
+        rows = res.json()
+        if not rows:
+            return None
+        row = rows[0]
+        patch = client.patch(
+            f"{base}/rest/v1/device_queue",
+            params={"id": f"eq.{row['id']}", "status": "eq.PENDING"},
+            json={"status": "SENT"},
+            headers={**_auth_headers(), "Prefer": "return=representation"},
+        )
+        if patch.status_code >= 400 or not patch.json():
+            return None   # claimed by another poller
+        return patch.json()[0]
+
+
+def complete_device_task(queue_id: str, task_id: str, result: dict) -> bool:
+    """Mark a device_queue row DONE and update the linked task (if any)."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            client.patch(
+                f"{base}/rest/v1/device_queue",
+                params={"id": f"eq.{queue_id}"},
+                json={"status": "DONE"},
+                headers=_auth_headers(),
+            )
+            if task_id:
+                client.patch(
+                    f"{base}/rest/v1/tasks",
+                    params={"id": f"eq.{task_id}"},
+                    json={"status": "DONE",
+                          "result_text": (result.get("text") or "")[:4000],
+                          "error": result.get("error")},
+                    headers=_auth_headers(),
+                )
+            return True
+    except Exception:
+        return False
+
+
 # ------------------------------------------------------------------
 # Level 5: behavioral / emotional / evolution / consent profile state
 # ------------------------------------------------------------------

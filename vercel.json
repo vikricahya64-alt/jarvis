@@ -47,6 +47,15 @@
     },
     "api/analytics/sweep.py": {
       "maxDuration": 60
+    },
+    "api/hybrid_router.py": {
+      "maxDuration": 60
+    },
+    "api/device_gateway.py": {
+      "maxDuration": 60
+    },
+    "api/simulator_proxy.py": {
+      "maxDuration": 60
     }
   }
 }

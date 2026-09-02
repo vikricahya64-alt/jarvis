@@ -51,12 +51,16 @@ def _is_tool_call_markup(text: str) -> bool:
 
 
 def _run_pipeline(task_id: str, telegram_id: int, user_input: str,
-                  autonomous: bool = False):
+                  autonomous: bool = False, execution_location: str = None):
     """The full agentic orchestration pipeline for a single task (sync).
 
     `autonomous=True` marks a proactive/scheduled run (a scheduled job, no
     waiting user): the handler skips typing no-ops and the model is told to
     answer concisely and deliver the result to Telegram immediately.
+
+    `execution_location` (Level 6) is a human-visible tag (e.g. '🛡️ Local
+    (Private)') prepended to the final Telegram delivery so the user always
+    knows where the answer came from.
     """
     # Bound total Groq time so the whole task fits Vercel's Hobby 60s cap.
     groq_client.set_budget(48)
@@ -228,7 +232,8 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str,
     })
 
     # 5. Send result back to Telegram.
-    _notify_user(telegram_id, final_text, result_urls)
+    _notify_user(telegram_id, final_text, result_urls,
+                 location=execution_location)
 
     # 6. Active learning loop: reflect on what happened so the next run is
     # better (bounded; small Groq budget, never blocks delivery).
@@ -412,8 +417,12 @@ def _tool_calls_json():
     return {"count": 0, "generated": datetime.datetime.utcnow().isoformat()}
 
 
-def _notify_user(telegram_id: int, text: str, urls: list):
-    """Send the result text (chunked to Telegram's 4096 limit) and files."""
+def _notify_user(telegram_id: int, text: str, urls: list,
+                 location: str = None):
+    """Send the result text (chunked to Telegram's 4096 limit) and files.
+    `location` is a Level-6 execution indicator prepended to the first chunk."""
+    if location:
+        text = f"{location}\n\n{text}"
     chunks = _chunk_text(text, 4000)
     for i, chunk in enumerate(chunks):
         telegram.send_message(telegram_id, chunk)
