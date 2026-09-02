@@ -37,6 +37,8 @@ _HELP = (
     "/cari <query> — pencarian web langsung\n"
     "/ringkas <url> — ringkas halaman web\n\n"
     "Kirim pesan suara 🎤 — saya ubah jadi teks & jawab.\n"
+    "Kirim foto 🖼 — saya analisis: deskripsi, baca teks, jawab pertanyaan "
+    "lewat caption.\n"
     "Ketik pesan biasa untuk bicara dengan saya lewat AI."
 ).format(name=_BOT_NAME)
 
