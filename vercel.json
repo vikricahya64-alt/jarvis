@@ -21,6 +21,12 @@
     "api/cron.py": {
       "maxDuration": 60
     },
+    "api/cron-trigger.py": {
+      "maxDuration": 60
+    },
+    "api/oauth2-callback.py": {
+      "maxDuration": 60
+    },
     "api/maintenance.py": {
       "maxDuration": 60
     },

@@ -343,10 +343,71 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_gmail",
+            "description": "Read the user's Gmail inbox (metadata headers + snippets). Requires /login gmail first.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Gmail search query (e.g. 'from:x subject:y')."},
+                    "max_results": {"type": "integer", "description": "Default 5."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "upload_to_drive",
+            "description": "Upload a text file to the user's Google Drive. Requires /login google_drive first.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "File name to create."},
+                    "content": {"type": "string", "description": "File content."},
+                },
+                "required": ["filename", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_notion",
+            "description": "Search the user's Notion workspace. Requires /login notion first.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Text to search."},
+                    "limit": {"type": "integer", "description": "Default 5."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_calendar_events",
+            "description": "Read the user's upcoming Google Calendar events. Requires /login calendar first.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {"type": "integer", "description": "Lookahead in days (default 7)."},
+                    "max_results": {"type": "integer", "description": "Default 10."},
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 
-def _build_messages(user_input, context=None, system_prompt=None):
+def _build_messages(user_input, context=None, system_prompt=None,
+                    extra_system=None):
     system = system_prompt or (
         "You are J.A.R.V.I.S., a personal industrial agentic AI. "
         "You orchestrate real work: searching the web, writing and executing code, "
@@ -370,11 +431,18 @@ def _build_messages(user_input, context=None, system_prompt=None):
         "temperature) use convert_units; for QR codes use make_qr. "
         "You retain a per-user to-do list: add_todo to save a task, "
         "list_todos to show it, done_todo/remove_todo to change it. "
+        "Private integrations: read_gmail, upload_to_drive and query_notion "
+        "only work for a user who has connected their account via /login. "
+        "If such a tool returns 'belum terhubung', tell the user to run "
+        "/login <provider> instead of inventing data. "
         "ALWAYS base answers about to-dos, search results, prices, weather, "
         "calculations, and any data on the exact tool output you just "
         "received — never on memory, prior chats, or guesses. If a tool "
         "result is empty, say it's empty; do not invent items."
     )
+
+    if extra_system:
+        system = f"{system}\n\n{extra_system}"
 
     messages = [{"role": "system", "content": system}]
     if context:
@@ -383,7 +451,8 @@ def _build_messages(user_input, context=None, system_prompt=None):
     return messages
 
 
-def sync_completion(user_input, context=None, system_prompt=None, tool_choice="auto"):
+def sync_completion(user_input, context=None, system_prompt=None,
+                    tool_choice="auto", extra_system=None):
     """
     Synchronous wrapper. In Vercel's Flask serverless this is acceptable
     for the orchestrator's bounded execution window.
@@ -391,7 +460,8 @@ def sync_completion(user_input, context=None, system_prompt=None, tool_choice="a
     if not GROQ_AVAILABLE:
         raise RuntimeError("groq package not installed")
 
-    messages = _build_messages(user_input, context, system_prompt=system_prompt)
+    messages = _build_messages(user_input, context, system_prompt=system_prompt,
+                               extra_system=extra_system)
 
     def _create(model: str, max_tokens: int = 900):
         return client.chat.completions.create(

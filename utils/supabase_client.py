@@ -241,6 +241,29 @@ def get_recent_history(telegram_id: int, limit: int = 10):
         return list(reversed(rows))
 
 
+def retrieve_relevant_history(telegram_id: int, query: str, limit: int = 4):
+    """
+    Semantic-ish (pg_trgm) retrieval of past chat rows matching `query`.
+    Uses the `match_chat_history` RPC; degrades to [] when the migration
+    hasn't run (the orchestrator then falls back to recent history only).
+    """
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.post(
+                f"{base}/rest/v1/rpc/match_chat_history",
+                json={"p_telegram_id": telegram_id, "p_query": query,
+                      "p_limit": limit},
+                headers=_auth_headers(),
+            )
+            if res.status_code == 404:
+                return []
+            _raise_for(res, "rpc.match_chat_history")
+            return res.json()
+    except Exception:
+        return []
+
+
 # ------------------------------------------------------------------
 # Chat history helpers for memory compaction
 # ------------------------------------------------------------------

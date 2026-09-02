@@ -41,22 +41,56 @@ def _extract_tool_calls(response):
     return tool_calls, (message.content if message else None)
 
 
-def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
-    """The full agentic orchestration pipeline for a single task (sync)."""
+def _run_pipeline(task_id: str, telegram_id: int, user_input: str,
+                  autonomous: bool = False):
+    """The full agentic orchestration pipeline for a single task (sync).
+
+    `autonomous=True` marks a proactive/scheduled run (a scheduled job, no
+    waiting user): the handler skips typing no-ops and the model is told to
+    answer concisely and deliver the result to Telegram immediately.
+    """
     # Bound total Groq time so the whole task fits Vercel's Hobby 60s cap.
     groq_client.set_budget(48)
 
     # Acquire task (mark PROCESSING).
     supabase_client.update_task(task_id, {"status": "PROCESSING"})
-    telegram.send_typing(telegram_id)
+    if not autonomous:
+        telegram.send_typing(telegram_id)
 
-    # Load recent history for conversational context (RAG-lite).
+    # Adaptive learning loop: inject the user's learned preferences.
+    pref_block = ""
+    try:
+        from utils.learning_loop import build_preference_block
+        pref_block = build_preference_block(telegram_id, user_input)
+    except Exception:
+        pref_block = ""
+    auto_note = (
+        "[Mode proaktif/terjadwal: langsung berikan hasil, ringkas, tanpa "
+        "sapaan atau basa-basi, dalam bahasa pengguna.]"
+        if autonomous else ""
+    )
+    def _extra_system() -> str:
+        return "\n\n".join(x for x in (pref_block, auto_note) if x) or None
+
+    # Context: skip conversational filler for scheduled runs, but still
+    # inject the user's learned preferences + learned history.
     ctx = []
     try:
         history = supabase_client.get_recent_history(telegram_id, limit=6)
         ctx = [{"role": h["role"], "content": h["content"]} for h in history]
     except Exception:
         ctx = []
+
+    # RAG-lite: semantic-ish (pg_trgm) retrieval of relevant past context.
+    try:
+        relevant = supabase_client.retrieve_relevant_history(
+            telegram_id, user_input, limit=4)
+        if relevant:
+            ctx = ([{"role": r["role"],
+                     "content": f"[konteks relevan] {r['content']}"}
+                    for r in relevant] + ctx)
+    except Exception:
+        pass
 
     # Store the user message for context.
     try:
@@ -67,12 +101,14 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
     # 1. Planner: ask Groq to decide the next action(s).
     final_text_parts = []
     final_files = []
+    tool_names = []
     max_iterations = int(os.getenv("MAX_TOOL_ITERATIONS", "3"))
 
     context = ctx
     consecutive_failures = 0
     for iteration in range(max_iterations):
-        response = groq_client.sync_completion(user_input, context=context)
+        response = groq_client.sync_completion(user_input, context=context,
+                                               extra_system=_extra_system())
         tool_calls, assistant_text = _extract_tool_calls(response)
 
         # Accumulate any direct assistant text.
@@ -105,6 +141,7 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
             logger.info(f"Executing tool: {name} -> {args}")
 
             tool_result = _dispatch_tool(name, args, telegram_id)
+            tool_names.append(name)
             logger.info(
                 f"Tool {name} result: {json.dumps(tool_result, ensure_ascii=False)[:300]}"
             )
@@ -140,6 +177,7 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
                     "useful, say so honestly and briefly."
                 ),
                 tool_choice="none",
+                extra_system=_extra_system(),
             )
             _, synth_text = _extract_tool_calls(synth_resp)
             if synth_text and synth_text.strip():
@@ -182,6 +220,14 @@ def _run_pipeline(task_id: str, telegram_id: int, user_input: str):
 
     # 5. Send result back to Telegram.
     _notify_user(telegram_id, final_text, result_urls)
+
+    # 6. Active learning loop: reflect on what happened so the next run is
+    # better (bounded; small Groq budget, never blocks delivery).
+    try:
+        from utils.learning_loop import reflect
+        reflect(telegram_id, user_input, final_text, tool_names)
+    except Exception as exc:
+        logger.debug(f"Reflection skipped: {exc}")
 
 
 def _tool_context_payload(name: str, result) -> str:
@@ -277,6 +323,13 @@ def _dispatch_tool(name: str, args: dict, telegram_id: int = None):
         return todos.done_todo(telegram_id, args.get("match", ""))
     if name == "remove_todo":
         return todos.remove_todo(telegram_id, args.get("match", ""))
+    if name in ("read_gmail", "upload_to_drive", "query_notion",
+                "get_calendar_events"):
+        try:
+            from tools.private_integrations import dispatch_private
+            return dispatch_private(name, args, telegram_id)
+        except ImportError:
+            return {"error": "Module tools/private_integrations tidak tersedia."}
     return {"error": f"Unknown tool: {name}"}
 
 
@@ -398,13 +451,16 @@ class handler(BaseHTTPRequestHandler):
             telegram_id = record.get("telegram_id")
             user_input = record.get("input")
             status = record.get("status", "PENDING")
+            autonomous = bool(record.get("is_autonomous")
+                              or record.get("autonomous"))
 
             if status != "PENDING":
                 return self._send_json({"ok": True, "skipped": status}, 200)
             if not (task_id and telegram_id and user_input):
                 return self._send_json({"ok": False, "error": "Missing fields"}, 400)
 
-            _run_pipeline(task_id, telegram_id, user_input)
+            _run_pipeline(task_id, telegram_id, user_input,
+                          autonomous=autonomous)
 
             return self._send_json({"ok": True, "task_id": task_id}, 200)
         except Exception as exc:

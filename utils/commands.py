@@ -67,6 +67,12 @@ def handle_command(chat_id: int, text: str, telegram_id: int) -> bool:
         "/cari": _cmd_cari,
         "/search": _cmd_cari,
         "/ringkas": _cmd_ringkas,
+        "/jadwal": _cmd_jadwal,
+        "/listjadwal": _cmd_list_jadwal,
+        "/hapusjadwal": _cmd_hapus_jadwal,
+        "/initautonomi": _cmd_init_autonomi,
+        "/login": _cmd_login,
+        "/logoutprov": _cmd_logout_provider,
     }
     handler = TABLE.get(cmd)
     if not handler:
@@ -314,3 +320,123 @@ def _cmd_ringkas(chat_id, tid, args):
     except Exception as exc:
         return telegram.send_message(chat_id, f"❌ Gagal merangkum: {exc}")
     telegram.send_message(chat_id, f"📄 {url}\n\n{summary[:3500]}")
+
+
+def _cmd_jadwal(chat_id, tid, args):
+    """/jadwal <menit> <prompt> — buat jadwal otonom."""
+    parts = args.split(maxsplit=1)
+    if len(parts) < 2 or not parts[0].isdigit():
+        return telegram.send_message(
+            chat_id,
+            "Format: /jadwal <menit> <prompt>\n"
+            "Contoh: /jadwal 1440 laporkan harga emas hari ini\n"
+            "Jeda hingga 2x/hari, minimum 15 menit untuk test.",
+        )
+    interval = max(15, int(parts[0]))
+    prompt = parts[1].strip()
+    from utils.scheduler import create_job
+    res = create_job(tid, interval, prompt)
+    if res.get("error"):
+        return telegram.send_message(chat_id,
+                                     f"❌ {res['error']}\n\n"
+                                     "Jalankan SQL autonomy_schema.sql di SQL "
+                                     "Editor Supabase lalu /initautonomi.")
+    job = res["job"]
+    telegram.send_message(
+        chat_id,
+        f"⏰ Jadwal aktif!\nID: `{job.get('id')}`\n"
+        f"Jeda: {job.get('interval_minutes')} menit\n"
+        f"Prompt: {prompt}\n"
+        f"Jalankan pertama: {job.get('next_run_at')[:16]}",
+    )
+
+
+def _cmd_list_jadwal(chat_id, tid, args):
+    from utils.scheduler import list_jobs
+    res = list_jobs(tid)
+    if res.get("error"):
+        return telegram.send_message(chat_id, f"❌ {res['error']}")
+    jobs = res.get("jobs", [])
+    if not jobs:
+        return telegram.send_message(chat_id,
+                                     "📭 Belum ada jadwal.\n"
+                                     "Buat dengan: /jadwal <menit> <prompt>")
+    lines = ["⏰ Jadwal aktif:\n"]
+    for j in jobs:
+        if j.get("cron_expr"):
+            when = j["cron_expr"]
+        else:
+            when = f"{j.get('interval_minutes')} mnt"
+        lines.append(f"• `{j['id']}` — {j['prompt'][:60]}\n"
+                     f"  ⏱ {when} | next {j['next_run_at'][:16]} "
+                     f"| {'✅' if j['enabled'] else '⬛'}\n"
+                     f"  hapus: /hapusjadwal {j['id']}")
+    telegram.send_message(chat_id, "\n".join(lines))
+
+
+def _cmd_hapus_jadwal(chat_id, tid, args):
+    if not args.isdigit():
+        return telegram.send_message(chat_id, "Format: /hapusjadwal <id>")
+    from utils.scheduler import delete_job
+    res = delete_job(tid, int(args))
+    telegram.send_message(chat_id, "🗑 Jadwal dihapus." if res.get("success")
+                          else f"❌ {res.get('error', 'Gagal')}")
+
+
+def _cmd_init_autonomi(chat_id, tid, args):
+    """Check autonomy tables are live; seed default L3 jobs; instruct."""
+    from utils.scheduler import list_jobs, seed_default_jobs
+    res = list_jobs(tid)
+    if res.get("error"):
+        return telegram.send_message(
+            chat_id,
+            f"❌ Tabel autonomy belum siap.\n{res['error'][:200]}\n\n"
+            "Buka Supabase → SQL Editor → tempel isi "
+            "`sql/autonomy_schema.sql` → Run.\n"
+            "Lalu jalankan /initautonomi lagi.",
+        )
+    seeded = seed_default_jobs(tid)
+    msg = "✅ Mode otonom siap: preferences, jadwal, private integrations aktif."
+    if seeded.get("created"):
+        msg += f"\nJadwal default dibuat: {', '.join(seeded['created'])}."
+    if seeded.get("skipped"):
+        msg += f"\n(sudah ada: {', '.join(seeded['skipped'])})"
+    if res.get("jobs"):
+        msg += f"\n{len(res['jobs'])} jadwal aktif. Lihat dengan /listjadwal."
+    telegram.send_message(chat_id, msg)
+
+
+def _cmd_login(chat_id, tid, args):
+    provider = args.strip().lower()
+    if provider not in ("gmail", "google_drive", "notion", "calendar"):
+        return telegram.send_message(
+            chat_id,
+            "Format: /login <provider>\n"
+            "Provider: gmail, google_drive, notion, calendar (Google)\n\n"
+            "Sebelum login, pastikan OAuth client (Google/Notion) sudah dibuat "
+            "dan kredensialnya disimpan di Vault Supabase sebagai:\n"
+            "oauth_google_client_id / oauth_google_client_secret\n"
+            "atau oauth_notion_client_id / oauth_notion_client_secret.",
+        )
+    from utils import oauth2
+    url = oauth2.authorize_url(provider, tid)
+    if url.startswith("ERROR"):
+        return telegram.send_message(
+            chat_id, f"❌ {url}\n\nPastikan secret OAuth ada di Vault "
+                     "(nonaktifkan wrappers untuk lihat instruksi).")
+    telegram.send_message(
+        chat_id,
+        f"🔐 Buka link untuk menghubungkan **{provider}**:\n{url}\n"
+        "Setelah izin, kamu kembali ke Telegram otomatis.",
+    )
+
+
+def _cmd_logout_provider(chat_id, tid, args):
+    provider = args.strip().lower()
+    if not provider:
+        return telegram.send_message(chat_id,
+                                     "Format: /logoutprov <provider>")
+    from utils import authz
+    ok = authz.disconnect_connection(tid, provider)
+    telegram.send_message(chat_id, "🗑 Terputus."
+                          if ok else f"❌ Tidak ada koneksi {provider}.")
