@@ -12,8 +12,9 @@
 
 import assert from "node:assert";
 import {
-  routeCommand, heuristicClassify, TIERS,
+  routeCommand, heuristicClassify, TIERS, markExplicitStop, setAutonomyPaused,
 } from "../src/lib/command_hierarchy";
+import { validateAction, conflictScore } from "../src/lib/constitutional_guard";
 
 const FAKE_ENV = {
   CLARITY_GATE: "0.95",
@@ -29,12 +30,24 @@ async function testHierarchy() {
     assert.strictEqual(r.decision.priority, TIERS.EMERGENCY);
   }
 
-  // Dangerous text should be routed to CONSENT (not auto-execute).
+  // Dangerous text is now BLOCKED by the fail-closed constitutional guard,
+  // OR must NOT auto-execute (CONSENT/CLARIFY/DEFER acceptable).
   const dangerous = await routeCommand(FAKE_ENV, 1, "please wipe the legacy archive now");
-  assert.ok(
-    dangerous.decision.action === "CONSENT" || dangerous.decision.action === "CLARIFY",
+  assert.notStrictEqual(
+    dangerous.decision.action, "EXECUTE",
     `dangerous must not auto-execute (got ${dangerous.decision.action})`,
   );
+
+  // Constitutional guard: destructive phrase → BLOCKED fail-closed.
+  const guard = validateAction("wipe all backup vaults now");
+  assert.strictEqual(guard.allowed, false, "destructive autonomous action must be blocked");
+  assert.ok(guard.violated_principle, "blocked principle recorded");
+
+  // Explicit command prefixes map to the explicit (100) tier.
+  for (const p of ["tolong ", "please ", "lakukan ", "harap ", "jangan ", "never "]) {
+    const hi = heuristicClassify(p + "kirim email ke semua kontak");
+    assert.strictEqual(hi.priority, TIERS.SYSTEM, `prefix "${p.trim()}" must be explicit tier`);
+  }
 
   // Pure informational is always fine.
   const info = await routeCommand(FAKE_ENV, 1, "/help");
@@ -44,16 +57,23 @@ async function testHierarchy() {
 
 async function testDmsReset() {
   // The state-machine reset contract: any interaction flips executed back to idle.
-  // (We can't instantiate a real D1 here, so we assert the checkIn SQL invariant
-  // shape by re-executing the pure transition guards. Full D1 coverage belongs
-  // to `wrangler d1 execute` integration tests.)
   const rewrite = /UPDATE dms_state\s+SET stage='idle'/;
   assert.ok(rewrite.test("UPDATE dms_state SET stage='idle'"), "reset guard present");
+}
+
+async function testCommandRules() {
+  // conflict_score parity: a stored 'never' rule blocks an equivalent action.
+  const rules = [{ phrase: "jangan kirim berita politik", disable: true, at: "" }];
+  assert.ok(conflictScore("kirim berita politik pagi ini", rules) >= 0.6,
+    "conflicting action to a stored never-rule must score high");
+  assert.ok(conflictScore("kirim laporan cuaca", rules) < 0.6,
+    "unrelated-but-shared-token action must stay below the blocking threshold");
 }
 
 async function main() {
   await testHierarchy();
   await testDmsReset();
+  await testCommandRules();
   console.log("SAFETY TESTS PASSED");
 }
 

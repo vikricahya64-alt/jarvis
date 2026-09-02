@@ -14,7 +14,8 @@
 //   * Owner telegram ID match (env.OWNER_TELEGRAM_ID).
 //=====================================================================
 
-import { Env, logObedience, logConsent } from "./db";
+import { Env, logObedience, logConsent, getDmsConfig, writeDmsConfig, DmsConfig } from "./db";
+import { validateAction, riskScore } from "./constitutional_guard";
 
 export const TIERS = {
   SYSTEM: 100, // override from cert/system
@@ -31,6 +32,7 @@ export interface ClassifiedIntent {
   confidence: number;
   label: string;
   riskLevel: "low" | "medium" | "high";
+  riskScore?: number; // 0..1, keyword parity with python _local_risk
 }
 
 export interface Decision {
@@ -48,6 +50,13 @@ const DANGEROUS_WORDS = [
 ];
 const UTILITY_WORDS = ["dms_status", "queue_status", "health", "status", "audit_log"];
 const INFO_WORDS = ["/help", "help", "/obedience_report", "introduce"];
+// Command-prefixed text is inherently EXPLICIT (bypasses LLM clarity check).
+// Mirrors python COMMAND_PREFIXES: "/", tolong, please, lakukan, harap,
+// stop, kill, override, jangan, never.
+const COMMAND_PREFIXES = [
+  "/", "tolong ", "please ", "lakukan ", "harap ",
+  "stop ", "kill ", "override ", "jangan ", "never ",
+];
 
 function hash(s: string): string {
   let h = 2166136261;
@@ -60,23 +69,32 @@ function hash(s: string): string {
 
 /** Fast deterministic fallback when Groq UNavailable (offline/clarity lower). */
 export function heuristicClassify(text: string): ClassifiedIntent {
-  const lower = text.toLowerCase();
+  const raw = text || "";
+  const lower = raw.toLowerCase();
+  const score = riskScore(raw);
   if (EMERGENCY_WORDS.some((w) => lower.includes(w))) {
-    return { priority: TIERS.EMERGENCY, confidence: 1.0, label: "emergency_control", riskLevel: "high" };
+    return { priority: TIERS.EMERGENCY, confidence: 1.0, label: "emergency_control", riskLevel: "high", riskScore: 0.9 };
   }
   if (DANGEROUS_WORDS.some((w) => lower.includes(w))) {
-    return { priority: TIERS.DANGEROUS, confidence: 0.9, label: "dangerous_action", riskLevel: "high" };
+    return { priority: TIERS.DANGEROUS, confidence: 0.9, label: "dangerous_action", riskLevel: "high", riskScore: score };
   }
   if (/^\/(override|resume|stop|kill)/.test(lower)) {
-    return { priority: TIERS.EMERGENCY, confidence: 1.0, label: "override", riskLevel: "high" };
+    return { priority: TIERS.EMERGENCY, confidence: 1.0, label: "override", riskLevel: "high", riskScore: 0.9 };
   }
+  // Known slash/utility diagnostic commands keep their low tier.
   if (UTILITY_WORDS.some((w) => lower.includes(w))) {
-    return { priority: TIERS.UTILITY, confidence: 0.8, label: "utility_query", riskLevel: "low" };
+    return { priority: TIERS.UTILITY, confidence: 0.9, label: "utility_query", riskLevel: "low", riskScore: 0.1 };
   }
   if (INFO_WORDS.some((w) => lower.includes(w))) {
-    return { priority: TIERS.INFO, confidence: 0.9, label: "info", riskLevel: "low" };
+    return { priority: TIERS.INFO, confidence: 0.95, label: "info", riskLevel: "low", riskScore: 0.1 };
   }
-  return { priority: TIERS.INFO, confidence: 0.5, label: "general", riskLevel: "low" };
+  // Command-prefixed text is inherently explicit (clarity=1, no LLM needed).
+  if (COMMAND_PREFIXES.some((p) => p === "/" ? lower.startsWith("/") : lower.startsWith(p))) {
+    const dangerScore = score;
+    const risk = dangerScore >= 0.6 ? "high" : dangerScore >= 0.3 ? "medium" : "low";
+    return { priority: TIERS.SYSTEM, confidence: 1.0, label: "explicit_command", riskLevel: risk, riskScore: dangerScore };
+  }
+  return { priority: TIERS.INFO, confidence: 0.5, label: "general", riskLevel: "low", riskScore: score };
 }
 
 /**
@@ -129,6 +147,7 @@ export async function groqClassify(
       confidence: Math.min(1, Math.max(0, Number(parsed.confidence) || 0)),
       label: parsed.label ?? "general",
       riskLevel: (parsed.risk as "low" | "medium" | "high") ?? "low",
+      riskScore: riskScore(text),
     };
   } catch {
     return null;
@@ -153,10 +172,16 @@ export async function routeCommand(
   env: Env,
   owner: number,
   rawText: string,
+  opts: { origin?: "user" | "autonomous" | "predictive" } = {},
 ): Promise<HierarchyResult> {
   const gate = Number(env.CLARITY_GATE || "0.95");
   const consentThreshold = Number(env.RISK_CONSENT_THRESHOLD || "0.3");
   const cmdHash = hash(rawText);
+  const origin = opts.origin ?? "user";
+
+  // Load persistent state (never/stop rules, autonomy pause, constitution).
+  const cfg = await getDmsConfig(env, owner);
+  const rules = cfg.command_rules ?? [];
 
   // Emergency override words are always honoured (still logged).
   const lower = rawText.toLowerCase();
@@ -178,7 +203,7 @@ export async function routeCommand(
     });
     return {
       decision,
-      intent: { priority: TIERS.EMERGENCY, confidence: 1.0, label: "emergency_control", riskLevel: "high" },
+      intent: { priority: TIERS.EMERGENCY, confidence: 1.0, label: "emergency_control", riskLevel: "high", riskScore: 0.9 },
       cmdHash,
     };
   }
@@ -187,6 +212,47 @@ export async function routeCommand(
   const groq = await groqClassify(env, rawText);
   const intent = groq ?? heuristicClassify(rawText);
   const clarityOk = intent.confidence >= gate;
+
+  // AUTONOMY PAUSE: if the owner paused autonomy, autonomous/predictive actions
+  // never run. Explicit user commands still honoured (user intent > pause).
+  if (cfg.autonomy_paused && origin !== "user") {
+    const decision: Decision = {
+      action: "DEFER",
+      compliance: "BLOCKED",
+      priority: intent.priority,
+      reason: "Autonomy is paused (owner /pause).",
+      correlationId: cmdHash,
+    };
+    await logObedience(env, owner, "AUTONOMOUS_ACTION", intent.priority, "DEFER", "BLOCKED", {
+      commandHash: cmdHash,
+      evidence: { paused: true, label: intent.label },
+    });
+    return { decision, intent, cmdHash };
+  }
+
+  // CONSTITUTIONAL GUARD (fail-closed) for actions that could act — applies to
+  // user explicit high-risk and autonomous/predictive alike.
+  const guard = validateAction(rawText, {
+    origin,
+    risk: intent.riskScore,
+    commandRules: rules,
+    constitution: cfg.constitution,
+  });
+  if (!guard.allowed) {
+    const decision: Decision = {
+      action: "BLOCK",
+      compliance: "BLOCKED",
+      priority: intent.priority,
+      reason: `Constitutional guard: ${guard.violated_principle}`,
+      correlationId: cmdHash,
+    };
+    await logObedience(env, owner, "USER_COMMAND", intent.priority, "BLOCK", "BLOCKED", {
+      commandHash: cmdHash,
+      blockingSource: guard.violated_principle ?? "constitution",
+      evidence: { reasoning: guard.reasoning, origin },
+    });
+    return { decision, intent, cmdHash };
+  }
 
   // Low clarity + meaningful priority => ask for clarification before acting.
   if (!clarityOk && intent.priority >= TIERS.DANGEROUS) {
@@ -253,6 +319,30 @@ export async function routeCommand(
     evidence: { confidence: intent.confidence, label: intent.label, risk: intent.riskLevel },
   });
   return { decision, intent, cmdHash };
+}
+
+/**
+ * Persist an explicit 'never/stop/jangan' instruction as a long-lived command
+ * rule so future autonomous actions respect it (python `_store_intent_rule`).
+ */
+export async function markExplicitStop(env: Env, owner: number, text: string, disable = true): Promise<void> {
+  const cfg = await getDmsConfig(env, owner);
+  const rules = cfg.command_rules ?? [];
+  rules.push({ phrase: (text || "").slice(0, 300), disable, at: new Date().toISOString() });
+  cfg.command_rules = rules.slice(-200);
+  await writeDmsConfig(env, owner, cfg);
+}
+
+/** Set/reset the global autonomy pause flag (python `autonomy_paused`). */
+export async function setAutonomyPaused(env: Env, owner: number, paused: boolean): Promise<void> {
+  const cfg = await getDmsConfig(env, owner);
+  cfg.autonomy_paused = paused;
+  await writeDmsConfig(env, owner, cfg);
+}
+
+/** Whether autonomy is currently paused for this owner. */
+export async function isAutonomyPaused(env: Env, owner: number): Promise<boolean> {
+  return (await getDmsConfig(env, owner)).autonomy_paused ?? false;
 }
 
 /** Resolve an inline-button consent/callback into its command chain. */

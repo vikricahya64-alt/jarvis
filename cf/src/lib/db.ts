@@ -143,3 +143,41 @@ export async function queueStatus(env: Env): Promise<Record<string, number>> {
   };
   return { high: await mk("high"), standard: await mk("standard"), low: await mk("low") };
 }
+
+// ---------------------------------------------------------------------
+// dms_state.config_json helpers (command_rules, autonomy_paused, etc.)
+// ---------------------------------------------------------------------
+export interface DmsConfig {
+  command_rules?: Array<{
+    phrase: string;
+    disable: boolean;
+    at: string;
+  }>;
+  autonomy_paused?: boolean;
+  constitution?: Record<string, unknown>;
+  created_by_isr?: boolean;
+}
+
+export async function getDmsConfig(env: Env, owner: number): Promise<DmsConfig> {
+  try {
+    const row = await env.DB.prepare(
+      "SELECT config_json FROM dms_state WHERE owner_id = ?",
+    ).bind(owner).first<{ config_json: string }>();
+    if (!row?.config_json) return {};
+    return JSON.parse(row.config_json) as DmsConfig;
+  } catch {
+    return {};
+  }
+}
+
+export async function writeDmsConfig(
+  env: Env,
+  owner: number,
+  cfg: DmsConfig,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO dms_state (owner_id, config_json, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(owner_id) DO UPDATE SET config_json=excluded.config_json, updated_at=excluded.updated_at`,
+  ).bind(owner, JSON.stringify(cfg), Date.now()).run();
+}

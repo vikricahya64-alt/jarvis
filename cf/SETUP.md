@@ -73,6 +73,26 @@ jalan pendek lalu keluar. Itu mengapa state machine (D1) menjamin kelangsungan.
   menjadwalkan cron, DMS berhenti. Ini adalah saklar darurat manual.
 - **TL;DR**: takkan "executed" kecuali benar-benar 24h+48h tanpa interaksi.
 
+## 5b. Kemampuan Level 11 (migrasi dari python) yang kini ada di CF
+
+Stack ini mewarisi SEMUA kemampuan hierarki perintah L11 python sebelumnya:
+
+| Kemampuan (L11 python → CF) | Lokasi CF | Cara pakai |
+|------------------------------|-----------|-----------|
+| Priority tiers 100/90/70/50/30 | `command_hierarchy.ts` TIERS | otomatis per perintah |
+| Intent Groq + fallback deterministik | `groqClassify`/`heuristicClassify` | otomatis |
+| Risk score numerik (0.9/0.5/0.1) | `constitutional_guard.ts` `riskScore()` | otomatis |
+| Prefix eksplisit (`/`, tolong, please, lakukan, harap, stop, kill, override, jangan, never) | `COMMAND_PREFIXES` | otomatis → tier 100 |
+| **Constitutional guard fail-closed** (no deceive/destroy/exfiltrate/money) | `constitutional_guard.ts` `validateAction()` | otomatis; blokir aksi berbahaya |
+| **Command rules 'never/stop'** + conflict_score | `markExplicitStop()` + `conflictScore()` | `/never <frasa>` atau `/mark_stop <frasa>` |
+| **Autonomy pause global** | `setAutonomyPaused()`/`isAutonomyPaused()` | `/pause` dan `/resume` |
+| **Consent inline Approve/Deny/Pause + timeout default-DENY** | webhook callback `consent:` | otomatis untuk aksi berisiko |
+| **Clarification options flow** | webhook callback `clarify:` | otomatis saat ambiguity |
+| Obedience audit append-only | `obedience_audit` (D1) | tiap perintah tercatat |
+
+Perintah Telegram baru: `/never <frasa>`, `/mark_stop <frasa>`, `/pause`,
+`/resume`, `/obedience_report`, `/queue_status`, `/dms_status`.
+
 ## 6. File penting (cf/)
 
 ```
@@ -80,8 +100,9 @@ wrangler.toml            bindings + vars + cron (3)
 migrations/0001_init.sql schema D1
 src/index.ts             router + cron + queue
 src/workers/task_processor.ts      queue consumer
-src/workers/telegram_webhook.ts    webhook + inline consent
-src/lib/command_hierarchy.ts       prioritas + clarity + consent + audit
+src/workers/telegram_webhook.ts    webhook + inline consent/clarify
+src/lib/command_hierarchy.ts       prioritas + clarity + consent + audit + pause
+src/lib/constitutional_guard.ts    fail-closed constitution (L11 python port)
 src/lib/dead_mans_switch.ts        state machine D1 (stage transitions)
 src/lib/zero_trust.ts              mTLS/context
 src/lib/db.ts / telegram.ts        helper
