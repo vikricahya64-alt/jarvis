@@ -89,6 +89,58 @@ sudo tailscale up                                      # atau tanpa advertise
 tailscale status   # catat IP 100.x untuk ponsel
 ```
 
+### 2.5 Bootstrap otomatis (disarankan)
+
+Daripada manual, jalankan sekali pada instance **Ubuntu 22.04/24.04** baru
+(sebagai sudo) untuk mengotomatiskan 2.2–2.4 sekaligus: Docker + Ollama +
+model, Nginx TLS + Let's Encrypt, Tailscale, dan mencetak lembar env Vercel:
+
+```bash
+chmod +x scripts/bootstrap_oracle_edge.sh        # sudah +x di repo
+EDGE_DOMAIN=edge.example.com \                    # DNS -> IP instance
+EDGE_EMAIL=you@example.com \
+EDGE_AUTH="$(openssl rand -hex 32)" \
+sudo -E ./scripts/bootstrap_oracle_edge.sh
+```
+
+Yang dilakukan skrip:
+1. Docker + compose + certbot + Nginx + UFW (buka hanya **22/tcp, 443/tcp**).
+2. Jalankan **Ollama** terikat `127.0.0.1:11434` (tidak ekspos publik) & pull
+   `qwen2.5:7b-instruct`.
+3. Susun **Nginx** dengan TLS Let's Encrypt; `/v1/chat/completions` hanya
+   boleh diakses dengan header `Authorization: Bearer ${EDGE_AUTH}`; `/health`
+   publik.
+4. **Tailscale** up (paste auth key bila diminta).
+5. Simpan kredensial ke `/root/.edge-credentials` (0600) dan **cetak**:
+   - `JARVIS_EDGE_URL`    → `https://<domain>`
+   - `JARVIS_EDGE_MODEL`  → `qwen2.5:7b-instruct`
+   - `JARVIS_EDGE_AUTH`   → token rahasia
+   - contoh `curl` validasi.
+
+Uji lokal dulu:
+```bash
+curl https://<domain>/health
+curl -s https://<domain>/v1/chat/completions \
+  -H "Authorization: Bearer <EDGE_AUTH>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen2.5:7b-instruct","messages":[{"role":"user","content":"halo"}]}'
+```
+
+Setelah `curl` sukses, set ketiganya di Vercel Production & redeploy:
+```bash
+vercel env add JARVIS_EDGE_URL    production   # https://<domain>
+vercel env add JARVIS_EDGE_MODEL  production   # qwen2.5:7b-instruct
+vercel env add JARVIS_EDGE_AUTH   production   # token rahasia
+vercel deploy --prod --yes
+```
+
+Lalu pastikan ladder aktif via health:
+```bash
+curl -s -X POST https://jarvis-sigma-navy.vercel.app/api/simulator_proxy \
+  -H 'Content-Type: application/json' -d '{"mode":"private_edge","__health":true}'
+# harap:  "oracle_edge": "up"   (bukan "down")
+```
+
 ---
 
 ## 3. Sovereign Terminal (Realme C25s) — sudah di kode
