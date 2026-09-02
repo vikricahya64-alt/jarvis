@@ -28,20 +28,37 @@ def _fmt(items, show: str):
 
 
 def add_todo(telegram_id: int, text: str) -> dict:
-    """Insert a new pending todo for a user."""
+    """Insert a new pending todo for a user (skips exact duplicates)."""
     text = (text or "").strip()
     if not text:
         return {"success": False, "error": "Isi todo kosong."}
     try:
         with httpx.Client(timeout=_TIMEOUT) as client:
+            # Dedupe: skip if an identical pending todo already exists.
+            norm = " ".join(text.casefold().split())
+            r = client.get(
+                _todos_url(),
+                params={"select": "id,text,status",
+                        "telegram_id": f"eq.{telegram_id}",
+                        "status": "eq.pending"},
+                headers=_auth_headers(),
+            )
+            if r.status_code == 404:
+                return {"success": False,
+                        "error": "Tabel todos belum dibuat (jalankan sql/todos_schema.sql)."}
+            r.raise_for_status()
+            for row in r.json():
+                existing = " ".join((row.get("text") or "").casefold().split())
+                if existing == norm:
+                    return {"success": True,
+                            "id": row["id"], "text": row["text"],
+                            "note": "Sudah ada di daftar (tidak dibuat duplikat)."}
+
             r = client.post(
                 _todos_url(),
                 json={"telegram_id": telegram_id, "text": text},
                 headers={**_auth_headers(), "Prefer": "return=representation"},
             )
-            if r.status_code == 404:
-                return {"success": False,
-                        "error": "Tabel todos belum dibuat (jalankan sql/todos_schema.sql)."}
             r.raise_for_status()
             row = r.json()[0]
         return {"success": True, "id": row["id"], "text": text}
