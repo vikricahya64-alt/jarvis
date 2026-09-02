@@ -33,6 +33,9 @@ export interface ClassifiedIntent {
   label: string;
   riskLevel: "low" | "medium" | "high";
   riskScore?: number; // 0..1, keyword parity with python _local_risk
+  isExplicit?: boolean; // python detect_intent "is_explicit"
+  source?: string; // "prefix" | "groq" | "fallback_ambiguous" | "heuristic"
+  intentSummary?: string; // python detect_intent "intent_summary"
 }
 
 export interface Decision {
@@ -73,28 +76,64 @@ export function heuristicClassify(text: string): ClassifiedIntent {
   const lower = raw.toLowerCase();
   const score = riskScore(raw);
   if (EMERGENCY_WORDS.some((w) => lower.includes(w))) {
-    return { priority: TIERS.EMERGENCY, confidence: 1.0, label: "emergency_control", riskLevel: "high", riskScore: 0.9 };
+    return { priority: TIERS.EMERGENCY, confidence: 1.0, label: "emergency_control", riskLevel: "high", riskScore: 0.9, isExplicit: true, source: "prefix" };
   }
   if (DANGEROUS_WORDS.some((w) => lower.includes(w))) {
-    return { priority: TIERS.DANGEROUS, confidence: 0.9, label: "dangerous_action", riskLevel: "high", riskScore: score };
+    return { priority: TIERS.DANGEROUS, confidence: 0.9, label: "dangerous_action", riskLevel: "high", riskScore: score, isExplicit: false, source: "heuristic" };
   }
   if (/^\/(override|resume|stop|kill)/.test(lower)) {
-    return { priority: TIERS.EMERGENCY, confidence: 1.0, label: "override", riskLevel: "high", riskScore: 0.9 };
+    return { priority: TIERS.EMERGENCY, confidence: 1.0, label: "override", riskLevel: "high", riskScore: 0.9, isExplicit: true, source: "prefix" };
   }
   // Known slash/utility diagnostic commands keep their low tier.
   if (UTILITY_WORDS.some((w) => lower.includes(w))) {
-    return { priority: TIERS.UTILITY, confidence: 0.9, label: "utility_query", riskLevel: "low", riskScore: 0.1 };
+    return { priority: TIERS.UTILITY, confidence: 0.9, label: "utility_query", riskLevel: "low", riskScore: 0.1, isExplicit: true, source: "prefix" };
   }
   if (INFO_WORDS.some((w) => lower.includes(w))) {
-    return { priority: TIERS.INFO, confidence: 0.95, label: "info", riskLevel: "low", riskScore: 0.1 };
+    return { priority: TIERS.INFO, confidence: 0.95, label: "info", riskLevel: "low", riskScore: 0.1, isExplicit: true, source: "prefix" };
   }
   // Command-prefixed text is inherently explicit (clarity=1, no LLM needed).
   if (COMMAND_PREFIXES.some((p) => p === "/" ? lower.startsWith("/") : lower.startsWith(p))) {
     const dangerScore = score;
     const risk = dangerScore >= 0.6 ? "high" : dangerScore >= 0.3 ? "medium" : "low";
-    return { priority: TIERS.SYSTEM, confidence: 1.0, label: "explicit_command", riskLevel: risk, riskScore: dangerScore };
+    return { priority: TIERS.SYSTEM, confidence: 1.0, label: "explicit_command", riskLevel: risk, riskScore: dangerScore, isExplicit: true, source: "prefix" };
   }
-  return { priority: TIERS.INFO, confidence: 0.5, label: "general", riskLevel: "low", riskScore: score };
+  return { priority: TIERS.INFO, confidence: 0.5, label: "general", riskLevel: "low", riskScore: score, isExplicit: false, source: "fallback_ambiguous" };
+}
+
+/**
+ * Origin-driven priority evaluation (python `evaluate_priority` parity).
+ *   * user/command + explicit intent   -> EXPLICIT_USER_CMD (100), EXECUTE
+ *   * user/command free-text, clarity>=gate -> EXPLICIT_USER_CMD (100), EXECUTE
+ *   * user/command free-text, clarity<gate  -> EXPLICIT_USER_CMD (100), CLARIFY
+ *   * autonomous                          -> PRE_APPROVED_AUTONOMY (70), EXECUTE
+ *                                               (consent finalized downstream)
+ *   * predictive/proactive/suggestion     -> PREDICTIVE_SUGGESTION (50), DEFER
+ *                                               (never auto-runs)
+ *   * unknown                             -> CONSTITUTIONAL_GUARD (90), DEFER
+ */
+export function evaluatePriority(
+  origin: string,
+  intent: ClassifiedIntent,
+  clarityGate = 0.95,
+): { priority: number; priorityName: string; decision: string; source: string } {
+  const o = (origin || "").toLowerCase();
+  if (o === "user" || o === "command") {
+    if (intent.isExplicit) {
+      return { priority: TIERS.SYSTEM, priorityName: "EXPLICIT_USER_CMD", decision: "EXECUTE", source: intent.source ?? "prefix" };
+    }
+    // Free text, not explicit.
+    if (intent.confidence < clarityGate) {
+      return { priority: TIERS.SYSTEM, priorityName: "EXPLICIT_USER_CMD", decision: "CLARIFY", source: "clarity_gate" };
+    }
+    return { priority: TIERS.SYSTEM, priorityName: "EXPLICIT_USER_CMD", decision: "EXECUTE", source: intent.source ?? "groq" };
+  }
+  if (o === "autonomous") {
+    return { priority: TIERS.DANGEROUS, priorityName: "PRE_APPROVED_AUTONOMY", decision: "EXECUTE", source: "autonomy" };
+  }
+  if (o === "predictive" || o === "proactive" || o === "suggestion") {
+    return { priority: TIERS.UTILITY, priorityName: "PREDICTIVE_SUGGESTION", decision: "DEFER", source: "predictive" };
+  }
+  return { priority: TIERS.EMERGENCY, priorityName: "CONSTITUTIONAL_GUARD", decision: "DEFER", source: "unknown" };
 }
 
 /**
@@ -148,6 +187,9 @@ export async function groqClassify(
       label: parsed.label ?? "general",
       riskLevel: (parsed.risk as "low" | "medium" | "high") ?? "low",
       riskScore: riskScore(text),
+      isExplicit: Number(parsed.confidence || 0) >= 0.95,
+      source: "groq",
+      intentSummary: text.slice(0, 200),
     };
   } catch {
     return null;
@@ -212,6 +254,24 @@ export async function routeCommand(
   const groq = await groqClassify(env, rawText);
   const intent = groq ?? heuristicClassify(rawText);
   const clarityOk = intent.confidence >= gate;
+
+  // ORIGIN PRIORITY (python evaluate_priority parity). Predictive/proactive
+  // suggestions NEVER auto-run: they DEFER at tier 50, no consent can elevate.
+  const pri = evaluatePriority(origin, intent, gate);
+  if (pri.decision === "DEFER" && origin === "predictive") {
+    const decision: Decision = {
+      action: "DEFER",
+      compliance: "BLOCKED",
+      priority: pri.priority,
+      reason: "Predictive suggestion — never auto-runs.",
+      correlationId: cmdHash,
+    };
+    await logObedience(env, owner, "AUTONOMOUS_ACTION", pri.priority, "DEFER", "PENDING", {
+      commandHash: cmdHash,
+      evidence: { source: pri.source, label: intent.label },
+    });
+    return { decision, intent, cmdHash };
+  }
 
   // AUTONOMY PAUSE: if the owner paused autonomy, autonomous/predictive actions
   // never run. Explicit user commands still honoured (user intent > pause).

@@ -55,6 +55,36 @@ async function testHierarchy() {
   assert.strictEqual(info.intent.priority, TIERS.INFO);
 }
 
+async function testNoConstitutionFailClosed() {
+  // Level 9 parity: WITHOUT a ratified constitution, only harmless whitelisted
+  // read-only actions pass; everything else is BLOCKED with `no_constitution`.
+  const blocked = validateAction("organize my whole drive into a new folder layout", { constitution: {} });
+  assert.strictEqual(blocked.allowed, false, "non-whitelisted action with no constitution must block");
+  assert.strictEqual(blocked.violated_principle, "no_constitution");
+
+  const harmless = validateAction("show my status and today's reminders", { constitution: {} });
+  assert.strictEqual(harmless.allowed, true, "harmless whitelisted read-only action may pass");
+}
+
+async function testOriginPriority() {
+  // python evaluate_priority parity:
+  // predictive -> PREDICTIVE_SUGGESTION (50), DEFER — never auto-runs even when consent is possible.
+  const pred = await routeCommand(FAKE_ENV, 1, "who should I DM about the meeting?", { origin: "predictive" });
+  assert.strictEqual(
+    pred.decision.action, "DEFER",
+    `predictive must never auto-run (got ${pred.decision.action})`,
+  );
+  assert.strictEqual(
+    pred.decision.priority, TIERS.UTILITY,
+    `predictive must sit at PREDICTIVE_SUGGESTION (50)`,
+  );
+
+  // explicit user command-prefix intent flags isExplicit + source=prefix.
+  const pref = heuristicClassify("tolong kirim laporan cuaca harian");
+  assert.strictEqual(pref.isExplicit, true, "command prefix must mark isExplicit");
+  assert.strictEqual(pref.source, "prefix");
+}
+
 async function testDmsReset() {
   // The state-machine reset contract: any interaction flips executed back to idle.
   const rewrite = /UPDATE dms_state\s+SET stage='idle'/;
@@ -74,6 +104,8 @@ async function main() {
   await testHierarchy();
   await testDmsReset();
   await testCommandRules();
+  await testNoConstitutionFailClosed();
+  await testOriginPriority();
   console.log("SAFETY TESTS PASSED");
 }
 

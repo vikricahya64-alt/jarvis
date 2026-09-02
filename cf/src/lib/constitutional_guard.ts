@@ -41,6 +41,25 @@ export function riskScore(text: string): number {
   return 0.1;
 }
 
+/**
+ * Fail-closed "no constitution" whitelist (python `_ALLOWED_BY_DEFAULT`).
+ * When the owner has not yet ratified a constitution, only demonstrably
+ * HARMLESS, read-only, reversible actions bypass the guard. Everything else
+ * is BLOCKED with `no_constitution`. Match is substring on the action text.
+ */
+const ALLOWED_BY_DEFAULT: string[] = [
+  "status", "/status", "/health", "help", "/help", "/profile", "time",
+  "jam", "cuaca", "weather", "/note", "/todo", "/reminder", "set alarm",
+  "read my messages", "baca pesan", "show", "tampilkan", "list", "daftar",
+  "/list", "/vault list", "what is", "apa itu", "summarize", "ringkas",
+  "translate", "terjemahkan", "remind", "rekap", "search", "cari",
+];
+
+function isWhitelisted(actionDesc: string): boolean {
+  const low = (actionDesc || "").toLowerCase();
+  return ALLOWED_BY_DEFAULT.some((k) => low.includes(k));
+}
+
 /** Conflict detection vs stored explicit 'never/stop' command rules. */
 export function conflictScore(actionDesc: string, rules: Array<{ phrase: string; disable: boolean }> = []): number {
   const low = (actionDesc || "").toLowerCase();
@@ -123,6 +142,23 @@ export function validateAction(actionDesc: string, options: {
       allowed: false,
       violated_principle: "autonomy_risk",
       reasoning: `Autonomous risk ${risk.toFixed(2)} di atas batas konstitusi.`,
+      confidence: 1.0,
+    };
+  }
+
+  // 5) FAIL-CLOSED NO-CONSTITUTION: without a ratified constitution, only
+  //    harmless whitelisted read-only actions pass; everything else blocks.
+  //    This is the python `validate_action` `no_constitution` behavior — the
+  //    single biggest safety upgrade over the naive keyword-only v1 port.
+  const hasConstitution =
+    !!options.constitution &&
+    typeof options.constitution === "object" &&
+    Object.keys(options.constitution).length > 0;
+  if (!hasConstitution && !isWhitelisted(actionDesc)) {
+    return {
+      allowed: false,
+      violated_principle: "no_constitution",
+      reasoning: "Konstitusi belum diratifikasi; aksi non-whitelist diblokir (fail-closed).",
       confidence: 1.0,
     };
   }
