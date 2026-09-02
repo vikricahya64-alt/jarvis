@@ -46,10 +46,21 @@ def transcribe_voice(file_id: str) -> str:
     path = _get_file_path(token, file_id)
     data = _download(token, path)
 
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else "ogg"
+    if ext not in {"flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg",
+                   "opus", "wav", "webm"}:
+        ext = "ogg"
+    mime = {
+        "flac": "audio/flac", "mp3": "audio/mpeg", "mp4": "audio/mp4",
+        "mpeg": "audio/mpeg", "mpga": "audio/mpeg", "m4a": "audio/mp4",
+        "ogg": "audio/ogg", "opus": "audio/ogg", "wav": "audio/wav",
+        "webm": "audio/webm",
+    }.get(ext, "audio/ogg")
+
     client = Groq(api_key=api_key, timeout=30)
     result = client.audio.transcriptions.create(
         model="whisper-large-v3-turbo",
-        file=io.BytesIO(data),
+        file=(f"voice.{ext}", io.BytesIO(data), mime),
         language="id",
         response_format="text",
     )
