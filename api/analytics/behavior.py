@@ -36,7 +36,22 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
-            tid = int(self.headers.get("X-Telegram-Id") or self.path.split("telegram_id=")[-1].split("&")[0] or 0)
+            tid = 0
+            if "telegram_id=" in self.path:
+                try:
+                    tid = int(self.path.split("telegram_id=")[-1].split("&")[0])
+                except ValueError:
+                    tid = 0
+            hs = self.headers.get("X-Telegram-Id")
+            if not tid and hs:
+                try:
+                    tid = int(hs)
+                except ValueError:
+                    tid = 0
+            if not tid:
+                return self._send_json(
+                    {"ok": False, "error": "telegram_id required"},
+                    400)
             force = "force=1" in self.path or "force=true" in self.path
             profile = behavior_analyzer.get_or_update_profile(tid, force=force)
             self._send_json({"ok": True, "telegram_id": tid,
