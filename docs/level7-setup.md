@@ -141,6 +141,35 @@ curl -s -X POST https://jarvis-sigma-navy.vercel.app/api/simulator_proxy \
 # harap:  "oracle_edge": "up"   (bukan "down")
 ```
 
+### 2.6 Alternatif: edge Qwen di Colab T4 (tanpa kartu, tanpa Oracle)
+
+Jika Oracle tidak tersedia (butuh verifikasi kartu), gunakan **Colab free T4 GPU**
+sebagai edge privat — konsisten dengan filosofi L7 "offload model ke GPU cloud".
+Buka `scripts/colab_qwen_edge.ipynb` di Colab:
+
+1. **Runtime → Change runtime type → T4 GPU**.
+2. Jalankan sel 1→2: install Ollama & `ollama pull mariojnick/qwen2.5:7b-instruct-q4_k_m`.
+3. Sel 3: paste **ngrok authtoken free** (tanpa kartu) → mencetak `JARVIS_EDGE_URL`
+   (mis. `https://abcd-123.ngrok-free.app`).
+4. Sel 4: smoke test `/health` + `/v1/chat/completions`.
+5. Set di Vercel Production, lalu redeploy:
+   ```bash
+   vercel env add JARVIS_EDGE_URL   production   # https://xxxx.ngrok-free.app
+   vercel env add JARVIS_EDGE_MODEL production   # mariojnick/qwen2.5:7b-instruct-q4_k_m
+   vercel env add JARVIS_EDGE_AUTH  production   # token ngrok/atau apa pun (lihat catatan)
+   vercel deploy --prod --yes
+   ```
+
+**⚠️ Catatan keamanan jalur Colab/ngrok:**
+- Ollama **tidak** memvalidasi `Authorization`; `JARVIS_EDGE_AUTH` dikirim tapi
+  diabaikan di sisi Colab. Artinya URL ngrok = publik & tanpa proteksi selama
+  runtime Colab aktif.
+- Jaga: jangan kirim data sensitif via edge ini, dan **putus tunnel** (stop
+  runtime / cell keep-alive) begitu selesai. Untuk produksi privat sejati
+  tetap arahkan ke Oracle (bagian 2.5) yang berlaku proxy auth.
+- Colab berhenti setelah beberapa jam idle → `JARVIS_EDGE_URL` mati; health akan
+  kembali `"oracle_edge": "down"`, dan system otomatis pakai **Groq fallback**.
+
 ---
 
 ## 3. Sovereign Terminal (Realme C25s) — sudah di kode
