@@ -113,6 +113,10 @@ def main():
                     help="paths to client delta.json files")
     ap.add_argument("--holdout-score", type=float, default=None,
                     help="optional external validation score")
+    ap.add_argument("--telegram-id", type=int, default=0,
+                    help="owner telegram_id for round provenance (default 0)")
+    ap.add_argument("--model-version", default="",
+                    help="global model tag recorded on the round")
     args = ap.parse_args()
 
     valid = []
@@ -138,15 +142,23 @@ def main():
 
     # provenance -> Supabase (optional; utilities import guarded at runtime)
     try:
-        from utils.supabase_client import start_federated_round, finalize_federated_round
-        rid = start_federated_round(
-            round_num=args.round,
-            participants=[v["node"] for v in valid],
-            device_id=os.getenv("JARVIS_DEVICE_ID", "aggregator"),
+        from utils.supabase_client import (
+            start_federated_round, record_federated_parity,
+            finalize_federated_round,
         )
+        rid = start_federated_round(
+            telegram_id=args.telegram_id,
+            model_version=args.model_version,
+            round_id=args.round,
+        )
+        # each valid client contributes its encrypted gradient count
+        for vnode in valid:
+            record_federated_parity(args.telegram_id, args.round,
+                                    vnode["node"], vnode["bytes"] or 0)
         finalize_federated_round(
-            rid or args.round, gradient_count=len(valid),
-            validation_score=args.holdout_score or 0.0,
+            args.telegram_id, args.round,
+            validation_score=args.holdout_score or None,
+            status="validated",
         )
         result["supabase_round_id"] = rid
     except Exception as exc:
