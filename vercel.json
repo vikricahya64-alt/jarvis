@@ -33,10 +33,10 @@
     "api/health.py": {
       "maxDuration": 60
     },
-    "api/swarm-coordinator.py": {
+    "api/swarm_coordinator.py": {
       "maxDuration": 60
     },
-    "api/webhook-multimodal.py": {
+    "api/webhook_multimodal.py": {
       "maxDuration": 60
     }
   }

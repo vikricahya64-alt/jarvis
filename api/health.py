@@ -121,46 +121,46 @@ def _collect(full: bool = False, repair: bool = False) -> dict:
         else:
             checks["tavily"] = "skipped"
 
-    # --- Task statistics ---
-    tasks = {}
-    # --- Swarm / E2B observability ---
-    swarm = {}
-    e2b = {}
-    if check_supabase:
-        headers = {
-            "apikey": supabase_key,
-            "Authorization": f"Bearer {supabase_key}",
-        }
-        cutoff = (
-            datetime.datetime.utcnow() - datetime.timedelta(
-                minutes=STUCK_MINUTES)).isoformat() + "Z"
-        day_ago = (
-            datetime.datetime.utcnow() - datetime.timedelta(hours=24)
-        ).isoformat() + "Z"
-        tasks["pending"] = _count(client, url, headers, {"status": "eq.PENDING"})
-        tasks["processing"] = _count(client, url, headers, {"status": "eq.PROCESSING"})
-        tasks["stuck_processing"] = _count(client, url, headers, {
-            "status": "eq.PROCESSING",
-            "updated_at": f"lt.{cutoff}",
-        })
-        tasks["failed_24h"] = _count(client, url, headers, {
-            "status": "eq.FAILED",
-            "created_at": f"gte.{day_ago}",
-        })
-        tasks["done_24h"] = _count(client, url, headers, {
-            "status": "eq.DONE",
-            "created_at": f"gte.{day_ago}",
-        })
-        # Swarm: active child count (PENDING/PROCESSING agent rows).
-        active_child = _count(client, url, headers, {
-            "status": "in.(PENDING,PROCESSING)",
-            "agent_type": "not.is.null",
-        })
-        swarm["active_children"] = active_child
-    else:
-        tasks = {"error": "supabase unconfigured"}
+        # --- Task statistics ---
+        tasks = {}
+        # --- Swarm observability ---
+        swarm = {}
+        if check_supabase:
+            headers = {
+                "apikey": supabase_key,
+                "Authorization": f"Bearer {supabase_key}",
+            }
+            cutoff = (
+                datetime.datetime.utcnow() - datetime.timedelta(
+                    minutes=STUCK_MINUTES)).isoformat() + "Z"
+            day_ago = (
+                datetime.datetime.utcnow() - datetime.timedelta(hours=24)
+            ).isoformat() + "Z"
+            tasks["pending"] = _count(client, url, headers, {"status": "eq.PENDING"})
+            tasks["processing"] = _count(client, url, headers, {"status": "eq.PROCESSING"})
+            tasks["stuck_processing"] = _count(client, url, headers, {
+                "status": "eq.PROCESSING",
+                "updated_at": f"lt.{cutoff}",
+            })
+            tasks["failed_24h"] = _count(client, url, headers, {
+                "status": "eq.FAILED",
+                "created_at": f"gte.{day_ago}",
+            })
+            tasks["done_24h"] = _count(client, url, headers, {
+                "status": "eq.DONE",
+                "created_at": f"gte.{day_ago}",
+            })
+            # Swarm: active child count (PENDING/PROCESSING agent rows).
+            active_child = _count(client, url, headers, {
+                "status": "in.(PENDING,PROCESSING)",
+                "agent_type": "not.is.null",
+            })
+            swarm["active_children"] = active_child
+        else:
+            tasks = {"error": "supabase unconfigured"}
 
     # E2B usage (in-process envelope counters from deep_reasoning).
+    e2b = {}
     try:
         from utils.deep_reasoning import usage as e2b_usage
         e2b = e2b_usage()
