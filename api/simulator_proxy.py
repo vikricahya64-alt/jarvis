@@ -29,6 +29,24 @@ from utils import e2b_executor
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("simulator")
 
+
+# ------------------------------------------------------------------
+# Module-level helpers (must exist here; cannot be self._ methods)
+# ------------------------------------------------------------------
+def _read_json(handler):
+    length = int(handler.headers.get("Content-Length", 0) or 0)
+    body = handler.rfile.read(length) if length else b""
+    return json.loads(body or b"{}")
+
+
+def _send_json(handler, payload, status):
+    data = json.dumps(payload).encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-type", "application/json")
+    handler.send_header("Content-Length", str(len(data)))
+    handler.end_headers()
+    handler.wfile.write(data)
+
 # In-memory cache (reset per cold start; good enough for free-tier re-runs).
 _CACHE: dict = {}
 _MAX_CACHE_ENTRIES = 128
@@ -209,6 +227,17 @@ class handler(BaseHTTPRequestHandler):
             if mode == "flush":
                 res = flush_batch(telegram_id)
                 return _send_json(self, {"ok": True, **res}, 200)
+            if mode == "private_edge":
+                # Level 7: route to Oracle private edge w/ Groq fallback.
+                from api import private_edge_proxy
+                if body.get("__health"):
+                    return _send_json(self, {"ok": True,
+                                             "health": private_edge_proxy.health()}, 200)
+                res = private_edge_proxy.infer(
+                    body.get("prompt") or body.get("code") or "",
+                    telegram_id, int(body.get("max_tokens") or 256))
+                return _send_json(self, res,
+                                  200 if res.get("ok") else 502)
             res = run_simulation(code, params)
             _send_json(self, {"ok": True, **res}, 200)
         except Exception as exc:

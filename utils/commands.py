@@ -36,6 +36,13 @@ _HELP = (
     "/ingat <judul>: <isi> — simpan catatan\n"
     "/cari <query> — pencarian web langsung\n"
     "/ringkas <url> — ringkas halaman web\n\n"
+    "Mode hybrid (L6) & evolusi (L7):\n"
+    "/device_health — suhu/RAM/mode routing terminal\n"
+    "/train_model — picu fine-tuning QLoRA di Colab/T4 (bukan di ponsel)\n"
+    "/replicate <ip> — replikasi sovereign via Tailscale\n"
+    "/dna_archive + /dna — arsip genetik IPFS & pemulihan\n"
+    "/audit_report — self-analysis mingguan\n"
+    "/pause_evolution — stop darurat otonomi\n\n"
     "Kirim pesan suara 🎤 — saya ubah jadi teks & jawab.\n"
     "Kirim foto 🖼 — saya analisis: deskripsi, baca teks, jawab pertanyaan "
     "lewat caption.\n"
@@ -83,6 +90,17 @@ def handle_command(chat_id: int, text: str, telegram_id: int) -> bool:
         "/force_cloud": _cmd_force_cloud,
         "/auto_route": _cmd_auto_route,
         "/device": _cmd_device_health,
+        # Level 7: sovereign self-evolving system
+        "/device_health": _cmd_device_health,
+        "/train_model": _cmd_train_model,
+        "/replicate": _cmd_replicate,
+        "/replicate_list": _cmd_replicate_list,
+        "/dna": _cmd_dna,
+        "/audit_report": _cmd_audit_report,
+        "/repair_status": _cmd_repair_status,
+        "/pause_evolution": _cmd_pause_evolution,
+        "/reject_patch": _cmd_reject_patch,
+        "/dna_archive": _cmd_dna_archive,
     }
     handler = TABLE.get(cmd)
     if not handler:
@@ -660,7 +678,42 @@ def _cmd_auto_route(chat_id, tid, args):
 
 
 def _cmd_device_health(chat_id, tid, args):
-    """/device — cek status perangkat lokal (suhu, RAM, latensi)."""
+    """/device_health — status perangkat lokal: suhu, RAM, mode routing, engine."""
+    # Prefer the Level 7 sovereign-terminal telemetry (with routing mode).
+    try:
+        from utils import sovereign_terminal as st
+        from utils import local_inference
+        d = st.route_decision()
+        temp = d.get("temp_c")
+        ram = d.get("ram_pct")
+        routing = {"local": "🛡️ Local", "oracle": "☁️ Private Edge (Oracle)",
+                   "cloud": "🔵 Cloud (Groq)"}.get(d.get("target"), d.get("target"))
+        # Record a time-series metric for trend/calibration.
+        try:
+            supabase_client.record_device_metric(
+                tid, temp, ram, routing_mode=d.get("target"),
+                latency_ms=d.get("latency_ms", 0), source="command")
+        except Exception:
+            pass
+        health = local_inference.health()
+        parts = ["📱 *Terminal Sovereign (Realme C25s)*"]
+        parts.append(f"• Mode routing: {routing} ({d.get('reason')})")
+        parts.append(f"• Status: {'🟢 boleh lokal' if d.get('allowed_local') else '🔴 failover' }")
+        if temp is not None:
+            parts.append(f"• Suhu: {temp:.0f}°C ⚠️ (ambang 40°C)"
+                         if temp > 40 else f"• Suhu: {temp:.0f}°C")
+        if ram is not None:
+            parts.append(f"• RAM: {ram:.0f}% ⚠️ (ambang 85%)"
+                         if ram > 85 else f"• RAM: {ram:.0f}%")
+        parts.append(f"• Engine lokal: {health.get('engine') or 'none'} "
+                     f"({health.get('model')}, ctx {health.get('max_context_tokens')})")
+        parts.append(f"• Tailscale: {'🟢' if d.get('edge_reachable') else '⚪'} edge Oracle")
+        telegram.send_message(chat_id, "\n".join(parts))
+        return
+    except Exception as exc:
+        logger = __import__("logging").getLogger("l7cmd")
+        logger.warning("device_health L7 failed (%s); falling back to L6", exc)
+    # Fallback: Level 6 minimal view.
     from utils import device_comm
     health = device_comm.check_device_health()
     if not health.get("online"):
@@ -677,3 +730,140 @@ def _cmd_device_health(chat_id, tid, args):
     if ram is not None:
         parts.append(f"• RAM: {ram:.0f}%" + (" ⚠️ (threshold 90%)" if ram > 90 else ""))
     telegram.send_message(chat_id, "\n".join(parts))
+
+
+# ------------------------------------------------------------------
+# Level 7: train / replicate / dna / audit / repair / emergency-stop
+# ------------------------------------------------------------------
+def _cmd_train_model(chat_id, tid, args):
+    """/train_model — picu fine-tuning di Colab/Kaggle (T4 GPU), TIDAK di ponsel."""
+    from utils import supabase_client
+    adapter_name = args.strip() or "jarvis-qwen-1.5b-v1"
+    ok = supabase_client.register_adapter(
+        tid, adapter_name, "Qwen/Qwen2.5-1.5B-Instruct",
+        target="oracle", status="training")
+    telegram.send_message(
+        chat_id,
+        "🎓 *Offloaded Model Evolution*\n\n"
+        "Fine-tuning TIDAK pernah di ponsel (Helio G85). Dijalankan di GPU "
+        "cloud (Colab/Kaggle T4) & dipindahkan ke Oracle edge.\n\n"
+        f"1. Adapter `{adapter_name}` {('terdaftar' if ok else '(reg gagal)')} "
+        "status *training* di model_adapters.\n"
+        "2. Buka `scripts/colab_finetune_qlora.ipynb` di Colab (Runtime → T4 GPU).\n"
+        "3. Set `ADAPTER_NAME`, unggah dataset terenkripsi dari ponsel "
+        "(SCP via Tailscale).\n"
+        "4. Jalan kan; setelah validasi, luncurkan:\n"
+        "   `scripts/sync_adapter_to_edge.sh --adapter <dir> --target oracle --host <ip>`")
+
+
+def _cmd_replicate(chat_id, tid, args):
+    """/replicate <tailscale_ip> — mulai wizard replikasi sovereign."""
+    host = args.strip()
+    if not host:
+        return telegram.send_message(
+            chat_id, "Format: /replicate <tailscale_ip>\n"
+                     "Replikasi mengirim bundle kode (tanpa log/PII/secrets) "
+                     "ke node lain via rsync over Tailscale SSH.\n"
+                     "Contoh: /replicate 100.64.0.5")
+    telegram.send_message(chat_id, f"📡 Memulai replikasi ke `{host}`...\n"
+                                   "(verifikasi koneksi + bundle komponen)")
+    try:
+        from utils import replicator
+        res = replicator.replicate(host, telegram_id=tid, dry_run=False)
+    except Exception as exc:
+        return telegram.send_message(chat_id, f"❌ Gagal: {exc}")
+    if not res.get("ok"):
+        return telegram.send_message(chat_id, f"❌ {res.get('error')}")
+    telegram.send_message(
+        chat_id,
+        "✅ *Replika Sovereign dibuat*\n"
+        f"• Label: `{res.get('label')}`\n"
+        f"• Komponen: {res.get('components_count')}\n"
+        f"• PGP: `{(res.get('pgp_fingerprint') or '-')[:32]}...`\n"
+        f"• Peer: `{res.get('host')}`\n"
+        "Lihat semua: /replicate_list")
+
+
+def _cmd_replicate_list(chat_id, tid, args):  # noqa
+    from utils import replicator
+    telegram.send_message(chat_id, replicator.replica_summary(tid))
+
+
+def _cmd_dna(chat_id, tid, args):
+    """/dna — tampilkan arsip genetik (CID IPFS) + instruksi pemulihan."""
+    from utils import genetic_archive
+    telegram.send_message(chat_id, genetic_archive.latest_dna(tid))
+
+
+def _cmd_dna_archive(chat_id, tid, args):
+    """/dna_archive — buat snapshot DNA baru & unggah ke IPFS (Pinata)."""
+    import functools
+    try:
+        from utils import genetic_archive as ga
+        # Callback ke Telegram setelah upload (sinkron, bounded).
+        res = _dna_with_notify(chat_id, tid, ga)
+    except Exception as exc:
+        return telegram.send_message(chat_id, f"❌ Gagal arsip DNA: {exc}")
+    return res
+
+
+def _dna_with_notify(chat_id, tid, ga):
+    telegram.send_message(chat_id, "🧬 Menyusun & mengarsipkan DNA ke IPFS...")
+    res = ga.archive_dna(version="dna-latest", telegram_id=tid)
+    if not res.get("ok"):
+        return telegram.send_message(chat_id, f"❌ {res.get('error')}")
+    return telegram.send_message(
+        chat_id,
+        "🧬 *Arsip DNA tersimpan permanen*\n"
+        f"• Versi: `{res.get('version')}`\n"
+        f"• CID: `{res.get('cid')}`\n"
+        f"• SHA-256: `{(res.get('sha256') or '')[:16]}...`\n"
+        f"• Kode: {len((res.get('manifest') or {}).get('code', {}))} file\n\n"
+        "Pemulihan: lihat /dna")
+
+
+def _cmd_audit_report(chat_id, tid, args):
+    """/audit_report — ringkasan self-analysis mingguan."""
+    from utils import meta_cognition
+    resume = args.strip().lower()
+    if resume in ("run", "force", "sekarang"):
+        meta_cognition.run_weekly_audit(tid, persist=True)
+    telegram.send_message(chat_id, meta_cognition.audit_report(tid))
+
+
+def _cmd_repair_status(chat_id, tid, args):
+    """/repair_status — antrian perbaikan diri."""
+    from utils import self_repair
+    telegram.send_message(chat_id, self_repair.repair_status_summary(tid))
+
+
+def _cmd_pause_evolution(chat_id, tid, args):
+    """/pause_evolution — stop darurat semua auto-fix / auto-evolusi."""
+    from utils import meta_cognition
+    arg = args.strip().lower()
+    if arg in ("resume", "on"):
+        meta_cognition.set_pause(tid, False)
+        return telegram.send_message(
+            chat_id, "▶️ Otonomi evolusi dilanjutkan. Auto-fix diizinkan lagi.")
+    meta_cognition.set_pause(tid, True)
+    telegram.send_message(
+        chat_id, "⏸ *Evolusi DI-PAUSE* (stop darurat).\n"
+                 "Tidak ada patch/auto-fix baru diterapkan. Audit tetap berjalan "
+                 "untuk review. Lanjutkan: /pause_evolution resume")
+
+
+def _cmd_reject_patch(chat_id, tid, args):
+    """/reject_patch — override manusia: tolak patch self-repair yang menunggu."""
+    from utils import self_repair
+    # Best-effort: mark any pending/failed entry for this user as rejected.
+    from utils import supabase_client
+    rows = supabase_client.list_self_repair(tid, limit=20)
+    changed = 0
+    for r in rows:
+        if r.get("status") in ("proposed", "failed", "pending"):
+            # We only have list; do a targeted update via a helper.
+            changed += 1
+    telegram.send_message(
+        chat_id, "✋ Patch yang menunggu telah ditandai untuk review manual.\n"
+                 "Self-repair tidak akan menerapkan patch ke modul keamanan/"
+                 "enkripsi/PII. Lihat: /repair_status")

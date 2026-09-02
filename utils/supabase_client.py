@@ -794,3 +794,236 @@ def upload_artifact(filename: str, data_b64: str, mime: str) -> str:
         )
         _raise_for(res, "storage.upload")
         return f"{base}/storage/v1/object/public/artifacts/{filename}"
+
+
+# ------------------------------------------------------------------
+# Level 7: self_repair_log
+# ------------------------------------------------------------------
+def log_self_repair(telegram_id: int, module: str, issue: str,
+                    severity: str = "low", diff: str = "", status: str = "proposed",
+                    blocked: bool = False) -> bool:
+    """Record an autonomous repair attempt in self_repair_log."""
+    try:
+        return _insert_json("self_repair_log", {
+            "telegram_id": telegram_id,
+            "module": module,
+            "issue": issue[:500],
+            "severity": severity,
+            "diff": diff[:4000],
+            "status": status,
+            "blocked": bool(blocked),
+        })
+    except Exception:
+        return False
+
+
+def list_self_repair(telegram_id: int, limit: int = 10) -> list:
+    """Recent self-repair entries for a user."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/self_repair_log",
+                params={"select": "*",
+                        "or": f"(telegram_id.eq.{telegram_id},telegram_id.eq.0)",
+                        "order": "created_at.desc", "limit": str(limit)},
+                headers=_auth_headers(),
+            )
+            if res.status_code >= 400:
+                return []
+            return res.json()
+    except Exception:
+        return []
+
+
+def count_self_repair(status: str = None) -> int:
+    """Count repair rows (optionally by status)."""
+    base, _ = _config()
+    params = {"select": "id", "limit": "0"}
+    if status:
+        params["status"] = f"eq.{status}"
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(f"{base}/rest/v1/self_repair_log",
+                             params=params, headers=_auth_headers(),
+                             )
+            if res.status_code >= 400:
+                return 0
+            cr = res.headers.get("content-range", "*/0")
+            return int(cr.split("/")[1])
+    except Exception:
+        return 0
+
+
+# ------------------------------------------------------------------
+# Level 7: model_adapters (QLoRA registry)
+# ------------------------------------------------------------------
+def register_adapter(telegram_id: int, name: str, base_model: str,
+                     target: str = "phone", artifact_url: str = "",
+                     sha256: str = "", status: str = "training") -> bool:
+    try:
+        return _insert_json("model_adapters", {
+            "telegram_id": telegram_id, "name": name,
+            "base_model": base_model, "target": target,
+            "artifact_url": artifact_url, "sha256": sha256,
+            "status": status,
+        })
+    except Exception:
+        return False
+
+
+def list_adapters(telegram_id: int, limit: int = 10) -> list:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/model_adapters",
+                params={"select": "*",
+                        "or": f"(telegram_id.eq.{telegram_id},telegram_id.eq.0)",
+                        "order": "created_at.desc", "limit": str(limit)},
+                headers=_auth_headers(),
+            )
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
+
+
+def update_adapter(adapter_id: str, updates: dict) -> bool:
+    base, _ = _config()
+    updates.setdefault("updated_at", datetime.datetime.utcnow().isoformat())
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.patch(
+                f"{base}/rest/v1/model_adapters",
+                params={"id": f"eq.{adapter_id}"},
+                json=updates, headers=_auth_headers(),
+            )
+            return res.status_code < 400
+    except Exception:
+        return False
+
+
+# ------------------------------------------------------------------
+# Level 7: replica_registry
+# ------------------------------------------------------------------
+def register_replica(telegram_id: int, label: str, peer_addr: str = "",
+                     pgp_fingerprint: str = "", components: list = None,
+                     status: str = "pending") -> bool:
+    try:
+        return _insert_json("replica_registry", {
+            "telegram_id": telegram_id, "label": label,
+            "peer_addr": peer_addr, "pgp_fingerprint": pgp_fingerprint,
+            "components": components or [], "status": status,
+        })
+    except Exception:
+        return False
+
+
+def list_replicas(telegram_id: int, limit: int = 20) -> list:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/replica_registry",
+                params={"select": "*",
+                        "or": f"(telegram_id.eq.{telegram_id},telegram_id.eq.0)",
+                        "order": "created_at.desc", "limit": str(limit)},
+                headers=_auth_headers(),
+            )
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
+
+
+# ------------------------------------------------------------------
+# Level 7: genetic_archive (IPFS DNA)
+# ------------------------------------------------------------------
+def record_genetic_archive(telegram_id: int, version: str, cid: str,
+                           sha256: str = "", manifest: dict = None) -> bool:
+    try:
+        return _insert_json("genetic_archive", {
+            "telegram_id": telegram_id, "version": version, "cid": cid,
+            "sha256": sha256, "manifest": manifest or {},
+        })
+    except Exception:
+        return False
+
+
+def latest_genetic_archive(telegram_id: int) -> dict:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/genetic_archive",
+                params={"select": "*",
+                        "or": f"(telegram_id.eq.{telegram_id},telegram_id.eq.0)",
+                        "order": "created_at.desc", "limit": "1"},
+                headers=_auth_headers(),
+            )
+            rows = res.json() if res.status_code < 400 else []
+            return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+# ------------------------------------------------------------------
+# Level 7: meta_audit_log
+# ------------------------------------------------------------------
+def record_meta_audit(telegram_id: int, week: str, metrics: dict,
+                      recommendation: dict, risk: str = "low",
+                      status: str = "proposed") -> bool:
+    try:
+        return _insert_json("meta_audit_log", {
+            "telegram_id": telegram_id, "week": week,
+            "metrics": metrics or {}, "recommendation": recommendation or {},
+            "risk": risk, "status": status,
+        })
+    except Exception:
+        return False
+
+
+def latest_meta_audit(telegram_id: int) -> dict:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/meta_audit_log",
+                params={"select": "*",
+                        "or": f"(telegram_id.eq.{telegram_id},telegram_id.eq.0)",
+                        "order": "created_at.desc", "limit": "3"},
+                headers=_auth_headers(),
+            )
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
+
+
+# ------------------------------------------------------------------
+# Level 7: device_health_metrics (time-series)
+# ------------------------------------------------------------------
+def record_device_metric(telegram_id: int, temp_c, ram_percent,
+                         routing_mode: str = "auto", latency_ms: int = 0,
+                         source: str = "device") -> bool:
+    try:
+        return _insert_json("device_health_metrics", {
+            "telegram_id": telegram_id, "temp_c": temp_c,
+            "ram_percent": ram_percent, "routing_mode": routing_mode,
+            "latency_ms": int(latency_ms), "source": source,
+        })
+    except Exception:
+        return False
+
+
+def recent_device_metrics(telegram_id: int, limit: int = 10) -> list:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/device_health_metrics",
+                params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                        "order": "created_at.desc", "limit": str(limit)},
+                headers=_auth_headers(),
+            )
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
