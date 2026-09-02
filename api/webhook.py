@@ -130,16 +130,35 @@ class handler(BaseHTTPRequestHandler):
                         pass
                     return self._send_json({"ok": True}, 200)
             else:
+                # Best-effort: extract text from PDF/DOCX/XLSX via E2B.
                 try:
-                    from utils.telegram import send_message
-                    send_message(
-                        chat_id,
-                        "Dokumen ini belum bisa saya baca. Kirim format "
-                        ".txt/.md/.csv/.json agar saya dapat memprosesnya. 🙏",
-                    )
-                except Exception:
-                    pass
-                return self._send_json({"ok": True}, 200)
+                    send_typing(chat_id)
+                    import base64
+                    from utils.download import download_file
+                    from utils.e2b_executor import extract_document
+                    data = download_file(doc["file_id"])
+                    res = extract_document(fname, base64.b64encode(data).decode())
+                    if not res.get("success") or not res.get("text", "").strip():
+                        raise RuntimeError(res.get("error", "teks kosong"))
+                    content = res["text"].strip()[:6000]
+                    text = f"[dokumen: {doc.get('file_name') or 'file'}]\n{content}"
+                    caption_text = (message.get("caption") or "").strip()
+                    if caption_text:
+                        text += f"\n\nPenjelasan user: {caption_text}"
+                    logger.info(
+                        f"Extracted {len(content)} chars from {fname} via E2B")
+                except Exception as exc:
+                    logger.exception(f"Doc extraction failed: {exc}")
+                    try:
+                        from utils.telegram import send_message
+                        send_message(
+                            chat_id,
+                            "Dokumen ini belum bisa saya baca. Kirim format "
+                            ".txt/.md/.csv/.json agar saya dapat memprosesnya. 🙏",
+                        )
+                    except Exception:
+                        pass
+                    return self._send_json({"ok": True}, 200)
 
         if not text or not chat_id:
             return self._send_json({"ok": True}, 200)

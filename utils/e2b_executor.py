@@ -97,7 +97,7 @@ def _collect_files(sbx, extensions):
         for ext in extensions:
             listing = sbx.files.list(f"/home/user/*.{ext}")
             for handle in listing:
-                data = sbx.files.read_bytes(f"/home/user/{handle.name}")
+                data = sbx.files.read(f"/home/user/{handle.name}").encode("latin1")
                 files.append({
                     "name": handle.name,
                     "data_b64": base64.b64encode(data).decode(),
@@ -119,3 +119,80 @@ def _mime_for(ext: str) -> str:
         "txt": "text/plain",
     }
     return mapping.get(ext, "application/octet-stream")
+
+
+def extract_document(fname: str, data_b64: str) -> dict:
+    """
+    Extract readable text from a PDF/DOCX/XLSX by running Python inside an
+    E2B sandbox. The file is embedded as base64 in the script (avoids
+    depending on the sandbox filesystem write API).
+
+    Returns: {success, text, error}
+    """
+    if not E2B_AVAILABLE or not os.getenv("E2B_API_KEY"):
+        return {"success": False, "text": "", "error": "E2B tidak tersedia"}
+
+    ext = (fname.rsplit(".", 1)[-1] if "." in fname else "").lower()
+    script = (
+        "import base64, traceback\n"
+        "try:\n"
+        f"    data = base64.b64decode({data_b64!r})\n"
+        "    open('/home/user/input', 'wb').write(data)\n"
+        f"    ext = {ext!r}\n"
+        "    text = ''\n"
+        "    if ext == 'pdf':\n"
+        "        from pypdf import PdfReader\n"
+        "        r = PdfReader('/home/user/input')\n"
+        "        text = '\\n'.join((p.extract_text() or '') for p in r.pages)\n"
+        "    elif ext == 'docx':\n"
+        "        from docx import Document\n"
+        "        d = Document('/home/user/input')\n"
+        "        text = '\\n'.join(p.text for p in d.paragraphs)\n"
+        "    elif ext == 'xlsx':\n"
+        "        from openpyxl import load_workbook\n"
+        "        wb = load_workbook('/home/user/input', read_only=True, data_only=True)\n"
+        "        out = []\n"
+        "        for ws in wb.worksheets:\n"
+        "            out.append('== Sheet: ' + ws.title)\n"
+        "            for row in ws.iter_rows(values_only=True):\n"
+        "                out.append(' | '.join('' if c is None else str(c) for c in row))\n"
+        "        text = '\\n'.join(out)\n"
+        "    text = text.strip()\n"
+        "    open('/home/user/out.txt', 'w', encoding='utf-8').write(text)\n"
+        "except Exception:\n"
+        "    open('/home/user/err.txt', 'w').write(traceback.format_exc()[-500:])\n"
+    )
+
+    sbx = None
+    try:
+        sbx = Sandbox()
+        sbx.commands.run(
+            "pip install --quiet pypdf python-docx openpyxl 2>/dev/null || true"
+        )
+        result = sbx.run_code(script, language="python")
+        out = None
+        err_text = None
+        try:
+            if sbx.files.exists("/home/user/out.txt"):
+                out = sbx.files.read("/home/user/out.txt").encode("latin1").decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        try:
+            if sbx.files.exists("/home/user/err.txt"):
+                err_text = sbx.files.read("/home/user/err.txt").encode("latin1").decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        if out is None or not out.strip():
+            return {"success": False, "text": "",
+                    "error": (err_text or "gagal ekstrak")[:300]}
+        return {"success": True, "text": out, "error": ""}
+    except Exception as exc:
+        return {"success": False, "text": "", "error": str(exc)[:300]}
+    finally:
+        if sbx is not None:
+            try:
+                sbx.kill()
+            except Exception:
+                pass
+
+
