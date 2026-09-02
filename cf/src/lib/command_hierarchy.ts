@@ -14,7 +14,7 @@
 //   * Owner telegram ID match (env.OWNER_TELEGRAM_ID).
 //=====================================================================
 
-import { Env, logObedience, logConsent, getDmsConfig, writeDmsConfig, DmsConfig } from "./db";
+import { Env, logObedience, logConsent, logViolation, getDmsConfig, writeDmsConfig, DmsConfig } from "./db";
 import { validateAction, riskScore } from "./constitutional_guard";
 
 export const TIERS = {
@@ -310,6 +310,13 @@ export async function routeCommand(
       commandHash: cmdHash,
       blockingSource: guard.violated_principle ?? "constitution",
       evidence: { reasoning: guard.reasoning, origin },
+    });
+    // Append-only constitutional violations log (L9 parity).
+    await logViolation(env, owner, cmdHash, guard.violated_principle ?? "constitution", {
+      intent: rawText.slice(0, 300),
+      reasoning: guard.reasoning,
+      confidence: guard.confidence,
+      originModule: "edge",
     });
     return { decision, intent, cmdHash };
   }

@@ -111,3 +111,39 @@ CREATE TABLE IF NOT EXISTS value_proposals (
 );
 CREATE INDEX IF NOT EXISTS idx_vprop_owner_status ON value_proposals(owner_id, status);
 CREATE INDEX IF NOT EXISTS idx_vprop_expiry ON value_proposals(expires_at);
+
+-- Constitutional violations: append-only log of FAIL-CLOSED GUARD BLOCKS.
+-- Mirror of L9 public.constitutional_violations. Application layer exposes
+-- INSERT+SELECT only (never UPDATE/DELETE). Unique per (owner, action_hash)
+-- so the same exact blocked action is only recorded once.
+CREATE TABLE IF NOT EXISTS constitutional_violations (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id         INTEGER NOT NULL,
+    action_hash      TEXT NOT NULL DEFAULT '',
+    violated_principle TEXT NOT NULL,
+    intent           TEXT NOT NULL DEFAULT '',   -- redacted action text
+    reasoning        TEXT NOT NULL DEFAULT '',
+    confidence       REAL NOT NULL DEFAULT 0,
+    origin_module    TEXT NOT NULL DEFAULT 'edge',
+    blocked_at       INTEGER NOT NULL DEFAULT 0,  -- unix ms
+    UNIQUE (owner_id, action_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_cv_owner_time ON constitutional_violations(owner_id, blocked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cv_principle ON constitutional_violations(violated_principle);
+
+-- Personal constitution: versioned principles (L9 personal_constitution mirror).
+-- content_md is the ratifiable markdown constitution; every amendment stores a
+-- rationale + editor. The active version is what the fail-closed guard reads
+-- (folded into dms_state.config_json.constitution at write time).
+CREATE TABLE IF NOT EXISTS personal_constitution (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id         INTEGER NOT NULL,
+    version          INTEGER NOT NULL DEFAULT 1,
+    content_md       TEXT NOT NULL DEFAULT '',
+    amended_at       INTEGER NOT NULL DEFAULT 0,   -- unix ms
+    amendment_rationale TEXT NOT NULL DEFAULT '',
+    edited_by        TEXT NOT NULL DEFAULT 'system',
+    created_at       INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (owner_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_pc_owner_version ON personal_constitution(owner_id, version DESC);

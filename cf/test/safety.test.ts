@@ -11,6 +11,7 @@
 //=====================================================================
 
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
 import {
   routeCommand, heuristicClassify, TIERS, markExplicitStop, setAutonomyPaused,
 } from "../src/lib/command_hierarchy";
@@ -100,12 +101,52 @@ async function testCommandRules() {
     "unrelated-but-shared-token action must stay below the blocking threshold");
 }
 
+async function testMigrationIntegrity() {
+  // The append-only constitutional block log MUST exist in the D1 migration.
+  const sql = readFileSync(
+    new URL("../migrations/0001_init.sql", import.meta.url),
+    "utf-8",
+  );
+  assert.ok(
+    /CREATE TABLE IF NOT EXISTS constitutional_violations/.test(sql),
+    "migration must create constitutional_violations",
+  );
+  assert.ok(
+    /UNIQUE \(owner_id, action_hash\)/.test(sql),
+    "constitutional_violations must be UNIQUE per (owner, action_hash)",
+  );
+  assert.ok(
+    /CREATE TABLE IF NOT EXISTS personal_constitution/.test(sql),
+    "migration must create versioned personal_constitution",
+  );
+  assert.ok(/UNIQUE \(owner_id, version\)/.test(sql),
+    "personal_constitution must be versioned per owner");
+  // Value proposals TTL fields must be present for the sweep cron.
+  assert.ok(/expires_at\s+INTEGER NOT NULL DEFAULT 0/.test(sql),
+    "value_proposals must carry expires_at for TTL sweep");
+}
+
+async function testValueAlignmentShape() {
+  // Drift constants honour L9 parity.
+  const mod = await import("../src/lib/db");
+  assert.strictEqual(mod.DRIFT_THRESHOLD_CORRECTIONS, 5);
+  assert.strictEqual(mod.DRIFT_WINDOW_DAYS, 14);
+  assert.strictEqual(mod.PROPOSAL_TTL_DAYS, 7);
+  assert.strictEqual(typeof mod.sweepExpiredProposals, "function");
+  assert.strictEqual(typeof mod.logViolation, "function");
+  assert.strictEqual(typeof mod.pendingProposals, "function");
+  assert.strictEqual(typeof mod.amendConstitution, "function");
+  assert.strictEqual(typeof mod.getConstitution, "function");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
   await testCommandRules();
   await testNoConstitutionFailClosed();
   await testOriginPriority();
+  await testMigrationIntegrity();
+  await testValueAlignmentShape();
   console.log("SAFETY TESTS PASSED");
 }
 

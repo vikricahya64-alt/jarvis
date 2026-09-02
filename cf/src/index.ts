@@ -8,7 +8,7 @@
 // the queue consumer, both bounded. All GOTCHA-free, no external SDK.
 //=====================================================================
 
-import { Env } from "./lib/db";
+import { Env, sweepExpiredProposals } from "./lib/db";
 import { handleUpdate } from "./workers/telegram_webhook";
 import { setWebhook } from "./lib/telegram";
 import { runDms } from "./daemons/dead_mans_switch";
@@ -74,8 +74,9 @@ export default {
         const msg = await runDms(env, owner);
         console.log(`[cron] dms: ${msg} (${Date.now() - start}ms)`);
       } else if (cron === "0 3 * * *") {
-        // Value alignment: light check, DMS bi-weekly already guards.
-        console.log(`[cron] value_alignment: run (${Date.now() - start}ms)`);
+        // Value alignment: expire stale unconfirmed proposals (TTL 7 days).
+        const expired = await sweepExpiredProposals(env);
+        console.log(`[cron] value_alignment: ${expired} expired (${Date.now() - start}ms)`);
       } else if (cron === "0 8 * * 0") {
         console.log(`[cron] obedience_report: scheduled (${Date.now() - start}ms)`);
       }
