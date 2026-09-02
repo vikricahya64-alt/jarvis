@@ -1,0 +1,25 @@
+#=====================================================================
+# .dev.vars.example — copy to `.dev.vars` for local/dev testing only.
+# For production, use `wrangler secret put` (secrets) and `[vars]` in
+# wrangler.toml (non-secrets). NEVER commit .dev.vars with real values.
+# =====================================================================
+
+# --- Telegram (REQUIRED) ---
+TELEGRAM_TOKEN=123456:ABC-DEF_BOT_TOKEN
+# Same value will be returned by /setwebhook as secret_token to Telegram.
+TELEGRAM_SECRET=change-me-long-random
+
+# --- Owner (REQUIRED) ---
+OWNER_TELEGRAM_ID=0
+
+# --- Groq (engines intent classification) ---
+GROQ_API_KEY=groq_sk_placeholder
+
+# --- Tuning (optional, defaults in code) ---
+CLARITY_GATE=0.95
+RISK_CONSENT_THRESHOLD=0.3
+CONSENT_TIMEOUT_S=60
+DMS_GRACE_DAYS=30
+DMS_STAGE1_HOURS=24
+DMS_STAGE2_HOURS=48
+QUEUE_RETRY_BACKOFF_MS=1000

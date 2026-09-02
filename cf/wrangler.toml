@@ -1,0 +1,79 @@
+#================================================================================
+# J.A.R.V.I.S. — Level 10/11 Cloudflare-native sovereignty stack
+#
+# ONE Worker handles: Telegram webhook, cron daemons, queue consumer, health.
+# This keeps the free-tier footprint small (1 worker, ≤5 cron triggers).
+#
+# Free tier realities (verified Jul 2026):
+#   * Workers: 100k requests/day, 10ms CPU/req, 128MB, 50 subrequests.
+#   * Cron: max 5 triggers/account; request-driven, NOT a resident daemon.
+#   * D1: 5GB, 100k reads/day, 1M rows/table.
+#   * R2: 10GB free, 1M Class A (writes) + 10M Class B (reads)/month, 0 egress.
+#   * Queues: 1M messages/month, consumer shares worker limits.
+#   * KV: 1GB, 100k reads + 1k writes/day (config/certs, NOT audit log).
+#   * Groq: ~14.4k req/day free (models vary).
+#
+# C25s edge note: the Realme stays a FULL edge node (terminal + LLM + DMS
+# sensor) feeding the same activity table. Cloudflare D1 is the AUTHORITATIVE
+# DMS decision engine; the worker scripts below are the mission-critical path.
+#================================================================================
+name = "jarvis-sovereign"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+#------------------------------------------------------------------------------
+# Bindings: D1 (SQLite edge), R2 (object), Queue, KV
+#------------------------------------------------------------------------------
+[[d1_databases]]
+binding = "DB"
+database_name = "jarvis"
+database_id = "<REPLACE_WITH_YOUR_D1_ID>"
+
+[[r2_buckets]]
+binding = "R2_VAULT"
+bucket_name = "jarvis-vault"
+
+[[kv_namespaces]]
+binding = "CONFIG_KV"
+id = "<REPLACE_WITH_YOUR_KV_ID>"
+
+[[queues.producers]]
+binding = "TASKS"
+queue = "jarvis-tasks"
+
+[[queues.consumers]]
+queue = "jarvis-tasks"
+max_batch_size = 10
+max_retries = 3
+dead_letter_queue = "jarvis-tasks-dlq"
+
+[[queues.producers]]
+binding = "TASKS_DEAD"
+queue = "jarvis-tasks-dlq"
+
+#------------------------------------------------------------------------------
+# Vars: non-secret configuration (secrets go in `wrangler secret put`)
+#------------------------------------------------------------------------------
+[vars]
+OWNER_TELEGRAM_ID = "0"
+APP_ENV = "production"
+# Telegram webhook secret (should be a secret, but kept here minimal for demo;
+# in production use `wrangler secret put TELEGRAM_SECRET`).
+CLARITY_GATE = "0.95"
+RISK_CONSENT_THRESHOLD = "0.3"
+CONSENT_TIMEOUT_S = "60"
+DMS_GRACE_DAYS = "30"
+DMS_STAGE1_HOURS = "24"
+DMS_STAGE2_HOURS = "48"
+QUEUE_RETRY_BACKOFF_MS = "1000"
+
+#------------------------------------------------------------------------------
+# Cron Triggers (≤5 allowed on free; request-driven daemons, not resident)
+#   - DMS: every 6 hours   ("0 */6 * * *")
+#   - Value alignment: daily 03:00 UTC   ("0 3 * * *")
+#   - Obedience weekly report: Sunday 08:00 UTC   ("0 8 * * 0")
+# The single Worker dispatches by scheduled cron name (see src/index.ts).
+#------------------------------------------------------------------------------
+[triggers]
+crons = ["0 */6 * * *", "0 3 * * *", "0 8 * * 0"]

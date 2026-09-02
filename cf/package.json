@@ -1,0 +1,20 @@
+{
+  "name": "jarvis-sovereign",
+  "private": true,
+  "description": "J.A.R.V.I.S. Level 10/11 Cloudflare-native sovereignty stack",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test:safety": "npx tsx test/safety.test.ts",
+    "db:migrate": "wrangler d1 migrations apply jarvis",
+    "db:local": "wrangler d1 migrations apply jarvis --local"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260902.1",
+    "@types/node": "^26.4.1",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.0.0"
+  }
+}

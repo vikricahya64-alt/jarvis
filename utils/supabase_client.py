@@ -1661,3 +1661,5 @@ def _query_pinned_region(table: str) -> str:
     except Exception:
         pass
     return "sin"
+
+

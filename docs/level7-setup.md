@@ -189,6 +189,12 @@ Pemasangan di Termux (lihat `device/setup_termux.sh`):
    `LLAMA_CLI`/`MLC_CLI` menuju binari Qwen2.5-1.5B-Q4_K_M.
 4. `python device/monitor_g85.py`.
 
+> ⚠️ **DEPRECATED (Level 11):** Jalur on-device `device/setup_termux.sh` dan
+> `device/monitor_g85.py` **telah dihapus** (folder `device/` tidak lagi ada).
+> Setup Termux on-device dinilai membebani perangkat; DMS + pemrosesan pesan kini
+> ditangani Cloudflare D1 worker + Groq (lihat `cf/`). Blok di bawah adalah arsip
+> arsitektur L7 asli.
+
 > Engine lokal hanya Qwen2.5-1.5B-...-Q4_K_M, `MAX_CONTEXT_TOKENS=1024`,
 > `-ngl 0` (CPU), 4 thread. Lihat `utils/local_inference.py`.
 

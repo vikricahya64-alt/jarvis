@@ -1,6 +1,16 @@
 # Level 6 — Setup & Troubleshooting: Realme C25s (Sovereign Local Core)
 
-Dokumen ini memandu pemasangan inti lokal J.A.R.V.I.S. di perangkat **Realme C25s**
+> ## ⚠️ DEPRECATED (Level 11)
+>
+> Jalur on-device `monitor_g85.py` / `setup_termux.sh` / `local_secrets.py` di
+> folder `device/` **telah dihapus** (Level 11) karena setup Termux dinilai
+> membebani perangkat. Keputusan kelangsungan (DMS) dan pemrosesan pesan kini
+> sepenuhnya ditangani oleh **Cloudflare D1 worker + Groq async** (lihat
+> `cf/`). Perangkat Realme tidak lagi menjalankan beban tersebut. Dokumen ini
+> disimpan hanya sebagai arsip referensi arsitektur L6 Hybrid. Referensi ke
+> `device/monitor_g85.py` & `setup_termux.sh` di bawah ini TIDAK lagi berlaku.
+
+Dokumen ini (arsip) memandu pemasangan inti lokal J.A.R.V.I.S. di perangkat **Realme C25s**
 (SoC Unisoc T610 "G85", RAM 4GB, penyimpanan 64GB/128GB eMMC) yang berada di belakang
 NAT seluler. Perangkat berperan sebagai *sovereign local core*: mengerjakan tugas
 lokal, tapi dikontrol & diaudit dari cloud.
