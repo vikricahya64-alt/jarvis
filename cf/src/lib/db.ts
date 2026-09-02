@@ -6,7 +6,6 @@
 
 export interface Env {
   DB: D1Database;
-  R2_VAULT: R2Bucket;
   CONFIG_KV: KVNamespace;
   TASKS: Queue<unknown>;
   TASKS_DEAD: Queue<unknown>;

@@ -23,35 +23,35 @@ compatibility_date = "2026-06-01"
 compatibility_flags = ["nodejs_compat"]
 
 #------------------------------------------------------------------------------
-# Bindings: D1 (SQLite edge), R2 (object), Queue, KV
+# Bindings: D1 (SQLite edge), Queue, KV
 #------------------------------------------------------------------------------
 [[d1_databases]]
 binding = "DB"
 database_name = "jarvis"
 database_id = "21da51ad-244e-46dc-9b5f-60e79ac60b25"
 
-# R2_VAULT disabled (R2 not yet activated on account)
-# [[r2_buckets]]
-# binding = "R2_VAULT"
-# bucket_name = "jarvis-vault"
-
 [[kv_namespaces]]
 binding = "CONFIG_KV"
 id = "c6476e44ee25411c88ba81aee3012e9c"
 
-[[queues.producers]]
-binding = "TASKS"
-queue = "jarvis-tasks"
-
-[[queues.consumers]]
-queue = "jarvis-tasks"
-max_batch_size = 10
-max_retries = 3
-dead_letter_queue = "jarvis-tasks-dlq"
-
-[[queues.producers]]
-binding = "TASKS_DEAD"
-queue = "jarvis-tasks-dlq"
+# -----------------------------------------------------------------------------
+# Queue bindings TEMPORARILY DISABLED: Cloudflare token lacks Queues:Edit
+# permission, so `wrangler deploy` fails to attach the consumer (auth error
+# 10000/10013). Worker still runs DMS + crons + webhook. Re-enable once a
+# token with Queues access is available.
+# [[queues.producers]]
+# binding = "TASKS"
+# queue = "jarvis-tasks"
+#
+# [[queues.consumers]]
+# queue = "jarvis-tasks"
+# max_batch_size = 10
+# max_retries = 3
+# dead_letter_queue = "jarvis-tasks-dlq"
+#
+# [[queues.producers]]
+# binding = "TASKS_DEAD"
+# queue = "jarvis-tasks-dlq"
 
 #------------------------------------------------------------------------------
 # Vars: non-secret configuration (secrets go in `wrangler secret put`)

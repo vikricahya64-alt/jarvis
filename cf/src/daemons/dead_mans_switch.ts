@@ -171,26 +171,17 @@ async function notify(env: Env, owner: number, text: string): Promise<void> {
 }
 
 /**
- * Wipe legacy vault metadata (R2 object keys dropped + metadata tombstoned) and
- * zero D1 incident rows used for the legacy path. Returns count removed.
+ * Wipe legacy vault data. The payload lives INLINE in D1 (client-side sealed),
+ * so a wipe zeroes the ciphertext + tombstones status atomically — no external
+ * object storage. Returns count removed.
  */
 export async function wipeLegacy(env: Env): Promise<number> {
-  const { results } = await env.DB.prepare(
-    `SELECT r2_key FROM legacy_vault_metadata WHERE status='armed' OR status='verifying'`,
-  ).all<{ r2_key: string }>();
-
-  let removed = 0;
-  for (const k of results) {
-    try {
-      if (env.R2_VAULT) await env.R2_VAULT.delete(k.r2_key);
-      removed++;
-    } catch (e) {
-      console.error("[dms] r2 delete failed", k.r2_key, (e as Error).message);
-    }
-  }
-  await env.DB.prepare(
-    `UPDATE legacy_vault_metadata SET status='revoked', updated_at=? WHERE status='armed' OR status='verifying'`,
+  const res = await env.DB.prepare(
+    `UPDATE legacy_vault_metadata
+     SET encrypted_blob='', status='revoked', updated_at=?
+     WHERE status='armed' OR status='verifying'`,
   ).bind(Date.now()).run();
+  const removed = res.meta.changes ?? 0;
   await env.DB.prepare(`DELETE FROM interaction_logs`).run();
   return removed;
 }

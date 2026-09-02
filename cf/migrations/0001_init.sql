@@ -3,8 +3,9 @@
 -- D1 = SQLite at the edge (Cloudflare). Free: 5GB, 100k reads/day.
 --
 -- Residency/sovereignty notes:
---   * No plaintext secrets. Legacy payloads live in R2 (client-side
---     AES-256-GCM); this table stores only metadata + integrity checks.
+--   * No plaintext secrets. The legacy payload is a client-side AES-256-GCM
+--     ciphertext stored INLINE in encrypted_blob (see migration 0002). This
+--     table keeps only metadata + integrity checks; the key never touches D1.
 --   * obedience_audit is APPEND-ONLY at the application layer (no
 --     UPDATE/DELETE paths exposed; see lib/command_hierarchy.ts).
 --   * dms_state is the authoritative DMS state machine; every transition
@@ -69,7 +70,7 @@ CREATE TABLE IF NOT EXISTS dms_state (
 );
 CREATE INDEX IF NOT EXISTS idx_dms_stage ON dms_state(stage);
 
--- Legacy vault metadata (payload in R2; keep only pointers + checksum).
+-- Legacy vault metadata (payload INLINE as ciphertext; see 0002 encrypted_blob).
 CREATE TABLE IF NOT EXISTS legacy_vault_metadata (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     owner_id         INTEGER NOT NULL,

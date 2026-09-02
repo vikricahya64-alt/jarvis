@@ -124,6 +124,16 @@ async function testMigrationIntegrity() {
   // Value proposals TTL fields must be present for the sweep cron.
   assert.ok(/expires_at\s+INTEGER NOT NULL DEFAULT 0/.test(sql),
     "value_proposals must carry expires_at for TTL sweep");
+
+  // 0002: legacy payload must be stored INLINE (no external object storage).
+  const sql2 = readFileSync(
+    new URL("../migrations/0002_legacy_inline.sql", import.meta.url),
+    "utf-8",
+  );
+  assert.ok(
+    /ADD COLUMN encrypted_blob TEXT NOT NULL DEFAULT ''/.test(sql2),
+    "0002 must add inline encrypted_blob (eliminates R2 dependency)",
+  );
 }
 
 async function testValueAlignmentShape() {
