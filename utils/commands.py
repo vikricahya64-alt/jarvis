@@ -39,7 +39,7 @@ _HELP = (
     "Kirim pesan suara 🎤 — saya ubah jadi teks & jawab.\n"
     "Kirim foto 🖼 — saya analisis: deskripsi, baca teks, jawab pertanyaan "
     "lewat caption.\n"
-    "Kirim dokumen 📄 — saya baca .txt/.md/.csv/.json.\n"
+    "Kirim dokumen 📄 — saya baca .txt/.md/.csv/.json & juga PDF/DOCX/XLSX.\n"
     "Ketik pesan biasa untuk bicara dengan saya lewat AI."
 ).format(name=_BOT_NAME)
 
