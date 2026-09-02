@@ -569,6 +569,81 @@ def plain_completion(system_prompt: str, user_input: str,
             raise RuntimeError(f"Groq error: {exc}")
 
 
+VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-3.2-11b-vision-preview")
+AUDIO_MODEL = os.getenv("GROQ_AUDIO_MODEL", "whisper-large-v3")
+
+# Keep vision/transcribe OUT of the token budget — raw media analysis is
+# delegated to dedicated endpoints and shouldn't consume the chat budget.
+_IMAGE_MIME = "image/jpeg"
+
+
+def vision(prompt: str, image_b64: str) -> str:
+    """Analyze a base64 image with a Groq vision model. Returns text."""
+    if not GROQ_AVAILABLE:
+        raise RuntimeError("groq package not installed")
+    from groq import Groq, RateLimitError as _RLE
+
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"), timeout=45.0, max_retries=0)
+    content = [
+        {"type": "image_url", "image_url": {
+            "url": f"data:{_IMAGE_MIME};base64,{image_b64}"}},
+        {"type": "text", "text": prompt},
+    ]
+    messages = [{"role": "user", "content": content}]
+    # vision models on Groq expose content as an array of parts
+    try:
+        resp = client.chat.completions.create(
+            model=VISION_MODEL, messages=messages, max_tokens=1000, temperature=0.2)
+        return _extract_text(resp)
+    except Exception:
+        # fallback: some models want plain content style
+        messages = [{"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:{_IMAGE_MIME};base64,{image_b64}"}},
+        ]}]
+        resp = client.chat.completions.create(
+            model=VISION_MODEL, messages=messages, max_tokens=1000, temperature=0.2)
+        return _extract_text(resp)
+
+
+def transcribe(audio_b64: str, mime: str = "audio/mpeg") -> str:
+    """Transcribe base64 audio via Groq Whisper. Returns transcript text."""
+    if not GROQ_AVAILABLE:
+        raise RuntimeError("groq package not installed")
+    from groq import Groq
+
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"), timeout=60.0, max_retries=0)
+    import base64
+    audio_bytes = base64.b64decode(audio_b64)
+    resp = client.audio.transcriptions.create(
+        model=AUDIO_MODEL,
+        file=("audio.m4a", audio_bytes, mime),
+    )
+    return (resp.text or "").strip()
+
+
+def _extract_text(resp) -> str:
+    """Safely pull the text content from a Groq chat response (may be a string
+    or a list of content parts for vision models)."""
+    try:
+        content = resp.choices[0].message.content
+    except Exception:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(part.get("text", ""))
+            else:
+                txt = getattr(part, "text", None)
+                if txt:
+                    parts.append(txt)
+        return "".join(parts)
+    return str(content or "")
+
+
 async def async_completion(user_input, context=None):
     """Async wrapper using AsyncGroq for higher concurrency."""
     if not GROQ_AVAILABLE:

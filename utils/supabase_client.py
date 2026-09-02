@@ -1030,3 +1030,354 @@ def recent_device_metrics(telegram_id: int, limit: int = 10) -> list:
             return res.json() if res.status_code < 400 else []
     except Exception:
         return []
+
+
+# ------------------------------------------------------------------
+# Level 8: knowledge graph (memory_nodes / memory_edges)
+# ------------------------------------------------------------------
+def upsert_memory_node(telegram_id: int, entity: str, ntype: str = "concept",
+                       properties: dict = None, embedding: list = None,
+                       node_id: str = "") -> str:
+    """Insert a memory graph node (or touch an existing one).
+    Anonymized entities only; never store raw PII here."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            # Find matching node for this owner+entity first.
+            exists = client.get(
+                f"{base}/rest/v1/memory_nodes",
+                params={"select": "id", "telegram_id": f"eq.{telegram_id}",
+                        "entity": f"eq.{entity}", "limit": "1"},
+                headers=_auth_headers(),
+            ).json()
+            payload = {
+                "telegram_id": telegram_id, "entity": entity, "type": ntype,
+                "properties": properties or {},
+                "embedding": embedding,
+                "updated_at": datetime.datetime.utcnow().isoformat(),
+            }
+            if exists and exists[0].get("id"):
+                client.patch(
+                    f"{base}/rest/v1/memory_nodes?id=eq.{exists[0]['id']}",
+                    json=payload, headers=_auth_headers(),
+                )
+                return exists[0]["id"]
+            res = client.post(
+                f"{base}/rest/v1/memory_nodes", json=payload,
+                headers={**_auth_headers(), "Prefer": "return=representation"},
+            )
+            rows = res.json() if res.status_code < 400 else []
+            return (rows[0]["id"] if rows else "")
+    except Exception:
+        return ""
+
+
+def search_memory(telegram_id: int, embedding: list, limit: int = 5) -> list:
+    """Vector similarity search over memory_nodes (pgvector).
+    Falls back to empty list on any error (never raises)."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.post(
+                f"{base}/rest/v1/rpc/search_memory_nodes",
+                json={"p_telegram_id": telegram_id,
+                      "p_embedding": embedding, "p_limit": limit},
+                headers=_auth_headers(),
+            )
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
+
+
+def add_memory_edge(telegram_id: int, source_id: str, target_id: str,
+                    relation: str, strength: float = 0.5) -> bool:
+    """Create or reinforce a weighted edge between two memory nodes."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            exists = client.get(
+                f"{base}/rest/v1/memory_edges",
+                params={"select": "id,strength",
+                        "source_id": f"eq.{source_id}",
+                        "target_id": f"eq.{target_id}",
+                        "relation": f"eq.{relation}", "limit": "1"},
+                headers=_auth_headers(),
+            ).json()
+            now = datetime.datetime.utcnow().isoformat()
+            if exists:
+                new = min(1.0, (exists[0].get("strength") or 0.5) + strength * 0.3)
+                client.patch(
+                    f"{base}/rest/v1/memory_edges?id=eq.{exists[0]['id']}",
+                    json={"strength": round(new, 3), "last_seen": now},
+                    headers=_auth_headers(),
+                )
+                return True
+            client.post(f"{base}/rest/v1/memory_edges", json={
+                "telegram_id": telegram_id, "source_id": source_id,
+                "target_id": target_id, "relation": relation,
+                "strength": strength, "last_seen": now,
+            }, headers=_auth_headers())
+            return True
+    except Exception:
+        return False
+
+
+def get_memory_neighbors(telegram_id: int, node_id: str, limit: int = 20) -> list:
+    """Graph traversal: return edges (+ neighbor summary) for a node."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/memory_edges",
+                params={"select": "*",
+                        "or": f"(source_id.eq.{node_id},target_id.eq.{node_id})",
+                        "limit": str(limit)},
+                headers=_auth_headers(),
+            )
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
+
+
+# ------------------------------------------------------------------
+# Level 8: swarm coordination (swarm_node_registry)
+# ------------------------------------------------------------------
+def register_swarm_node(telegram_id: int, device_id: str, role: str,
+                        capabilities: list = None, peer_addr: str = "",
+                        platform: str = "", ram_mb: int = 0,
+                        temp_c=None) -> bool:
+    """Upsert a swarm peer identity + capabilities."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            client.post(f"{base}/rest/v1/swarm_node_registry", json={
+                "telegram_id": telegram_id, "device_id": device_id,
+                "role": role, "capabilities": capabilities or [],
+                "peer_addr": peer_addr, "platform": platform,
+                "ram_mb": ram_mb, "temp_c": temp_c, "status": "online",
+            }, headers={**_auth_headers(), "Prefer": "resolution=merge-duplicates"},
+                params={"on_conflict": "telegram_id,device_id"})
+            return True
+    except Exception:
+        return False
+
+
+def update_swarm_heartbeat(telegram_id: int, device_id: str,
+                           status: str = "online", **extra) -> bool:
+    """Patch a swarm node's heartbeat fields by (telegram_id, device_id)."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            existing = client.get(
+                f"{base}/rest/v1/swarm_node_registry",
+                params={"select": "id", "telegram_id": f"eq.{telegram_id}",
+                        "device_id": f"eq.{device_id}", "limit": "1"},
+                headers=_auth_headers(),
+            ).json()
+            if not existing:
+                return False
+            payload = {"status": status,
+                       "last_heartbeat": datetime.datetime.utcnow().isoformat()}
+            payload.update(extra)
+            client.patch(f"{base}/rest/v1/swarm_node_registry?id=eq.{existing[0]['id']}",
+                         json=payload, headers=_auth_headers())
+            return True
+    except Exception:
+        return False
+
+
+def list_swarm_nodes(telegram_id: int, limit: int = 50) -> list:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/swarm_node_registry",
+                params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                        "order": "last_heartbeat.desc", "limit": str(limit)},
+                headers=_auth_headers(),
+            )
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
+
+
+# ------------------------------------------------------------------
+# Level 8: federated learning (federated_rounds)
+# ------------------------------------------------------------------
+def start_federated_round(telegram_id: int, model_version: str = "",
+                          round_id: int = 0) -> str:
+    """Open a new federated round; returns its id (or '')."""
+    if not round_id:
+        prev = latest_federated_round(telegram_id)
+        round_id = (prev.get("round_id") or 0) + 1
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.post(f"{base}/rest/v1/federated_rounds", json={
+                "telegram_id": telegram_id, "round_id": round_id,
+                "model_version": model_version, "status": "collecting",
+            }, headers={**_auth_headers(), "Prefer": "return=representation"})
+            rows = res.json() if res.status_code < 400 else []
+            return (rows[0]["id"] if rows else "")
+    except Exception:
+        return ""
+
+
+def record_federated_parity(telegram_id: int, round_id: int,
+                            participant: str, gradient_count: int) -> bool:
+    """Append a participant's gradient contribution to the round manifest."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            prev = latest_federated_round(telegram_id)
+            if not prev:
+                return False
+            participants = prev.get("participants") or []
+            if participant not in participants:
+                participants.append(participant)
+            manifest = dict(prev.get("manifest") or {})
+            manifest[participant] = {"gradients": gradient_count,
+                                     "at": datetime.datetime.utcnow().isoformat()}
+            client.patch(
+                f"{base}/rest/v1/federated_rounds?id=eq.{prev['id']}",
+                json={"participants": participants,
+                      "gradient_count": (prev.get("gradient_count") or 0) + gradient_count,
+                      "manifest": manifest},
+                headers=_auth_headers())
+            return True
+    except Exception:
+        return False
+
+
+def finalize_federated_round(telegram_id: int, round_id: int,
+                             validation_score=None, status: str = "validated",
+                             model_version: str = "") -> bool:
+    """Close a round once the aggregator has validated the global model."""
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            prev = latest_federated_round(telegram_id)
+            if not prev:
+                return False
+            patch = {"status": status,
+                     "finished_at": datetime.datetime.utcnow().isoformat()}
+            if validation_score is not None:
+                patch["validation_score"] = validation_score
+            if model_version:
+                patch["model_version"] = model_version
+            client.patch(f"{base}/rest/v1/federated_rounds?id=eq.{prev['id']}",
+                         json=patch, headers=_auth_headers())
+            return True
+    except Exception:
+        return False
+
+
+def latest_federated_round(telegram_id: int) -> dict:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/federated_rounds",
+                params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                        "order": "round_id.desc", "limit": "1"},
+                headers=_auth_headers(),
+            )
+            rows = res.json() if res.status_code < 400 else []
+            return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+def federated_history(telegram_id: int, limit: int = 10) -> list:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/federated_rounds",
+                params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                        "order": "round_id.desc", "limit": str(limit)},
+                headers=_auth_headers(),
+            )
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
+
+
+# ------------------------------------------------------------------
+# Level 8: intuition engine (intuition_log)
+# ------------------------------------------------------------------
+def record_intuition(telegram_id: int, domain: str, prediction: str,
+                     reasoning: str, confidence: float, impact: str = "low",
+                     blocked: bool = False) -> bool:
+    try:
+        return _insert_json("intuition_log", {
+            "telegram_id": telegram_id, "domain": domain,
+            "prediction": prediction[:2000], "reasoning": reasoning[:2000],
+            "confidence": round(confidence, 3), "impact": impact,
+            "blocked": blocked, "user_feedback": "pending",
+        })
+    except Exception:
+        return False
+
+
+def feedback_intuition(telegram_id: int, intuition_id: str,
+                       feedback: str = "dismissed") -> bool:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            client.patch(f"{base}/rest/v1/intuition_log?id=eq.{intuition_id}",
+                         json={"user_feedback": feedback}, headers=_auth_headers())
+            return True
+    except Exception:
+        return False
+
+
+def recent_intuitions(telegram_id: int, limit: int = 10) -> list:
+    base, _ = _config()
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            res = client.get(
+                f"{base}/rest/v1/intuition_log",
+                params={"select": "*", "telegram_id": f"eq.{telegram_id}",
+                        "order": "timestamp.desc", "limit": str(limit)},
+                headers=_auth_headers(),
+            )
+            return res.json() if res.status_code < 400 else []
+    except Exception:
+        return []
+
+
+def intuition_feedback_prior(telegram_id: int, domain: str) -> dict:
+    """Aggregate feedback history for a domain into a Bayesian prior
+    (alpha/beta). Returns {} when no data. Never raises."""
+    try:
+        rows = recent_intuitions(telegram_id, limit=200)
+        hit = correct = 0
+        for r in rows:
+            if r.get("domain") != domain or r.get("blocked"):
+                continue
+            hit += 1
+            if r.get("user_feedback") == "correct":
+                correct += 1
+        return {"samples": hit, "correct": correct,
+                "alpha": correct + 1, "beta": (hit - correct) + 1} if hit else {}
+    except Exception:
+        return {}
+
+
+def reset_intuition(telegram_id: int, domain: str = "") -> bool:
+    """Safety override: wipe a user's intuition feedback history (or a single
+    domain). Used by /reset_intuition. Never raises."""
+    try:
+        base, _ = _config()
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            params = {"telegram_id": f"eq.{telegram_id}"}
+            if domain:
+                params["domain"] = f"eq.{domain}"
+            res = client.delete(
+                f"{base}/rest/v1/intuition_log",
+                params=params, headers=_auth_headers(),
+            )
+            return res.status_code < 400
+    except Exception:
+        return False

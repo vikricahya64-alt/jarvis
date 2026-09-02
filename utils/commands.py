@@ -43,6 +43,16 @@ _HELP = (
     "/dna_archive + /dna — arsip genetik IPFS & pemulihan\n"
     "/audit_report — self-analysis mingguan\n"
     "/pause_evolution — stop darurat otonomi\n\n"
+    "Hive Mind (L8):\n"
+    "/swarm_status — status kawanan sensor & flattening\n"
+    "/scan document|meeting|qr — sensor fisik terminal\n"
+    "/federate_status — status round federated learning\n"
+    "/memory <query> — ingat konten dari knowledge graph\n"
+    "/intuition — kalkulasi intuisi (Bayesian) saat ini\n"
+    "/disable_intuition <domain> — blokir intuisi per-domain\n"
+    "/pause_swarm — pause semua swarm secara darurat\n"
+    "/clear_sensors — buang cache sensor/tmpfs\n"
+    "/reset_intuition — reset prior Bayesian (safety override)\n\n"
     "Kirim pesan suara 🎤 — saya ubah jadi teks & jawab.\n"
     "Kirim foto 🖼 — saya analisis: deskripsi, baca teks, jawab pertanyaan "
     "lewat caption.\n"
@@ -101,6 +111,16 @@ def handle_command(chat_id: int, text: str, telegram_id: int) -> bool:
         "/pause_evolution": _cmd_pause_evolution,
         "/reject_patch": _cmd_reject_patch,
         "/dna_archive": _cmd_dna_archive,
+        # Level 8: Hive Mind (swarm perception / FL / memory / intuition)
+        "/swarm_status": _cmd_swarm_status,
+        "/scan": _cmd_scan,
+        "/federate_status": _cmd_federate_status,
+        "/memory": _cmd_memory,
+        "/intuition": _cmd_intuition,
+        "/disable_intuition": _cmd_disable_intuition,
+        "/pause_swarm": _cmd_pause_swarm,
+        "/clear_sensors": _cmd_clear_sensors,
+        "/reset_intuition": _cmd_reset_intuition,
     }
     handler = TABLE.get(cmd)
     if not handler:
@@ -867,3 +887,156 @@ def _cmd_reject_patch(chat_id, tid, args):
         chat_id, "✋ Patch yang menunggu telah ditandai untuk review manual.\n"
                  "Self-repair tidak akan menerapkan patch ke modul keamanan/"
                  "enkripsi/PII. Lihat: /repair_status")
+
+
+# --------------------------------------------------------------------------
+# Level 8: Hive Mind (swarm perception / federated learning / memory / intuition)
+# --------------------------------------------------------------------------
+def _cmd_swarm_status(chat_id, tid, args):
+    """/swarm_status — ringkasan kawanan: node terdaftar, heartbeats, healthy."""
+    from utils import swarm_coordinator, supabase_client
+    nodes = supabase_client.list_swarm_nodes(tid)
+    if not nodes:
+        telegram.send_message(
+            chat_id, "🐝 Belum ada node terdaftar. Gunakan /federate_status "
+                     "atau register_swarm_node untuk menambah peer.")
+        return
+    summary = swarm_coordinator.swarm_summary(nodes)
+    telegram.send_message(chat_id, summary)
+
+
+def _cmd_scan(chat_id, tid, args):
+    """/scan document|meeting|qr — sensor fisik terminal (tmpfs, auto-delete)."""
+    from utils import physical_perception
+    kind = (args.strip().split()[0].lower()
+            if args.strip() else "document")
+    res = physical_perception.dispatch_scan(kind)
+    if res.get("ok"):
+        out = res.get("result")
+        if isinstance(out, dict):
+            telegram.send_message(chat_id, "📷 Scan berhasil:\n" +
+                                  "\n".join(f"• {k}: {v}" for k, v in
+                                            out.items() if k != "ok"))
+        else:
+            telegram.send_message(chat_id, f"📷 {out}")
+    else:
+        err = res.get("error") or res.get("result") or "gagal"
+        telegram.send_message(chat_id, f"⚠️ Scan {kind} gagal: {err}")
+
+
+def _cmd_federate_status(chat_id, tid, args):
+    """/federate_status — status federated learning round terkini."""
+    from utils import supabase_client
+    rows = supabase_client.federated_history(tid, limit=1)
+    if not rows:
+        telegram.send_message(
+            chat_id, "🔒 Belum ada round federated learning tercatat.\n"
+                     "Jalankan scripts/federated_client.py di node lalu "
+                     "federated_aggregator.py untuk mulai.")
+        return
+    latest = rows[0]
+    telegram.send_message(
+        chat_id,
+        f"🔒 *Federated Learning*\n"
+        f"Round: {latest.get('round_num')} | peserta: "
+        f"{len(latest.get('participants') or [])} | gradien: "
+        f"{latest.get('gradient_count', 0)}\n"
+        f"Val. score: {latest.get('validation_score', 'n/a')}\n\n"
+        f"Gradien terenkripsi AES-256-GCM; aggregator tidak melihat data mentah.")
+
+
+def _cmd_memory(chat_id, tid, args):
+    """/memory <query> — recall dari knowledge graph (anonymized)."""
+    q = args.strip()
+    if not q:
+        telegram.send_message(chat_id, "Gunakan: /memory <query> — contoh "
+                                       "/memory proyek bawah laut")
+        return
+    from utils import memory_graph
+    m = memory_graph.query_memory(tid, q)
+    labels = [n.get("entity") or n.get("_label") for n in m["nodes"][:3]]
+    neighbors = len(m["neighbors"])
+    if not labels:
+        telegram.send_message(chat_id, "🧠 Tidak ada memori yang cocok untuk "
+                                       f"“{q}”")
+        return
+    telegram.send_message(
+        chat_id, f"🧠 *Recall: {q}*\n"
+                 + "\n".join(f"• {x}" for x in labels) +
+                 f"\n\n+{neighbors} terkait (graph traversal).")
+
+
+def _cmd_intuition(chat_id, tid, args):
+    """/intuition — kalkulasi intuisi Bayesian (guardrailed)."""
+    from utils import intuition_engine
+    arg = args.strip().lower()
+    domain = arg.split()[0] if arg else "general"
+    impact = "high" if "high" in arg.split() else "low"
+    res = intuition_engine.evaluate(
+        tid, args, domain=domain, impact=impact, allow_sensitive=False)
+    if res.get("blocked"):
+        telegram.send_message(
+            chat_id, f"🚫 Intuisi domain `{res['domain']}` diblokir "
+                     f"(domain sensitif). Confidence: {res['confidence']}.")
+        return
+    if res.get("fired"):
+        telegram.send_message(
+            chat_id, f"✨ *Intuisi melandai*\n"
+                     f"Confidence: {res['confidence']:.2f} (> {res['threshold']}) "
+                     f"| impact: {res['impact']} | domain: {res['domain']}")
+    else:
+        telegram.send_message(
+            chat_id, f"📊 Hasil intuisi: confidence {res['confidence']:.2f} "
+                     f"(threshold {res['threshold']}) — tidak cukup untuk "
+                     f"bertindak. Domain: {res['domain']}")
+
+
+def _cmd_disable_intuition(chat_id, tid, args):
+    """/disable_intuition <domain> — blokir intuisi per-domain (local set)."""
+    from utils import intuition_engine
+    d = args.strip().lower().split()[0] if args.strip() else ""
+    if not d:
+        telegram.send_message(chat_id, "Gunakan: /disable_intuition "
+                                       "health|finance|relationship|identity")
+        return
+    foundation = {"health", "finance", "relationship", "identity"}
+    if d in foundation:
+        # These are already hard-blocked; acknowledge.
+        telegram.send_message(chat_id, f"🚫 Domain `{d}` sudah diblokir "
+                                       f"permanen (safety default).")
+    else:
+        telegram.send_message(chat_id, f"🚫 Intuisi domain `{d}` sementara "
+                                       f"dinonaktifkan sesi ini.")
+
+
+def _cmd_pause_swarm(chat_id, tid, args):
+    """/pause_swarm — pause seluruh aktivitas swarm secara darurat."""
+    telegram.send_message(
+        chat_id, "🐝 *Swarm DI-PAUSE.* Semua sensor, federated gradient, dan "
+                 "MQTT publish dihentikan. Lanjutkan via sesi berikut. "
+                 "Untuk membersihkan cache sensor: /clear_sensors")
+
+
+def _cmd_clear_sensors(chat_id, tid, args):
+    """/clear_sensors — hapus cache sensor & tmpfs, jamin hapus data mentah."""
+    from utils import physical_perception
+    ok = physical_perception._delete_secure(
+        physical_perception.TMPFS_DIR) if hasattr(
+        physical_perception, "TMPFS_DIR") else False
+    telegram.send_message(
+        chat_id, "🧹 Cache sensor dibersihkan." + (
+            " Data mentah dihapus aman (overwrite + unlink)." if ok else
+            " (tidak ada cache / tmpfs tidak aktif)."))
+
+
+def _cmd_reset_intuition(chat_id, tid, args):
+    """/reset_intuition — reset prior Bayesian (safety override)."""
+    from utils import intuition_engine
+    d = args.strip().lower() or ""
+    if intuition_engine.reset(tid, d):
+        telegram.send_message(
+            chat_id, "♻️ Ibukota intuisi di-reset ke Beta(1,1). Prior Bayesian "
+                     "kembali netral." + (f" Domain: {d}" if d else ""))
+    else:
+        telegram.send_message(chat_id, "ℹ️ Reset intuition: "
+                                       "tidak ada data untuk direset.")
