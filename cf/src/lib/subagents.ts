@@ -33,7 +33,7 @@
 
 import { Env, searchMemory, recentContext } from "./db";
 import { llmRespond, searchTopResults } from "./ai";
-import { getBehaviorContext } from "./evolution";
+import { getAnswerBehaviorContext } from "./evolution";
 import { fetchPageText } from "./extract";
 import { isObj, parseStructured, cleanStr } from "./structured";
 
@@ -404,7 +404,7 @@ async function runWriter(
       content: "Kenang-kenangan relevan: " + mems.map((m) => m.content).join(" | ").slice(0, 1200),
     });
   }
-  const behaviorContext = await getBehaviorContext(env, topic);
+  const behaviorContext = await getAnswerBehaviorContext(env, topic);
   if (behaviorContext) context.push({ role: "user", content: behaviorContext });
 
   const spots = gathers

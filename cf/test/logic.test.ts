@@ -12,6 +12,7 @@ import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
 import { isFollowUpQuery } from "../src/lib/ai";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
+import { behaviorAffinity, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 
 async function testPredictiveUrgencyRanking() {
   // Deterministic ranking: approval (open/expiring proposals) must rank first,
@@ -200,6 +201,56 @@ async function testFeedbackLearning() {
   assert.ok(FEEDBACK_NEUTRAL === 1, "neutral multiplier is identity");
 }
 
+async function testBehaviorAlignmentRanking() {
+  // Answer-behavior alignment: the reflection loop's *corrections* (answer was
+  // changed) drive a deterministic, fail-closed, recency-decayed affinity per
+  // category. Verify the ranking math is sane, monotonic, and recommender-grade.
+  type Row = { category: string; reflected: number; created_at: number };
+  const makeDb = (rows: Row[]) => ({
+    prepare: () => ({ bind: () => ({ all: async () => ({ results: rows }) }) }),
+  });
+  const now = Date.now();
+  const D = 86400_000;
+
+  // More corrections => lower (damped) affinity; never above neutral; bounded below.
+  // (Two corrections are still above the floor, so the strict decrease holds.)
+  const one = await behaviorAffinity({ DB: makeDb([{ category: "tone", reflected: 1, created_at: now }]) } as any, now);
+  const two = await behaviorAffinity({ DB: makeDb([
+    { category: "tone", reflected: 1, created_at: now },
+    { category: "tone", reflected: 1, created_at: now },
+  ]) } as any, now);
+  const three = await behaviorAffinity({ DB: makeDb([
+    { category: "tone", reflected: 1, created_at: now },
+    { category: "tone", reflected: 1, created_at: now },
+    { category: "tone", reflected: 1, created_at: now },
+  ]) } as any, now);
+
+  assert.ok(one["tone"] > two["tone"],
+    "affinity must strictly decrease as corrections accumulate (before floor)");
+  assert.ok(one["tone"] <= BEHAVIOR_AFFINITY_NEUTRAL && two["tone"] <= BEHAVIOR_AFFINITY_NEUTRAL,
+    "affinity never exceeds neutral (no amplification)");
+  assert.strictEqual(three["tone"], BEHAVIOR_AFFINITY_MIN,
+    "saturation drives a category to the floor, and stays there (never below)");
+
+  // Recency decay: a correction today damps far more than the same correction
+  // one half-life (or many) ago — a category that stops being corrected recovers.
+  const fresh = await behaviorAffinity({ DB: makeDb([{ category: "format", reflected: 1, created_at: now }]) } as any, now);
+  const aged = await behaviorAffinity({ DB: makeDb([{ category: "format", reflected: 1, created_at: now - BEHAVIOR_HALF_LIFE_DAYS * D }]) } as any, now);
+  assert.ok(aged["format"] > fresh["format"],
+    "older correction must be weighted less (Ebbinghaus/recency decay)");
+
+  const veryOld = await behaviorAffinity({ DB: makeDb([{ category: "safety", reflected: 1, created_at: now - 100 * BEHAVIOR_HALF_LIFE_DAYS * D }]) } as any, now);
+  assert.ok(veryOld["safety"] >= BEHAVIOR_AFFINITY_NEUTRAL - 1e-9,
+    "a very old correction must decay essentially to neutral (no permanent ban)");
+
+  // Correctness of the half-life math: one correction at exactly one half-life
+  // old contributes weight 0.5 -> affinity = max(floor, 1 - 0.5/3) = 0.8333...
+  const atHalfLife = await behaviorAffinity({ DB: makeDb([{ category: "timing", reflected: 1, created_at: now - BEHAVIOR_HALF_LIFE_DAYS * D }]) } as any, now);
+  const expected = Math.max(BEHAVIOR_AFFINITY_MIN, 1 - 0.5 / 3);
+  assert.ok(Math.abs((atHalfLife["timing"] ?? 0) - expected) < 1e-9,
+    `half-life decay affine math must match (got ${atHalfLife["timing"]}, want ${expected})`);
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -210,6 +261,7 @@ async function main() {
   testFollowUpDetection();
   await testPredictiveUrgencyRanking();
   await testFeedbackLearning();
+  await testBehaviorAlignmentRanking();
   console.log("LOGIC TESTS PASSED");
 }
 
