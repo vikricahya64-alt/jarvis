@@ -40,6 +40,77 @@ export function extractTopic(text: string): string | null {
   return topic.length >= 3 ? topic.slice(0, 120) : null;
 }
 
+/** Parse a translation request: "Terjemahkan <teks>" or "Terjemahkan ke
+ *  <bahasa> <teks>" (and likewise for "translate"/"translate to"). Returns the
+ *  source text and an optional target language, or null if this isn't a
+ *  translate request. Not a research topic — handled by its own dedicated path
+ *  so it no longer falls through to the generic "Ok." reply. */
+export function parseTranslate(text: string): { target: string | null; source: string } | null {
+  const raw = text.trim();
+  // Strip the leading verb/phrase: "Terjemahkan", "translate", "translate it",
+  // "terjemahkan ke", "translate to/into".
+  const verb = raw.match(/^terjemahkan(?:\s+ke)?|^translate(?:\s+it)?(?:\s+to|\s+into)?/i);
+  if (!verb) return null;
+  const rest = raw.slice(verb[0].length).trim();
+  if (!rest) return null;
+  // Detect an explicit target-language phrase at the head of the rest,
+  // e.g. "ke bahasa Inggris", "Inggris", "to English", "English".
+  const lang = rest.match(
+    /^(?:(?:ke\s+)?bahasa\s+|(?:\bin\b|to|into|ke)\s+)?(inggris|english|indonesia|indonesian|jepang|japanese|korea|korean|mandarin|china|chinese|arab|arabic|prancis|french|jerman|german|spanyol|spanish|italia|italian|portugis|portuguese|russia|russian|belanda|dutch|thai|hindi|india)\b\s*/i,
+  );
+  if (lang) {
+    const target = normalizeLang(lang[1]);
+    const source = rest.slice(lang[0].length).trim();
+    if (!source) return null; // verb + language only, no text to translate
+    return { target, source };
+  }
+  return { target: null, source: rest };
+}
+
+const LANG_MAP: Record<string, string> = {
+  english: "English", inggris: "English",
+  indonesia: "Indonesian", indonesian: "Indonesian",
+  japanese: "Japanese", jepang: "Japanese",
+  korean: "Korean", korea: "Korean",
+  mandarin: "Mandarin Chinese", china: "Mandarin Chinese", chinese: "Mandarin Chinese",
+  arabic: "Arabic", arab: "Arabic",
+  french: "French", prancis: "French",
+  german: "German", jerman: "German",
+  spanish: "Spanish", spanyol: "Spanish",
+  italian: "Italian", italia: "Italian",
+  portuguese: "Portuguese", portugis: "Portuguese",
+  russian: "Russian", russia: "Russian",
+  dutch: "Dutch", belanda: "Dutch",
+  thai: "Thai",
+  hindi: "Hindi", india: "Hindi",
+};
+function normalizeLang(tok: string): string {
+  const k = tok.toLowerCase();
+  return LANG_MAP[k] ?? (k[0]?.toUpperCase() ?? "English") + k.slice(1);
+}
+
+/** Produce a translation of the given source text (free-form target language).
+ *  Read-only, fail-closed: returns null on any failure so the caller falls back
+ *  to a graceful canned reply — never an error. Uses the same Groq→Gemini
+ *  dispatch as research so it needs no new provider/budget. */
+export async function translateText(
+  env: Env,
+  source: string,
+  target: string | null,
+): Promise<string | null> {
+  const targetPhrase = target ? target : "(sesuaikan: gunakan bahasa target yang masuk akal dari konteks/isi teks)";
+  const sys =
+    "Kamu adalah sub-agen PENERJEMAH which only translates text. " +
+    "Balas HANYA dengan hasil terjemahan, tanpa penjelasan, tanpa sinyal kutip, " +
+    "tanpa menambah komentar. Terjemahkan secara akurat dan natural ke bahasa target. " +
+    `Bahasa target: ${targetPhrase}.`;
+  const g = await llmRespond(env, source, {
+    topic: "terjemahan",
+    context: [{ role: "system", content: sys }],
+  });
+  return g.reply;
+}
+
 /** Try to produce a generative assistant reply via Groq, using recent
  *  conversation context as memory. Returns null on any failure so the
  *  caller falls back to the canned reply (fail-closed). */
