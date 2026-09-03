@@ -112,6 +112,24 @@ export async function logConsent(
   }
 }
 
+/**
+ * Fetch the timestamp of the most recent pending consent request for a
+ * correlation id (from obedience_audit's CONSENT_REQUEST rows). Used to
+ * enforce the consent TTL (default-DENY after the window elapses).
+ */
+export async function getConsentRequestTs(env: Env, owner: number, corr: string): Promise<number | null> {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT ts FROM obedience_audit
+       WHERE owner_id = ? AND action_type = 'CONSENT_REQUEST' AND user_command_hash = ?
+       ORDER BY ts DESC LIMIT 1`,
+    ).bind(owner, corr).first<{ ts: number }>();
+    return row?.ts ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Weekly "obeyed vs blocked" summary for /obedience_report. */
 export async function obedienceWeekly(env: Env, owner: number): Promise<(
   | { id: number; compliance: string; decision: string; priority: number; ts: number }

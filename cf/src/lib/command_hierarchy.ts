@@ -419,5 +419,13 @@ export async function resolveCallback(
   correlationId: string,
   decision: "approve" | "deny" | "pause" | "timeout",
 ): Promise<void> {
-  await logConsent(env, owner, correlationId, "inline-callback", "low", decision, TIERS.DANGEROUS);
+  await logConsent(env, owner, redact(correlationId), "inline-callback", "low", decision, TIERS.DANGEROUS);
+}
+
+/** Mask sensitive ids before persisting (L11 `_redact` parity). */
+function redact(value: string): string {
+  if (!value) return "";
+  const val = String(value);
+  if (val.length <= 4) return "***";
+  return val.slice(0, 4) + "…redacted/" + val.length;
 }

@@ -9,7 +9,7 @@
 // holds D1 state and issues the inline-button consent flow.
 //=====================================================================
 
-import { Env, touchActivity, logConsent, getDmsConfig, DmsConfig } from "../lib/db";
+import { Env, touchActivity, logConsent, getConsentRequestTs, getDmsConfig, DmsConfig } from "../lib/db";
 import { sendMessage, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, InlineButton } from "../lib/telegram";
 import {
   routeCommand, markExplicitStop, setAutonomyPaused, isAutonomyPaused,
@@ -42,25 +42,25 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     }
     const data = cq.data ?? "";
     const parts = data.split(":");
-    // Consent: consent:approve|deny|pause:<corr>
+    // Consent — L11 schema `consent:<corr>:yes|no|pause` (default-DENY 60s).
     if (parts[0] === "consent" && parts.length === 3) {
-      const [, decision, corr] = parts;
-      if (["approve", "deny", "pause"].includes(decision)) {
-        const consumed = await resolveConsent(env, owner, corr, decision);
+      const [, corr, verdict] = parts;
+      if (["yes", "no", "pause"].includes(verdict)) {
+        const consumed = await resolveConsent(env, owner, corr, verdict);
         if (cq.message) {
           await editMessageReplyMarkup(env, cq.message.chat.id, cq.message.message_id, { inline_keyboard: [] });
         }
         await answerCallbackQuery(env, cq.id,
           !consumed ? "Sesi kedaluwarsa (default DENY)."
-            : decision === "approve" ? "Disetujui." : decision === "pause" ? "Dijeda." : "Ditolak.");
+            : verdict === "yes" ? "Disetujui." : verdict === "pause" ? "Dijeda." : "Ditolak.");
         // "pause" also sets the global autonomy-pause flag (L11 python parity).
-        if (decision === "pause") await setAutonomyPaused(env, owner, true);
+        if (verdict === "pause") await setAutonomyPaused(env, owner, true);
         return new Response("ok");
       }
     }
     // Clarification options: clarify:<corr>:<index>
     if (parts[0] === "clarify" && parts.length === 3) {
-      await logConsent(env, owner, parts[1], "clarify-callback", "low", `choice:${parts[2]}`, 100);
+      await logConsent(env, owner, redact(parts[1]), "clarify-callback", "low", `choice:${parts[2]}`, 100);
       if (cq.message) {
         await editMessageReplyMarkup(env, cq.message.chat.id, cq.message.message_id, { inline_keyboard: [] });
       }
@@ -156,15 +156,37 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   return new Response("ok", { status: 200 });
 }
 
+/**
+ * Redact sensitive identifiers before persisting to audit/consent logs
+ * (L11 python `_redact` + data-sovereignty L6 parity). Correlation ids and
+ * command hashes on the wire are masked so raw values never persist verbatim,
+ * while a short prefix is retained for correlation/debugging.
+ */
+function redact(value: string): string {
+  if (!value) return "";
+  const val = String(value);
+  if (val.length <= 4) return "***";
+  return val.slice(0, 4) + "…redacted/" + val.length;
+}
+
 async function resolveConsent(env: Env, owner: number, corr: string, decision: string): Promise<boolean> {
-  // Record to consent_log (append-only). If the correlation is unknown/stale,
-  // the worker still logs a denied outcome (defensive default-deny parity).
-  await logConsent(env, owner, corr, "inline-consent", "high", decision, 70);
+  // Enforce consent TTL (default-DENY). If the request was raised longer ago
+  // than CONSENT_TIMEOUT_S (default 60s) and no matching request row exists,
+  // treat as expired → deny. L11 python default-deny parity.
+  const timeoutMs = Number(env.CONSENT_TIMEOUT_S || "60") * 1000;
+  const requestedTs = await getConsentRequestTs(env, owner, corr);
+  const expired = requestedTs != null && Date.now() - requestedTs > timeoutMs;
+  const effective = expired ? "timeout" : decision;
+  // Record to consent_log (append-only). Redact the correlation id so raw
+  // PII/command hashes from the wire never persist verbatim.
+  await logConsent(env, owner, redact(corr), "inline-consent", "high", effective, 70);
   await sendMessage(env, owner,
-    decision === "pause"
-      ? `⏸️ Otonomi DI-PAUSE (keputusan #${corr}).`
-      : `Keputusan consent "${decision}" untuk #${corr} dicatat.`);
-  return true; // consumed + recorded
+    effective === "pause"
+      ? "⏸️ Otonomi DI-PAUSE."
+      : effective === "timeout"
+        ? `⏰ Sesi consent kedaluwarsa (default DENY).`
+        : `Keputusan consent "${effective}" dicatat.`);
+  return !expired; // consumed (in-time) only
 }
 
 /** Simplified action path for a normal (non-diagnostic) text command. */
@@ -191,9 +213,9 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
       await sendMessage(env, owner,
         `Aksi risiko tinggi terdeteksi. Butuh persetujuan.`,
         { replyMarkup: { inline_keyboard: [[
-            { text: "Setujui", callback_data: "consent:approve:" + res.decision.correlationId },
-            { text: "Tolak", callback_data: "consent:deny:" + res.decision.correlationId },
-            { text: "Pause", callback_data: "consent:pause:" + res.decision.correlationId },
+            { text: "Setujui", callback_data: "consent:" + res.decision.correlationId + ":yes" },
+            { text: "Tolak", callback_data: "consent:" + res.decision.correlationId + ":no" },
+            { text: "Pause", callback_data: "consent:" + res.decision.correlationId + ":pause" },
         ]] } });
       break;
     case "BLOCK":
