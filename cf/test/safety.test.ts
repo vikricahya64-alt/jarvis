@@ -541,8 +541,12 @@ async function testLevel13Evolution() {
 }
 
 async function testLevel14Subagents() {
-  const { isResearchClass, MAX_TOTAL_LLM_CALLS, MAX_ANGLES } = await import("../src/lib/subagents");
+  const { isResearchClass, MAX_TOTAL_LLM_CALLS, MAX_ANGLES, MAX_FINDINGS_PER_ANGLE } =
+    await import("../src/lib/subagents");
   const { extractJsonBlock, parseStructured } = await import("../src/lib/structured");
+  const { searchTopResults } = (await import("../src/lib/ai")) as {
+    searchTopResults: (...a: unknown[]) => Promise<unknown>;
+  };
 
   // Effort-scaling: genuine multi-facet research questions escalate; simple
   // single-topic asks stay on the cheap single-pass path (no sub-agent burn).
@@ -556,6 +560,16 @@ async function testLevel14Subagents() {
   // Budget caps keep us inside free-tier / per-reply latency (research-backed).
   assert.ok(MAX_TOTAL_LLM_CALLS <= 3, "must cap LLM calls per orchestration at 3");
   assert.ok(MAX_ANGLES <= 3, "research must cap at 3 angles");
+  assert.ok(MAX_FINDINGS_PER_ANGLE >= 1, "must keep >=1 finding per angle");
+
+  // Parallel fan-out: the orchestrator must fan out angle searches with
+  // Promise.all (independent I/O) and gather multi-finding, url-bearing hits.
+  const subSrc = readFileSync(new URL("../src/lib/subagents.ts", import.meta.url), "utf-8");
+  assert.ok(/Promise\.all/.test(subSrc), "angle searches must fan out in parallel (Promise.all)");
+  assert.ok(/searchTopResults/.test(subSrc), "gather must use multi-result searchTopResults");
+  const aiSrc = readFileSync(new URL("../src/lib/ai.ts", import.meta.url), "utf-8");
+  assert.ok(typeof searchTopResults === "function", "ai must export searchTopResults for fan-out");
+  assert.ok(/uddg=/.test(aiSrc), "searchTopResults must extract real URLs from DDG redirects");
 
   // Structured output scaffolding (Instructor-style): fenced JSON extracts,
   // and a one-shot corrective retry turns malformed worker output into valid.
@@ -585,7 +599,6 @@ async function testLevel14Subagents() {
 
   // Sovereignty wiring: ai.ts must escalate to sub-agents ONLY for the
   // research-class branch and otherwise keep the single-pass path intact.
-  const aiSrc = readFileSync(new URL("../src/lib/ai.ts", import.meta.url), "utf-8");
   assert.ok(/orchestrateResearch/.test(aiSrc), "ai must call the orchestrator for research class");
   assert.ok(/isResearchClass/.test(aiSrc), "ai must gate orchestration on effort-scaling classifier");
   assert.ok(/(ddgSearch\(env, topic\))/.test(aiSrc), "simple path must still fall back to single DDG search");
