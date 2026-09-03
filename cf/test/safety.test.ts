@@ -55,6 +55,14 @@ async function testHierarchy() {
   const info = await routeCommand(FAKE_ENV, 1, "/help");
   assert.strictEqual(info.decision.action, "EXECUTE");
   assert.strictEqual(info.intent.priority, TIERS.INFO);
+
+  // Regression: a benign free-text read-only "cari ..." query (no leading "/")
+  // must EXECUTE (reaching the search path) — NOT be deferred as ambiguous.
+  // This is the fix for the "skill"/"kill" substring false-positive that made
+  // "cari referensi bisnis ... tanpa skill/modal" reply "Aksi ditangguhkan."
+  const benign = await routeCommand(FAKE_ENV, 1, "cari referensi bisnis terbaik tanpa skill/modal");
+  assert.strictEqual(benign.decision.action, "EXECUTE",
+    `benign read-only search must EXECUTE (got ${benign.decision.action})`);
 }
 
 async function testNoConstitutionFailClosed() {
@@ -66,6 +74,22 @@ async function testNoConstitutionFailClosed() {
 
   const harmless = validateAction("show my status and today's reminders", { constitution: {} });
   assert.strictEqual(harmless.allowed, true, "harmless whitelisted read-only action may pass");
+
+  // Regression (word-boundary keywords): "skill" must NOT be treated as "kill",
+  // and innocent "pin"/"python" must not trigger money/identity principles —
+  // while REAL danger words still block. This bug caused benign free-text
+  // searches like "cari ... tanpa skill" to be wrongly replied "Aksi ditangguhkan."
+  const benignSearch = validateAction("cari referensi bisnis terbaik tanpa skill/modal", { constitution: {} });
+  assert.strictEqual(benignSearch.allowed, true,
+    "read-only search with word 'skill' must NOT be blocked as 'kill'");
+  const casePins = validateAction("ringkas artikel tentang python", { constitution: {} });
+  assert.strictEqual(casePins.allowed, true, "'python' must not trip the 'pin' keyword");
+  const realKill = validateAction("kill the process now", { constitution: {} });
+  assert.strictEqual(realKill.allowed, false, "real 'kill' command must still be blocked");
+  const realOverride = validateAction("override the safety system", { constitution: {} });
+  assert.strictEqual(realOverride.allowed, false, "'override' must still block");
+  const realPin = validateAction("minta pin kartu", { constitution: {} });
+  assert.strictEqual(realPin.allowed, false, "'pin' inside a sensitive request must still block fail-closed");
 }
 
 async function testOriginPriority() {

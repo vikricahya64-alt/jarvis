@@ -20,6 +20,23 @@ export interface GuardResult {
   confidence: number;
 }
 
+/** Keyword match with word-boundary discipline so a danger keyword like "kill"
+ *  never false-positives on an innocent substring ("skill"). Single words are
+ *  matched as whole tokens; multi-word phrases are matched as literals. This
+ *  preserves fail-closed blocking for real risk words while fixing over-blocking
+ *  on compounds. */
+function matchesKeyword(low: string, key: string): boolean {
+  const trimmed = key.trim();
+  if (!trimmed) return false;
+  if (trimmed.includes(" ")) {
+    // Multi-word phrase: literal substring match (e.g. "hard reset", "full wipe").
+    return low.includes(trimmed);
+  }
+  // Single word: require word boundaries so "kill" != "skill", "pin" != "python".
+  const esc = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^A-Za-z0-9_])${esc}($|[^A-Za-z0-9_])`, "i").test(low);
+}
+
 /** Built-in immutable principles (the "sovereignty constitution"). */
 const PRINCIPLES: Array<{ id: string; key: string; reason: string }> = [
   { id: "no_deceive", key: "deceive/trick/manipulate", reason: "J.A.R.V.I.S. tidak boleh menipu pemilik." },
@@ -36,8 +53,8 @@ export function riskScore(text: string): number {
     "release", "share", "publish", "sell", "money", "payment", "bayar",
     "transfer uang", "password", "pin", "otp", "identity", "publish"];
   const mid = ["send", "kirim", "email", "calendar", "jadwal", "write", "tulis"];
-  if (high.some((w) => low.includes(w))) return 0.9;
-  if (mid.some((w) => low.includes(w))) return 0.5;
+  if (high.some((w) => matchesKeyword(low, w))) return 0.9;
+  if (mid.some((w) => matchesKeyword(low, w))) return 0.5;
   return 0.1;
 }
 
@@ -105,11 +122,12 @@ export function validateAction(actionDesc: string, options: {
     };
   }
 
-  // 2) Built-in principles (substring).
+  // 2) Built-in principles (word-boundary keyword match, not naive substring —
+  //    prevents "skill"→"kill" and "python"→"pin" false positives).
   const low = (actionDesc || "").toLowerCase();
   for (const p of PRINCIPLES) {
     const keys = p.key.split("/");
-    if (keys.some((k) => low.includes(k.trim()))) {
+    if (keys.some((k) => matchesKeyword(low, k.replace(/^\s+|\s+$/g, "")))) {
       return {
         allowed: false,
         violated_principle: p.id,

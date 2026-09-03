@@ -325,6 +325,29 @@ export async function routeCommand(
     return { decision, intent, cmdHash };
   }
 
+  // READ-ONLY TOPIC-QUERY PROMOTION: a free-text informational search that
+  // carries a read-only topic marker ("cari / search / ringkas / tentang",
+  // whitelisted in the constitutional guard) is a harmless query the design
+  // explicitly intends to serve (the `/cari <topik>` path). Such a query must
+  // NOT be demoted to DEFER by ambiguous-classifier confidence below the
+  // clarity gate — otherwise benign "cari <topik>" conversations wrongly reply
+  // "Aksi ditangguhkan." This only promotes queries that ALREADY passed the
+  // fail-closed constitutional guard above, so no risk guard is weakened.
+  if (origin === "user" && /\b(?:cari|search|ringkas|summarize|tentang|mengenai|topik|info|informasi)\b/i.test(rawText)) {
+    const decision: Decision = {
+      action: "EXECUTE",
+      compliance: "COMPLIANT",
+      priority: TIERS.INFO,
+      reason: "Read-only informational/query (topic marker) — cleared by guard.",
+      correlationId: cmdHash,
+    };
+    await logObedience(env, owner, "USER_COMMAND", TIERS.INFO, "EXECUTE", "COMPLIANT", {
+      commandHash: cmdHash,
+      evidence: { topicMarker: true, label: intent.label, confidence: intent.confidence },
+    });
+    return { decision, intent, cmdHash };
+  }
+
   // Low clarity + meaningful priority => ask for clarification before acting.
   if (!clarityOk && intent.priority >= TIERS.DANGEROUS) {
     const decision: Decision = {
