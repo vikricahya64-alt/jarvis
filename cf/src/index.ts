@@ -20,6 +20,7 @@ import { refreshQuotaSnapshot as monitorRefresh } from "./lib/monitor";
 import { ddgSearch } from "./lib/ai";
 import { acquireCronLock, releaseCronLock } from "./lib/resilience";
 import { runDreamCycle, generateMorningBriefing, decayPreferences } from "./lib/evolution";
+import { offerSuggestions } from "./lib/predictive";
 
 const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
 
@@ -271,6 +272,17 @@ export default {
           console.log(`[cron] morning_briefing: sent ${briefing.length} chars`);
         } else {
           console.log(`[cron] morning_briefing: skip (nothing notable)`);
+        }
+        // Level 16 (Predictive Steward): proactive suggestion digest folded into
+        // the same morning cron — digest mode (research: avoid per-event
+        // interruption/fatigue), reuses the existing cron slot (no new counter),
+        // and skips entirely when nothing clears the urgency bar.
+        const sugg = await offerSuggestions(env, owner);
+        if (sugg) {
+          await sendMessage(env, owner, sugg);
+          console.log(`[cron] suggestions: sent ${sugg.length} chars`);
+        } else {
+          console.log(`[cron] suggestions: skip (nothing actionable)`);
         }
       }
     } catch (e) {
