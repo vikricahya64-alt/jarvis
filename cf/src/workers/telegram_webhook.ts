@@ -16,7 +16,7 @@ import {
   setPrivacyMode, isPrivacyMode,
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
-import { queueStatus, recordTaskCounters, appendMemory, rememberMemory } from "../lib/db";
+import { queueStatus, recordTaskCounters, appendMemory, rememberMemory, recentContext } from "../lib/db";
 import { searchAndSynthesize, extractTopic, parseTranslate, translateText } from "../lib/ai";
 import { covenantStatusText, signClause } from "../lib/covenant_core";
 import { identityStatusText } from "../lib/identity_anchor";
@@ -416,21 +416,36 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
   const res = await routeCommand(env, owner, text);
   switch (res.decision.action) {
     case "EXECUTE":
-      // Raise the edge from canned to real reasoning (L8/L10): if the owner
-      // asked for research/search/recap, run DDG web search + Groq synthesis
-      // with conversation-memory context. Fail-closed to the canned label.
-      // Translation is a dedicated read-only request ("Terjemahkan <teks>")
-      // handled here BEFORE the generic search path so it never falls through
-      // to the bare "Ok." reply.
-      const tr = parseTranslate(text);
-      if (tr) {
-        const translated = await translateText(env, tr.source, tr.target);
-        const out = translated
-          ? (tr.target ? `Terjemahan (${tr.target}):\n` : "Terjemahan:\n") + translated
-          : `Maaf, gagal menerjemahkan saat ini. Coba lagi sebentar.`;
-        await recordTaskCounters(env, "translate", owner);
-        await fire(sendMessage(env, owner, out));
-        break;
+      // Translation is a dedicated read-only request handled BEFORE the generic
+      // search path so it never falls through to the bare "Ok." reply.
+      // - "Terjemahkan <teks>" / "translate <teks>": translate inline text.
+      // - "Terjemahkan" (bare) / "Terjemahkan ke <bahasa>": translate the last
+      //   assistant analysis from conversation context (fail-closed: if no prior
+      //   assistant reply exists, sends a graceful fallback message).
+      if (/^\s*(?:terjemahkan|translate)/i.test(text)) {
+        const tr = parseTranslate(text);
+        if (tr) {
+          const translated = await translateText(env, tr.source, tr.target);
+          const out = translated
+            ? (tr.target ? `Terjemahan (${tr.target}):\n` : "Terjemahan:\n") + translated
+            : `Maaf, gagal menerjemahkan saat ini. Coba lagi sebentar.`;
+          await recordTaskCounters(env, "translate", owner);
+          await fire(sendMessage(env, owner, out));
+          break;
+        }
+        // Bare translate: pull last assistant reply from conversation context.
+        const ctx = await recentContext(env, owner, 10);
+        const lastAssistant = [...ctx].reverse().find((c) => c.role === "assistant");
+        if (lastAssistant && lastAssistant.content.length > 30) {
+          const translated = await translateText(env, lastAssistant.content, null);
+          const out = translated
+            ? `Terjemahan analisis terakhir:\n\n${translated}`
+            : `Maaf, gagal menerjemahkan analisis saat ini. Coba lagi sebentar.`;
+          await recordTaskCounters(env, "translate", owner);
+          await fire(sendMessage(env, owner, out));
+          break;
+        }
+        // Nothing to translate: fall through to generic (will show "Ok.")
       }
       const topic = extractTopic(text);
       if (topic) {
