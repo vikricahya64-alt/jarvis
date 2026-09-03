@@ -541,7 +541,7 @@ async function testLevel13Evolution() {
 }
 
 async function testLevel14Subagents() {
-  const { isResearchClass, MAX_TOTAL_LLM_CALLS, MAX_ANGLES, MAX_FINDINGS_PER_ANGLE } =
+  const { isResearchClass, MAX_TOTAL_LLM_CALLS, MAX_ANGLES, MAX_FINDINGS_PER_ANGLE, MAX_PAGES_TO_READ } =
     await import("../src/lib/subagents");
   const { extractJsonBlock, parseStructured } = await import("../src/lib/structured");
   const { searchTopResults } = (await import("../src/lib/ai")) as {
@@ -558,9 +558,27 @@ async function testLevel14Subagents() {
     true, "'langkah/bagaimana cara' are faceting signals");
 
   // Budget caps keep us inside free-tier / per-reply latency (research-backed).
-  assert.ok(MAX_TOTAL_LLM_CALLS <= 3, "must cap LLM calls per orchestration at 3");
+  // The Evidence Extractor adds at most 1 call, so the full pipeline can reach 4
+  // (researcher + extractor + writer [+ verifier]) — still well within budget.
+  assert.ok(MAX_TOTAL_LLM_CALLS >= 4, "orchestration must afford researcher+extractor+writer");
+  assert.ok(MAX_TOTAL_LLM_CALLS <= 4, "must not exceed 4 LLM calls per orchestration");
   assert.ok(MAX_ANGLES <= 3, "research must cap at 3 angles");
   assert.ok(MAX_FINDINGS_PER_ANGLE >= 1, "must keep >=1 finding per angle");
+  assert.ok(MAX_PAGES_TO_READ >= 1 && MAX_PAGES_TO_READ <= 5,
+    "Evidence Extractor must bound page fetches per reply (50-subrequest budget)");
+
+  // Evidence Extractor (Agentic RAG / quarantined dual-LLM): a NEW role that
+  // fetches pages, strips HTML, and extracts structured citable facts the
+  // writer consumes — raw HTML must never reach the writer (injection defense).
+  const subSrc2 = readFileSync(new URL("../src/lib/subagents.ts", import.meta.url), "utf-8");
+  const extSrc = readFileSync(new URL("../src/lib/extract.ts", import.meta.url), "utf-8");
+  assert.ok(/runExtractor/.test(subSrc2), "orchestrator must call the Evidence Extractor");
+  assert.ok(/fetchPageText/.test(subSrc2), "extractor must fetch+strip pages");
+  assert.ok(/UNTRUSTED_EXTERNAL_CONTENT/.test(subSrc2), "extractor output stays spotlighted");
+  assert.ok(/htmlToText/.test(extSrc), "extract module must strip HTML to clean text");
+  assert.ok(/<script/.test(extSrc), "extractor must drop script content (injection defense)");
+  assert.ok(!/DOMParser|linkedom|defuddle/.test(extSrc),
+    "extractor must stay zero-dependency (no DOM lib in Workers)");
 
   // Parallel fan-out: the orchestrator must fan out angle searches with
   // Promise.all (independent I/O) and gather multi-finding, url-bearing hits.
