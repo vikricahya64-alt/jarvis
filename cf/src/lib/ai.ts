@@ -14,6 +14,7 @@
 import { Env, recentContext, appendMemory, searchMemory } from "./db";
 import { withResilience, fetchWithTimeout, logRequest } from "./resilience";
 import { getBehaviorContext, reflectOnTurn } from "./evolution";
+import { isResearchClass, orchestrateResearch } from "./subagents";
 
 const GROQ_MODEL = "llama-3.3-70b-versatile";
 // Google Gemini as a resilience fallback when Groq is rate-limited/down.
@@ -238,6 +239,22 @@ export async function searchAndSynthesize(
   userText: string,
   topic: string,
 ): Promise<{ reply: string; source: string }> {
+  // L14: for COMPLEX, multi-facet research queries, escalate through the
+  // bounded orchestrator-worker sub-agent pipeline (researcher -> per-angle
+  // searcher -> writer [-verified]), which yields a structured, evidence-
+  // based answer. Simple/narrow topics stay on the cheap single-pass path.
+  // Effort-scaling (Anthropic): do not spawn sub-agents for trivial queries.
+  // Fail-closed: if orchestration returns null, fall through to the existing
+  // single-pass synthesis so we ALWAYS return a real reply.
+  if (isResearchClass(topic, userText)) {
+    const sub = await orchestrateResearch(env, owner, userText, topic);
+    if (sub) {
+      await appendMemory(env, owner, "user", userText, topic);
+      await appendMemory(env, owner, "assistant", sub, topic);
+      if (sub.length > 120) void reflectOnTurn(env, userText, sub, []).catch(() => {});
+      return { reply: sub, source: "subagents" };
+    }
+  }
   const searchResult = await ddgSearch(env, topic);
   const context = await recentContext(env, owner, 4);
   // FTS5 retrieval: pull relevant persisted memories so the generative reply
