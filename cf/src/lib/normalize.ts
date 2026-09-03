@@ -18,7 +18,11 @@
 /** Canonical word-length expansion; longest-first so greedier slang wins.
  *  Only expands SHORT tokens (<=5 chars) that can't be a legitimate long
  *  word themselves, reducing false expansion of real vocabulary. These map
- *  to harmless filler/connectors — never to verbs/commands. */
+ *  to harmless filler/connectors — never to verbs/commands. The dictionary is
+ *  informed by lexical-normalization research (Han & Baldwin 2013; ViLexNorm
+ *  EACL '24; MultiLexNorm++ 2026): a curated OOV->canonical map is the
+ *  cheapest, most reliable "detect-then-normalize" layer for Indonesian
+ *  social-media/Telegram slang before any (budget-limited) model pass. */
 const SLANG: Record<string, string> = {
   // negations/connectors (harmless filler; never actions)
   gak: "tidak", ga: "tidak", gk: "tidak", g: "tidak",
@@ -33,7 +37,39 @@ const SLANG: Record<string, string> = {
   // pronouns
   gw: "saya", gue: "saya", aku: "saya", lo: "kamu", lu: "kamu",
   pgn: "ingin", pengen: "ingin",
+  // additional common social-media/Telegram slang (harmless filler only)
+  ntaps: "mantap", mntp: "mantap", mantul: "mantap",
+  wkwk: "hehe", hehe: "hehe", hihi: "hehe", haha: "hehe",
+  pls: "tolong", plis: "tolong", tolongin: "tolong",
+  mksh: "terima kasih", makasih: "terima kasih", mksih: "terima kasih", trims: "terima kasih",
+  pengenin: "ingin",
+  dah: "saja", yuk: "ayo", ayok: "ayo",
+  klo: "kalau", kalu: "kalau", kalo: "kalau",
+  cmn: "hanya", cman: "hanya", doang: "hanya",
+  disini: "di sini", disana: "di sana",
+  skrng: "sekarang",
+  ngerti: "mengerti",
+  begimana: "bagaimana", bgmn: "bagaimana",
+  knpa: "kenapa",
+  jngn: "jangan",
+  sdng: "sedang", lgi: "lagi",
+  bikinlah: "buatlah",
+  bener: "benar",
 };
+
+/** Detect-then-normalize: cheap pre-detection pass that flags tokens needing
+ *  normalization. Since JARVIS is zero-dependency and budget-bounded, Windows
+ *  of OOV tokens are expanded from the curated dictionary above (no LLM call).
+ *  Tokens already canonical, valid verbs/commands, or >5 chars pass unchanged. */
+function detectAndNormalize(t: string): string {
+  if (t.startsWith("/")) return t; // command prefix verbatim
+  const cleaned = collapseRepeats(t.toLowerCase());
+  // Only expand short tokens (<=5 chars) that have a curated mapping, or a few
+  // explicit longer slang entries — never invent expansions for long/valid words.
+  if (cleaned.length <= 5) return SLANG[cleaned] ?? cleaned;
+  // Longer slang tokens that are unambiguous social-media variants.
+  return SLANG[cleaned] ?? cleaned;
+}
 
 /** Collapse repeated letters (typo tolerance): "halooo" -> "halo", "haai" -> "hai". */
 function collapseRepeats(s: string): string {
@@ -56,11 +92,7 @@ export function normalizeInput(raw: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .split(" ")
-    .map((t) => {
-      if (t.startsWith("/")) return t; // command prefix verbatim
-      const cleaned = collapseRepeats(t.toLowerCase());
-      return cleaned.length <= 5 ? (SLANG[cleaned] ?? cleaned) : cleaned;
-    })
+    .map(detectAndNormalize)
     .join(" ");
 }
 

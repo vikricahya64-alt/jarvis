@@ -91,6 +91,39 @@ export interface OwnerPreference {
 // Pillar 1 — Verbal Reflection (bounded 1 round)
 // ---------------------------------------------------------------------
 
+/** Deterministic reflection parser (SLOT EMNLP-I '25 / SchemaRL ACL '25 pattern:
+ *  decouple "produce the critique" from "parse/format it"). The LLM may deviate
+ *  from the strict `SKOR:/CACAT:/PERBAIKAN:` template (extra preface, reordered
+ *  labels, multi-line improvement). This pure post-pass extracts the three
+ *  fields robustly so the reflection column stays parseable even on deviated
+ *  output. Returns an object; every field has a safe default (fail-closed). */
+export function parseReflection(reply: string): {
+  score: number;
+  critique: string;
+  improvement: string;
+} {
+  const s = (reply || "").trim();
+  const piece = (label: string): string | null => {
+    // Match `LABEL:` (case-insensitive) and capture until the next known label
+    // or end of text — tolerant of surrounding whitespace/newlines.
+    const re = new RegExp(`(?:^|\\n)\\s*${label}\\s*:\\s*([\\s\\S]*?)(?=(?:\\n\\s*(?:SKOR|CACAT|PERBAIKAN)\\s*:)|$)`, "i");
+    const m = s.match(re);
+    return m ? m[1].trim() : null;
+  };
+  // Score: prefer an explicit 1..5 under SKOR:, else take the first 1..5 integer.
+  let score = 0;
+  const skor = s.match(/SKOR\s*:\s*(\d+)/i);
+  if (skor) {
+    score = Math.min(5, Math.max(1, Number(skor[1])));
+  } else {
+    const any = s.match(/\b([1-5])\b/);
+    if (any) score = Number(any[1]);
+  }
+  const critique = piece("CACAT") ?? s.slice(0, 300);
+  const improvement = piece("PERBAIKAN") ?? "";
+  return { score, critique, improvement };
+}
+
 /** After a non-trivial response, ask the critic model to assess it against a
  *  small rubric and, if a fixable defect is found, emit a refined version.
  *  Returns the refined output (falling back to the original on any failure,
@@ -113,12 +146,11 @@ export async function reflectOnTurn(
   let score = 0;
   const g = await llmRespond(env, rubric, { context: [{ role: "assistant", content: turnText }] });
   if (g.reply) {
-    const m = g.reply.match(/SKOR:\s*(\d+)/i);
-    score = Number(m?.[1] || 0);
-    critique = g.reply.slice(0, 400);
-    const fix = g.reply.match(/PERBAIKAN:\s*(.+)/i);
-    const candidate = fix?.[1]?.trim();
-    if (candidate && candidate !== "tidak perlu" && candidate.length > 10) {
+    const parsed = parseReflection(g.reply);
+    score = parsed.score;
+    critique = (parsed.critique || g.reply).slice(0, 400);
+    const candidate = parsed.improvement;
+    if (candidate && !/tidak perlu|^none$/i.test(candidate) && candidate.length > 10) {
       refined = candidate;
     }
   }

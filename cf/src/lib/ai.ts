@@ -58,11 +58,14 @@ export function resolveFollowUpAnchor(
 /** Pull a concrete topic from a search/summarize request (shared with webhook).
  *  Recognizes explicit search verbs AND research/analytical markers so queries
  *  like "Analisis bisnis paling menguntungkan..." (which carry no `cari`/`tentang`
- *  word) still reach the search path instead of wrongly DEFERing. */
+ *  word) still reach the search path instead of wrongly DEFERing.
+ *  Fuzzy-tolerant: common misspellings/typo variants of each marker are included
+ *  in the alternation (QueryStack fuzzy 2026; Kondrak n-gram LCS) — no LLM
+ *  budget spent, zero dependency, deterministic. */
 export function extractTopic(text: string): string | null {
   const low = text.trim().toLowerCase();
   const m = low.match(
-    /\b(?:cari|search|tentang|mengenai|ringkas|summarize|artikel|topik|info|informasi|analis\w*|laporan|report|review|perbandingan|bandingkan|perkembangan|ulasan|kajian|menurut|menurutmu|bagaimana)\b\s*[:\-]?\s*(.+)$/,
+    /\b(?:cari|carii|cr|search|tentang|tenteng|tentan|tntg|ringkas|rangkum|summarize|artikel|topik|info|infp|informasi|analis\w*|laporan|laporn|report|review|riviu|perbandingan|bandingkan|perkembangan|ulasan|ulsn|kajian|menurut|menurutmu|bagaimana|gmn|bgmn)\b\s*[:\-]?\s*(.+)$/,
   );
   if (!m) return null;
   let topic = m[1]

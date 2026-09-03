@@ -432,7 +432,12 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   }
 
   // Everything else → compliance pipeline.
-  await act(env, r, text);
+  try {
+    await act(env, r, text);
+  } catch (e) {
+    console.error("[webhook] act() threw:", (e as Error).message);
+    await fire(sendMessage(env, r, "Maaf, terjadi kesalahan internal. Coba lagi sebentar."));
+  }
   return new Response("ok", { status: 200 });
 }
 
