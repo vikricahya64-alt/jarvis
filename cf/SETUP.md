@@ -12,8 +12,7 @@ Cron (3) ──► scheduled() ──► runDms()/value_alignment (D1)
 Telegram  ──► /webhook ──► handleUpdate() ──► routeCommand() (Groq klaifikasi + D1)
 Queues    ──► jarvis-tasks ──► queue() ──► processMessage()
                                               │
-                                  D1 (state, audit, consent, vault-meta)
-                                  R2 (legacy vault payloads)
+                                  D1 (state, audit, consent, vault-meta + payload inline)
                                   KV (config/certs — bukan audit)
 ```
 
@@ -28,7 +27,7 @@ Queues    ──► jarvis-tasks ──► queue() ──► processMessage()
 ```bash
 cd cf
 cp .dev.vars.example .dev.vars      # isi nilai dev (jangan commit)
-bash deploy.sh setup                 # buat D1, KV, R2, Queues → salin ID ke wrangler.toml
+bash deploy.sh setup                 # buat D1, KV, Queues → salin ID ke wrangler.toml
 #   1) Tempel database_id, kv id, queue names dari output ke cf/wrangler.toml
 bash deploy.sh migrate               # terapkan migrations/0001_init.sql ke D1 remote
 bash deploy.sh secrets               # set TELEGRAM_TOKEN, TELEGRAM_SECRET, GROQ_API_KEY
@@ -36,8 +35,10 @@ bash deploy.sh deploy                # wrangler deploy
 bash deploy.sh webhook <workers-url> # arahkan Telegram → /webhook
 ```
 
-> `bucket_name = "jarvis-vault"` harus cocok dengan yang kamu buat. Jika beda,
-> samakan nama di `wrangler.toml`.
+> Catatan R2: stack ini **tidak memakai R2**. Payload vault disimpan INLINE di
+> D1 (`encrypted_blob`, bermigrasi di `0002_legacy_inline.sql`) — karena R2 itu
+> layanan usage-based yang **wajib kartu** (tab object storage diskuning tanpa
+> billing), sedangkan D1 masuk kategori *non-metered free plan* yang **tanpa kartu**.
 
 ## 3. Verifikasi
 
@@ -55,8 +56,8 @@ curl https://<worker>.workers.dev/healthz
 |--------|-----------|-----------|
 | Workers | 100k req/hari, 10ms CPU/req | 1 worker, semua jalur |
 | Cron | 5 trigger | 3 (DMS 6h, value-& align daily, report Minggu) |
-| D1 | 5GB, 100k read/hari | state + audit + consent (+ indeks) |
-| R2 | 10GB, 1M tulis/10M baca | legacy vault payloads |
+| D1 | 5GB, 100k read/hari | state + audit + consent + payload inline (+ indeks) |
+| ~~R2~~ | — | **tidak dipakai** (butuh kartu; pakai D1 inline) |
 | Queues | 1M msg/bln | tugas async (reply, notify) |
 | KV | 1GB | config, cert notif (bukan audit) |
 | Groq | ~14k req/hari | klasifikasi intent (async, di luar CPU) |
