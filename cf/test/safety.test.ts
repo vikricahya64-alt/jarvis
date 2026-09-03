@@ -540,6 +540,57 @@ async function testLevel13Evolution() {
   assert.ok(/reflectOnTurn/.test(aiSrc), "ai must trigger bounded reflection");
 }
 
+async function testLevel14Subagents() {
+  const { isResearchClass, MAX_TOTAL_LLM_CALLS, MAX_ANGLES } = await import("../src/lib/subagents");
+  const { extractJsonBlock, parseStructured } = await import("../src/lib/structured");
+
+  // Effort-scaling: genuine multi-facet research questions escalate; simple
+  // single-topic asks stay on the cheap single-pass path (no sub-agent burn).
+  assert.strictEqual(isResearchClass("perbandingan bisnis online vs offline", "cari perbandingan bisnis online vs offline"),
+    true, "comparison keywords must be research-class");
+  assert.strictEqual(isResearchClass("apa itu ribosom", "jelaskan apa itu ribosom"),
+    false, "a single narrow topic must stay single-pass");
+  assert.strictEqual(isResearchClass("langkah membuat website", "bagaimana cara membuat website sederhana"),
+    true, "'langkah/bagaimana cara' are faceting signals");
+
+  // Budget caps keep us inside free-tier / per-reply latency (research-backed).
+  assert.ok(MAX_TOTAL_LLM_CALLS <= 3, "must cap LLM calls per orchestration at 3");
+  assert.ok(MAX_ANGLES <= 3, "research must cap at 3 angles");
+
+  // Structured output scaffolding (Instructor-style): fenced JSON extracts,
+  // and a one-shot corrective retry turns malformed worker output into valid.
+  assert.strictEqual(extractJsonBlock('Sure! ```json\n{"angles":["a"]}\n```'), '{"angles":["a"]}');
+  assert.strictEqual(extractJsonBlock('plain {"a":1} tail'), '{"a":1}');
+
+  let retries = 0;
+  const p = await parseStructured<{ angles: string[] }>(
+    '```json\n{"angles": 42}\n```', // malformed on first pass → triggers corrective retry
+    (v) => {
+      const o = v as { angles?: unknown };
+      if (!o || !Array.isArray(o.angles)) return "angles must be array";
+      return null;
+    },
+    async (err) => {
+      retries += 1;
+      return `{"angles":["fixed angle"],"note":"retried due to ${err}"}`;
+    },
+  );
+  assert.ok(p && Array.isArray(p.angles) && p.angles[0] === "fixed angle",
+    "parseStructured must correct malformed worker output in one retry");
+  assert.strictEqual(retries, 1, "must retry exactly once (cheap critic)");
+
+  // Fail-closed: a reply with no valid JSON at all must NOT be force-cast.
+  const bad = await parseStructured<{ angles: string[] }>("not json at all", () => "bad", async () => null);
+  assert.strictEqual(bad, null, "unparseable output must fail closed to null");
+
+  // Sovereignty wiring: ai.ts must escalate to sub-agents ONLY for the
+  // research-class branch and otherwise keep the single-pass path intact.
+  const aiSrc = readFileSync(new URL("../src/lib/ai.ts", import.meta.url), "utf-8");
+  assert.ok(/orchestrateResearch/.test(aiSrc), "ai must call the orchestrator for research class");
+  assert.ok(/isResearchClass/.test(aiSrc), "ai must gate orchestration on effort-scaling classifier");
+  assert.ok(/(ddgSearch\(env, topic\))/.test(aiSrc), "simple path must still fall back to single DDG search");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -556,6 +607,7 @@ async function main() {
   await testLevel12Integrity();
   await testResilienceLayer();
   await testLevel13Evolution();
+  await testLevel14Subagents();
   console.log("SAFETY TESTS PASSED");
 }
 
