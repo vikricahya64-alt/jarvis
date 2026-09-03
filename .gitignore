@@ -5,3 +5,20 @@ __pycache__/
 .vercel/
 .vercel
 .env*
+
+# --- Superseded / non-live artefacts (kept on disk as reference, not deployed) ---
+# Live stack is cf/ (Cloudflare). These predate or were replaced by the CF migration:
+#   - deploy/: legacy oracle-arm + old cloudflare deploy config
+#   - supabase/: old Supabase edge functions
+#   - docs/level10-oracle-arm.md, scripts/migrate_to_hf_spaces.sh: retired migration plans
+#   - utils/command_hierarchy.py, utils/consent_manager.py: L11 python superseded by cf/ TS
+deploy/
+supabase/
+docs/level10-oracle-arm.md
+scripts/migrate_to_hf_spaces.sh
+utils/command_hierarchy.py
+utils/consent_manager.py
+
+# Cloudflare local runtime/mig artifacts
+wrangler local_state/
+.dev.vars
