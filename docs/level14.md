@@ -50,8 +50,12 @@ Router (deterministic effort-scaling: isResearchClass?)
          ▼ (per angle — ALL FANNED OUT IN PARALLEL via Promise.all;
             deterministic DDG, no LLM per angle)
       Searcher (multi-finding: searchTopResults extracts title+url+snippet)
-         ▼ (sanitize + spotlight each hit; urls preserved for citation)
-      Writer sub-agent (1 LLM: synthesizes cross-angle, evidence-based reply;
+         ▼ (bounded parallel fetch+strip of top pages; zero-dependency htmlToText)
+      Evidence Extractor (1 LLM, quarantined dual-LLM / Agentic RAG):
+         reads stripped page text, emits structured {claim, source, confidence}
+         facts — NO tools, NO authority; raw HTML never reaches the writer
+         ▼ (sanitize + spotlight each hit/fact; urls preserved for citation)
+      Writer sub-agent (1 LLM: synthesizes verified facts + snippets,
                         injects memory + L13 behavior context)
          ▼
       Verifier (optional 1 LLM, only for long replies): output rail / abstain
@@ -65,8 +69,18 @@ Router (deterministic effort-scaling: isResearchClass?)
 > for citation while still spotlighting every hit as untrusted. `ddgSearch`
 > (single-result) stays untouched for the cheap single-pass path.
 
-**LLM-call budget** (research-backed cap): simple = **1**; complex = **2–3**
-(researcher + writer [+ verifier]). `MAX_TOTAL_LLM_CALLS = 3`.
+> **Evidence Extractor (new role):** fetch up to `MAX_PAGES_TO_READ` of the
+> found pages in parallel, strip to clean text with zero-dependency
+> `htmlToText` (no DOM lib needed in Workers), then a **quarantined** LLM
+> call (dual-LLM pattern, Willison 2023 / arXiv:2506.08837) extracts only
+> structured, citable `{claim, source, confidence}` facts. The writer never
+> sees raw HTML/scripts — a real prompt-injection boundary, not just
+> spotlighting. Blocked/unreachable pages fail-open to snippet-only evidence.
+> Each page fetch is 1 of the 50 free-tier subrequests per invocation.
+
+**LLM-call budget** (research-backed cap): simple = **1**; complex = **2–4**
+(researcher + extractor + writer [+ verifier]). `MAX_TOTAL_LLM_CALLS = 4`;
+`MAX_PAGES_TO_READ = 3` bounds fetch subrequests.
 
 ## Fail-Closed Guarantees
 
@@ -81,12 +95,15 @@ Router (deterministic effort-scaling: isResearchClass?)
 
 - `src/lib/structured.ts` — Instructor-style JSON scaffold + validators.
 - `src/lib/subagents.ts` — the orchestrator-worker pipeline + roles
-  (parallel fan-out via `gatherAllParallel`).
+  (parallel fan-out via `gatherAllParallel`, Evidence Extractor via `runExtractor`).
+- `src/lib/extract.ts` — zero-dependency `fetchPageText` + `htmlToText` page
+  stripping for the Evidence Extractor (fail-open, no DOM lib in Workers).
 - `src/lib/ai.ts` — `searchAndSynthesize` now gates orchestration on
   `isResearchClass` for research-class queries, else single-pass; adds
   `searchTopResults` (multi-finding, url-bearing) for the fan-out.
 - `test/safety.test.ts` — `testLevel14Subagents` (effort-scaling, budget caps,
-  structured-output correction, sovereignty wiring, parallel fan-out)
+  structured-output correction, sovereignty wiring, parallel fan-out,
+  Evidence Extractor injection defense)
 
 ## Budget / Free-Tier Impact
 
