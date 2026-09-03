@@ -14,6 +14,10 @@ export interface Env {
   TELEGRAM_SECRET?: string;
   TELEGRAM_TOKEN?: string;
   GROQ_API_KEY?: string;
+  GEMINI_API_KEY?: string;
+  GEMINI_API_KEY_BACKUP?: string;
+  GEMINI_API_KEY_SECONDARY?: string;
+  GEMINI_MODEL?: string;
   CLARITY_GATE?: string;
   RISK_CONSENT_THRESHOLD?: string;
   CONSENT_TIMEOUT_S?: string;
