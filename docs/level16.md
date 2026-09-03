@@ -21,6 +21,11 @@ baru**.
 | Google RecSys '23 "Learning from Negative User Feedback" | Sistem bertanggung jawab harus **belajar dari negative feedback dan mengurangi rekomendasi serupa dengan cepat** → dasar *feedback learning*. |
 | Beirlant et al. 2025 "Beyond Explicit and Implicit" | *Dismiss* adalah explicit negative feedback paling andal; sistem harus merespons dengan mengurangi serupa. |
 | Jawaheer et al. 2014 "Modeling User Preferences" | Feedback biner sederhana (accept vs dismiss) sudah cukup berguna → pendekatan ringan tanpa ML berat. |
+| Grice's Maxims (Think Design 2026) | Jawaban harus *quality* (jangan mengarang, jujur soal ketidakpastian & sumber), *quantity* (cukup, tak berlebihan), *relevance*, *manner* (jelas) → instruksi grounding + ringkas terpusat di prompt JARVIS. |
+| Grounding & Citations (Perplexity/FRAG, AI-Overview "11% klaim tak didukung") | Jawaban yang *grounded* dengan sumber yang terlihat meningkatkan trust → prompt wajib "nyatakan sumber/method-nya", saran menyebut provenance, writer mewajibkan sumber per sudut. |
+| ScienceDirect 2025 / MDPI 2025 (personalisasi & referensi) | Jawaban kontekstual berdasar pengalaman & penghindaran "feature bloat" → personalisasi per-kategori & cap ketat (≤3). |
+| Siemens / intent-modeling SLR (Springer 2024) | Explicit input → jawab cepat; implicit/tidak jelas → klarifikasi, jangan menebak → pipeline normalisasi + follow-up yang sudah ada. |
+| FRAG / chatbot-UI fallback | Saat tak bisa menjawab, beri fallback yang jelas & berarah (hasil mentah / akui outage + saran coba lagi), bukan "maaf generik" → `testAnswerGrounding` menjaganya. |
 
 ## Komponen
 
@@ -71,3 +76,8 @@ baru**.
 - `test/logic.test.ts` → `testPredictiveUrgencyRanking`: ranking deterministik approval
   > task/insight > preference, semua kandidat harus lolos threshold, cap batch, dan
   dedup sumber yang sudah ditawarkan (via mock D1 di memori, tanpa LLM).
+- `test/safety.test.ts` → `testAnswerGrounding`: regression-guard statis bahwa
+  **jawaban input** JARVIS tetap grounded (wajib menyebut sumber/method, dilarang
+  mengarang), jujur terhadap ketidakpastian ("Belum terverifikasi:"), dan memberi
+  fallback yang jelas & berarah (hasil mentah / akui outage + coba lagi) — bukan
+  "maaf generik". Menjaga prinsip Grice + grounding dari temuan riset jawaban-input.

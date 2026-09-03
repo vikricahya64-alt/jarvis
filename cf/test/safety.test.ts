@@ -855,6 +855,44 @@ async function testLevel16Predictive() {
     "predictive stays at PREDICTIVE_SUGGESTION tier");
 }
 
+async function testAnswerGrounding() {
+  // Research on input-response generation (Grice maxims + grounding + honest
+  // uncertainty) demands JARVIS's answers stay grounded, never fabricate, and
+  // give an honest fallback instead of an empty generic "maaf". These are
+  // static regression guards so a future refactor can't silently drop them.
+  const ai = readFileSync(new URL("../src/lib/ai.ts", import.meta.url), "utf-8");
+  const sub = readFileSync(new URL("../src/lib/subagents.ts", import.meta.url), "utf-8");
+
+  // Grice Quality (no fabrication) + grounding (state source/method), enforced
+  // centrally in the main generative path (llmRespond) and the translate path.
+  assert.ok(ai.includes("nyatakan sumber/method-nya") &&
+            /nyatakan sumber\/method-nya/.test(ai),
+    "main LLM prompt must tell JARVIS to state its source/method");
+  assert.ok(ai.includes("Jangan bohongi") && ai.includes("membuat data palsu"),
+    "main LLM prompt must forbid fabricating data");
+  assert.ok(ai.includes("Jika tidak bisa menjawab, akui saja"),
+    "main LLM prompt must admit uncertainty instead of bluffing");
+
+  // Honest-uncertainty: research synthesis must not present unverified trends
+  // as fact — the writer must flag them in a "Belum terverifikasi:" line.
+  assert.ok(sub.includes("Belum terverifikasi:"),
+    "synthesis prompt must flag unverified claims explicitly");
+  assert.ok(sub.includes("Jangan mengarang fakta yang tidak didukung bukti"),
+    "synthesis prompt must forbid invented facts");
+  assert.ok(sub.includes("sebut topik sudutnya dan sumbernya"),
+    "synthesis prompt must name the source per angle (grounding)");
+
+  // Honest, directional fallback instead of an empty generic apology: when the
+  // generative LLM is unreachable, fallback surfaces raw search results, and
+  // when even search fails it says so plainly and tells the owner to retry.
+  assert.ok(ai.includes("tanpa LLM generatif"),
+    "no-LLM fallback must say it is surfacing raw results (no fabrication)");
+  assert.ok(ai.includes("belum bisa menghubungi mesin pencari"),
+    "final fallback must admit the outage plainly, not pretend to answer");
+  assert.ok(ai.includes("Coba lagi sebentar"),
+    "final fallback must give the owner a clear next action");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -877,6 +915,7 @@ async function main() {
   await testTranslatePath();
   await testLevel15DeepResearch();
   await testLevel16Predictive();
+  await testAnswerGrounding();
   console.log("SAFETY TESTS PASSED");
 }
 
