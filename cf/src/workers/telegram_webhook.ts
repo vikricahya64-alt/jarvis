@@ -17,6 +17,10 @@ import {
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus, recordTaskCounters, appendMemory } from "../lib/db";
 import { searchAndSynthesize, extractTopic } from "../lib/ai";
+import { covenantStatusText, signClause } from "../lib/covenant_core";
+import { identityStatusText } from "../lib/identity_anchor";
+import { getPlans, getScheduledTasks } from "../lib/maestro";
+import { getDegradationStatus } from "../lib/degradation";
 
 const RATE_LIMIT_MS = 1000;
 
@@ -181,6 +185,59 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
       `Audit kepatuhan: dictatat per perintah di obedience_audit.\n` +
       `Status otonomi: ${paused ? "⏸️ PAUSED" : "▶️ aktif"}\n` +
       `Lihat /queue_status, /dms_status.`));
+    return new Response("ok", { status: 200 });
+  }
+
+  // ------------------------------------------------------------------
+  // Level 12 (Transcendent Steward) — covenant / identity / sunset / degradation
+  // ------------------------------------------------------------------
+  if (trimmed === "/covenant_status") {
+    await fire(sendMessage(env, r, await covenantStatusText(env)));
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed === "/covenant_sign") {
+    const clause = text.replace(/^\/covenant_sign\s+/i, "").trim();
+    if (!clause) {
+      await fire(sendMessage(env, r,
+        "Gunakan: /covenant_sign <klausa>\nKlausa ditandatangani immutable (INSERT-only, tak bisa diubah)."));
+    } else {
+      const clauseId = `ov-${String(r)}-${clause.length}`;
+      const version = await signClause(env, clauseId, clause);
+      await fire(sendMessage(env, r,
+        version != null
+          ? `📜 Klausa covenant ditandatangani (id=\`${clauseId}\`, v${version}). Append-only & immutable.`
+          : "Gagal menandatangani klausa. Coba lagi."));
+    }
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed === "/identity_verify") {
+    const status = await identityStatusText(env);
+    await fire(sendMessage(env, r, status));
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed === "/sunset_preview") {
+    await fire(sendMessage(env, r,
+      "🌅 *Preview Sunset* (hanya evaluasi — tak ada aksi ireversibel dipicu).\n" +
+      "Modul sunset bersifat reading-only; inisiasi memerlukan formulir manual + konfirmasi ganda pemilik."));
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed === "/degradation_status") {
+    const status = await getDegradationStatus(env);
+    await fire(sendMessage(env, r,
+      `📉 *Degradasi*\nSisa kuota: ${status.remainingPct}%\n` +
+      `Fitur dinonaktifkan: ${status.disabledFeatures.length ? status.disabledFeatures.join(", ") : "tidak ada"}`));
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed === "/maestro_status") {
+    const [plans, tasks] = await Promise.all([getPlans(env, r), getScheduledTasks(env, r)]);
+    const planLines = plans.length
+      ? plans.map((p) => `• ${p.status} — ${p.goal.slice(0, 40)}`).join("\n")
+      : "Belum ada rencana.";
+    const taskLines = tasks.length
+      ? tasks.map((t) => `• ${t.cadence} ${t.approved ? "✅" : "⚠️"} — ${t.description.slice(0, 40)}`).join("\n")
+      : "Belum ada tugas terjadwal.";
+    await fire(sendMessage(env, r,
+      `🪝 *Maestro*\n*Rencana* (n=${plans.length}):\n${planLines}\n\n*Tugas* (n=${tasks.length}):\n${taskLines}`));
     return new Response("ok", { status: 200 });
   }
 

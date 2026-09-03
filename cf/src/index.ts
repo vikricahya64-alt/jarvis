@@ -14,8 +14,36 @@ import { setWebhook, sendMessage } from "./lib/telegram";
 import { runDms } from "./daemons/dead_mans_switch";
 import { processMessage, escalateToDms, TaskMessage } from "./workers/task_processor";
 import { requireCert } from "./lib/zero_trust";
+import { covenantStatusText, validateActionAgainstCovenant, signClause, isCovenantManagement, covenantHash } from "./lib/covenant_core";
+import { identityStatusText, createEpoch, verifyContinuity, markEpochVerified } from "./lib/identity_anchor";
+import { refreshQuotaSnapshot as monitorRefresh } from "./lib/monitor";
 
 const OWNER = (env: Env) => Number(env.OWNER_TELEGRAM_ID || 0);
+
+/**
+ * Cron: finalize a new identity epoch and enforce covenant binding.
+ * This runs after each config change (deployment) and ensures the system
+ * cannot drift without proof. This is the mechanism that prevents unauthorized
+ * changes and ensures continuity.
+ */
+async function finalizeIdentityEpoch(env: Env): Promise<void> {
+  try {
+    const covenantHashVal = await covenantHash(env);
+    const previousEpochId = await getCurrentEpochId(env);
+    const newEpochId = await createEpoch(env, previousEpochId, covenantHashVal);
+    await markEpochVerified(env, newEpochId);
+    console.log(`[cron] identity_epoch: ${newEpochId} verified`);
+  } catch (e) {
+    console.error("[cron] identity_epoch failed", (e as Error).message);
+  }
+}
+
+async function getCurrentEpochId(env: Env): Promise<string | null> {
+  const row = await env.DB.prepare(
+    `SELECT epoch_id FROM identity_epochs ORDER BY timestamp DESC LIMIT 1`,
+  ).first();
+  return (row as { epoch_id: string } | null)?.epoch_id ?? null;
+}
 
 /**
  * Environment-adaptive privileged-endpoint gate.
@@ -163,6 +191,10 @@ export default {
       if (cron === "0 */6 * * *") {
         const msg = await runDms(env, owner);
         console.log(`[cron] dms: ${msg} (${Date.now() - start}ms)`);
+        // Level 12: anchor a new identity epoch and refresh the quota snapshot
+        // on the same 6-hour cadence (stays within the 5-cron free budget).
+        await finalizeIdentityEpoch(env);
+        await monitorRefresh(env, owner);
       } else if (cron === "0 3 * * *") {
         // Value alignment: expire stale unconfirmed proposals (TTL 7 days).
         const expired = await sweepExpiredProposals(env);

@@ -278,6 +278,91 @@ async function testAiFailClosed() {
   assert.ok(out.reply.length > 0, "canned fallback must be non-empty");
 }
 
+// ----------------------------------------------------------------------
+// Level 12 (Transcendent Steward) invariants — static/source-level checks
+// because there is no live D1 in this harness.
+// ----------------------------------------------------------------------
+async function testLevel12Integrity() {
+  // (1) Migrations 0004 + 0005 must exist and define the L12 schema: the
+  //     append-only covenant, identity epochs, maestro plans/steps/tasks,
+  //     degradation state/alerts, and sunset conditions.
+  const sql4 = readFileSync(new URL("../migrations/0004_maestro.sql", import.meta.url), "utf-8");
+  for (const tbl of ["plans", "plan_steps", "scheduled_tasks", "degradation_state", "degradation_alerts"]) {
+    assert.ok(new RegExp(`CREATE TABLE IF NOT EXISTS ${tbl}`).test(sql4),
+      `0004 must create ${tbl}`);
+  }
+  const sql5 = readFileSync(new URL("../migrations/0005_covenant.sql", import.meta.url), "utf-8");
+  for (const tbl of ["covenant_clauses", "identity_epochs", "quota_metrics", "sunset_conditions"]) {
+    assert.ok(new RegExp(`CREATE TABLE IF NOT EXISTS ${tbl}`).test(sql5),
+      `0005 must create ${tbl}`);
+  }
+
+  // (2) Covenant immutability must be enforced at the DB level (RAISE ABORT
+  //     trigger), NOT relied on by application code alone.
+  assert.ok(/RAISE\s*\(\s*ABORT/i.test(sql5),
+    "0005 must contain a RAISE(ABORT) trigger preventing covenant modification");
+  assert.ok(/CREATE\s+TRIGGER/i.test(sql5), "0005 must create a covenant trigger");
+
+  // (3) covenant_core must export the whole surface and be fail-closed: the
+  //     immutable signClause + validate + status + hash.
+  const cc = await import("../src/lib/covenant_core");
+  for (const fn of ["signClause", "validateActionAgainstCovenant", "covenantStatusText", "covenantHash", "getActiveClauses"]) {
+    assert.strictEqual(typeof cc[fn as keyof typeof cc], "function", `covenant_core must export ${fn}`);
+  }
+  // Signing is INSERT-only: the helper must issue an INSERT, never an UPDATE.
+  const ccSrc = readFileSync(new URL("../src/lib/covenant_core.ts", import.meta.url), "utf-8");
+  assert.ok(/INSERT INTO covenant_clauses/.test(ccSrc), "signClause must INSERT into covenant_clauses");
+  assert.ok(!/UPDATE covenant_clauses/.test(ccSrc), "covenant_clauses must NEVER be UPDATEd");
+
+  // (4) Identity anchor: epoch-chain helpers exported; continuity is enforced.
+  const ia = await import("../src/lib/identity_anchor");
+  for (const fn of ["createEpoch", "verifyContinuity", "markEpochVerified", "identityStatusText"]) {
+    assert.strictEqual(typeof ia[fn as keyof typeof ia], "function", `identity_anchor must export ${fn}`);
+  }
+
+  // (5) Maestro: consent-guarded autonomy. It must reference the covenant
+  //     validator and the global autonomy-pause gate, and must raise the
+  //     autonomy_paused flag (halt) rather than auto-execute. It should NOT
+  //     contain an irreversible sunset purge.
+  const ma = await import("../src/lib/maestro");
+  for (const fn of ["decomposeGoal", "scheduleTask", "executePlanStep", "getPlans", "getScheduledTasks"]) {
+    assert.strictEqual(typeof ma[fn as keyof typeof ma], "function", `maestro must export ${fn}`);
+  }
+  const maSrc = readFileSync(new URL("../src/lib/maestro.ts", import.meta.url), "utf-8");
+  assert.ok(/validateActionAgainstCovenant/.test(maSrc), "maestro must validate steps against covenant");
+  assert.ok(/autonomy_paused/.test(maSrc), "maestro must honor the /pause autonomy gate");
+
+  // (6) Degradation: essential features (covenant / DMS / override) are never
+  //     disabled; only non-essential functionality degrades.
+  const deg = await import("../src/lib/degradation");
+  assert.strictEqual(typeof deg.getDegradationStatus, "function");
+  const essential = deg.FEATURE_PRIORITY.filter((f: { essential: boolean }) => f.essential);
+  assert.ok(essential.some((f: { name: string }) => f.name === "covenant_enforcement"),
+    "covenant_enforcement must be essential (never disabled)");
+  assert.ok(essential.some((f: { name: string }) => f.name === "dms_dead_mans_switch"),
+    "dms_dead_mans_switch must be essential");
+  assert.ok(essential.some((f: { name: string }) => f.name === "emergency_override"),
+    "emergency_override must be essential");
+  for (const f of essential) {
+    assert.strictEqual(f.minQuota, 0, "essential feature minQuota must be 0 (always on)");
+  }
+
+  // (7) Sunset is PREVIEW-ONLY: no source may issue an irreversible purge of
+  //     covenant or identity data. Humanitarian irreversibility is a design
+  //     decision enforced by code inspection here.
+  for (const path of ["0005_covenant.sql", "covenant_core.ts", "identity_anchor.ts"]) {
+    const src = readFileSync(new URL(`../${path.startsWith("0005") ? "migrations/" : "src/lib/"}${path}`, import.meta.url), "utf-8");
+    assert.ok(!/DELETE FROM (covenant_clauses|identity_epochs)/i.test(src),
+      `${path} must not irreversibly purge covenant/identity data`);
+  }
+
+  // (8) The webhook must expose the L12 read/status surface.
+  const wh = readFileSync(new URL("../src/workers/telegram_webhook.ts", import.meta.url), "utf-8");
+  for (const cmd of ["/covenant_status", "/covenant_sign", "/identity_verify", "/sunset_preview", "/degradation_status", "/maestro_status"]) {
+    assert.ok(wh.includes(`"${cmd}"`) || wh.includes(`'${cmd}'`), `webhook must handle ${cmd}`);
+  }
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -290,6 +375,7 @@ async function main() {
   await testHardeningWiring();
   await testUpgradeMigration();
   await testAiFailClosed();
+  await testLevel12Integrity();
   console.log("SAFETY TESTS PASSED");
 }
 
