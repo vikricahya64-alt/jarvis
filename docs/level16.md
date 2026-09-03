@@ -18,6 +18,9 @@ baru**.
 | Nudge/Zenodo | Alerting fatigue → skip-if-nothing; cap ketat. |
 | arXiv "When Help Backfires" (2026) | *Offering* vs *providing*; bantuan unsolicited bisa terasa mengancam → sesedikit mungkin, selalu sebagai tawaran yang bisa ditolak. |
 | ACM "Proactive, But Not Creepy" (2026) | Inisiatif diterima bila sah + **jelaskan pemicunya** + kontrol langsung saat menawarkan → setiap saran menyebut provenance (kategori) + `/suggestion accept|dismiss <id>`. |
+| Google RecSys '23 "Learning from Negative User Feedback" | Sistem bertanggung jawab harus **belajar dari negative feedback dan mengurangi rekomendasi serupa dengan cepat** → dasar *feedback learning*. |
+| Beirlant et al. 2025 "Beyond Explicit and Implicit" | *Dismiss* adalah explicit negative feedback paling andal; sistem harus merespons dengan mengurangi serupa. |
+| Jawaheer et al. 2014 "Modeling User Preferences" | Feedback biner sederhana (accept vs dismiss) sudah cukup berguna → pendekatan ringan tanpa ML berat. |
 
 ## Komponen
 
@@ -37,6 +40,12 @@ baru**.
   - `resolveSuggestion` — pemilik *accept* / *dismiss*. **Accept hanya menandai sinyal**;
     tidak mengeksekusi apa pun (HOTL). **Dismiss = learned dismiss**: sumber tak
     ditawarkan lagi.
+  - `feedbackMultipliers` — **feedback learning**: agregat deterministik D1 per kategori
+    (`SUM accepted/dismissed` dari tabel `suggestions`) → multiplier `[0.4, 1.0]`.
+    Diterapkan ke skor urgency tiap kandidat (`damp`). **Fail-closed**: multiplier hanya
+    bisa *menurunkan* urgency dari baseline, tidak pernah menaikkan — kategori yang
+    sering di-dismiss akan mereda cepat (merespons negative feedback per riset), sementara
+    JARVIS tidak akan pernah jadi lebih intrusif dari desain dasar.
 - `migrations/0008_predictive.sql` — tabel `suggestions` (persisten `urgency`, status
   `offered|accepted|dismissed`) + `idx_suggestions_dedup` UNIQUE `WHERE status='offered'`
   (offer-once guard / learned dismiss).

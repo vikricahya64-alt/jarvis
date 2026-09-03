@@ -832,6 +832,20 @@ async function testLevel16Predictive() {
   assert.ok(/CREATE UNIQUE INDEX IF NOT EXISTS idx_suggestions_dedup/.test(mig),
     "0008 has the dedup unique index (offer-once guard)");
 
+  // Feedback learning must be FAIL-CLOSED: the per-category multiplier can only
+  // LOWER urgency from baseline (respond to negative feedback by damping similar
+  // suggestions — Google RecSys '23), never raise it. Exposed constants stay in
+  // [floor, 1] and the aggregate is computed from accepted/dismissed history.
+  assert.strictEqual(pred.FEEDBACK_NEUTRAL, 1,
+    "no-history learning must be identity (never changes base urgency)");
+  assert.ok(pred.FEEDBACK_MIN_MULT >= 0 && pred.FEEDBACK_MIN_MULT < 1,
+    "floor multiplier must be a valid dampener (only ever lowers urgency)");
+  assert.ok(typeof pred.feedbackMultipliers === "function",
+    "predictive must expose feedbackMultipliers (D1 aggregate, no LLM)");
+  assert.ok(/GROUP BY category/.test(src), "feedback learning aggregates per category");
+  assert.ok(/SUM\(CASE WHEN status = 'accepted'/.test(src),
+    "feedback learning reads accepted/dismissed history from suggestions");
+
   // origin gate still guarantees predictive never runs (regression from L12).
   const { routeCommand, TIERS } = await import("../src/lib/command_hierarchy");
   const res = await routeCommand(FAKE_ENV, 1, "jadwalkan sesuatu atas inisiatifmu", { origin: "predictive" });

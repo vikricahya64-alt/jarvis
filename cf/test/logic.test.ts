@@ -11,7 +11,7 @@
 import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
 import { isFollowUpQuery } from "../src/lib/ai";
-import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH } from "../src/lib/predictive";
+import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 
 async function testPredictiveUrgencyRanking() {
   // Deterministic ranking: approval (open/expiring proposals) must rank first,
@@ -142,6 +142,64 @@ function testFollowUpDetection() {
   }
 }
 
+async function testFeedbackLearning() {
+  // Feedback learning: JARVIS must respond to explicit negative feedback
+  // (dismiss) by reducing similar suggestions (Google RecSys '23; Beirlant et
+  // al. 2025). The per-category multiplier must be FAIL-CLOSED: it can only
+  // lower a category's urgency from baseline, never raise it.
+  type ResultRow = { category: string; accepted: number; dismissed: number };
+  const makeDb = (results: ResultRow[]) => ({
+    prepare: () => ({ bind: () => ({ all: async () => ({ results }) }) }),
+  });
+
+  // Category with no resolved history → neutral (untouched).
+  const empty = await feedbackMultipliers(
+    { DB: makeDb([]) } as unknown as Parameters<typeof feedbackMultipliers>[0],
+    1,
+  );
+  assert.strictEqual(empty["approval"] ?? FEEDBACK_NEUTRAL, FEEDBACK_NEUTRAL,
+    "no history → learning is neutral, never changes base urgency");
+
+  // Always dismissed (accept=0, dismiss=2) → floor multiplier (strong damping).
+  const alwaysDismissed = await feedbackMultipliers(
+    { DB: makeDb([{ category: "insight", accepted: 0, dismissed: 2 }]) } as unknown as Parameters<typeof feedbackMultipliers>[0],
+    1,
+  );
+  assert.strictEqual(alwaysDismissed["insight"], FEEDBACK_MIN_MULT,
+    "a fully-dismissed category is dampened to the floor");
+
+  // Mixed (1 accepted, 1 dismissed) → rate 0.5 → multiplier in (floor, neutral).
+  const mixed = await feedbackMultipliers(
+    { DB: makeDb([{ category: "task", accepted: 1, dismissed: 1 }]) } as unknown as Parameters<typeof feedbackMultipliers>[0],
+    1,
+  );
+  assert.ok(mixed["task"] > FEEDBACK_MIN_MULT && mixed["task"] < FEEDBACK_NEUTRAL,
+    `mixed outcomes give an in-between multiplier (got ${mixed["task"]})`);
+
+  // Always accepted → neutral (no damping; must NOT exceed baseline).
+  const alwaysAccepted = await feedbackMultipliers(
+    { DB: makeDb([{ category: "approval", accepted: 3, dismissed: 0 }]) } as unknown as Parameters<typeof feedbackMultipliers>[0],
+    1,
+  );
+  assert.strictEqual(alwaysAccepted["approval"], FEEDBACK_NEUTRAL,
+    "a fully-accepted category stays at baseline — learning never boosts urgency");
+
+  // Total (accepted+dismissed) <= 0 → neutral, no divide-by-zero.
+  const zero = await feedbackMultipliers(
+    { DB: makeDb([{ category: "preference", accepted: 0, dismissed: 0 }]) } as unknown as Parameters<typeof feedbackMultipliers>[0],
+    1,
+  );
+  assert.strictEqual(zero["preference"], FEEDBACK_NEUTRAL, "zero-history row is neutral");
+
+  // The same damping must lower a candidate's urgency so a previously-offered
+  // (now dismissed) category drops out of the urgent pool / below threshold.
+  const u = 0.7;
+  assert.ok(FEEDBACK_MIN_MULT * u < u, "damping strictly lowers urgency below baseline");
+  assert.ok(Number.isFinite(FEEDBACK_MIN_MULT) && FEEDBACK_MIN_MULT > 0 && FEEDBACK_MIN_MULT < 1,
+    "floor multiplier is a valid (0,1) dampener");
+  assert.ok(FEEDBACK_NEUTRAL === 1, "neutral multiplier is identity");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -151,6 +209,7 @@ async function main() {
   testNonSlangPassThrough();
   testFollowUpDetection();
   await testPredictiveUrgencyRanking();
+  await testFeedbackLearning();
   console.log("LOGIC TESTS PASSED");
 }
 
