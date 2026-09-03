@@ -172,7 +172,7 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
   const res = await routeCommand(env, owner, text);
   switch (res.decision.action) {
     case "EXECUTE":
-      await sendMessage(env, owner, applyDefault(res));
+      await sendMessage(env, owner, applyDefault(res, text));
       break;
     case "CLARIFY":
       // Offer structured options (L11 python send_clarification parity) instead
@@ -204,7 +204,7 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
 }
 
 /** Human reply for the default EXECUTE decision. Kept short (worker-safe). */
-function applyDefault(res: Awaited<ReturnType<typeof routeCommand>>): string {
+function applyDefault(res: Awaited<ReturnType<typeof routeCommand>>, rawText = ""): string {
   const label: Record<number, string> = {
     100: "Sistem/override.",
     90: "Perintah darurat dijalankan.",
@@ -212,7 +212,34 @@ function applyDefault(res: Awaited<ReturnType<typeof routeCommand>>): string {
     50: "Status dimuat.",
     30: "Ok.",
   };
+  // Search / research requests → helpful, state WHAT I'll look into (no live
+  // browsing, just a declared plan so the user know what was understood).
+  const searchTopic = extractTopic(rawText);
+  if (searchTopic) {
+    return (
+      `Saya akan bantu mencari: *${searchTopic}*.\n` +
+      `Sebagai J.A.R.V.I.S. di edge, tempat terbaik memulai: ` +
+      `/health, /status, /dms_status — atau beri lokasi web/topik spesifik.`
+    );
+  }
   return label[res.decision.priority] ?? "Ok.";
+}
+
+/** Pull a concrete topic from a search/summarize request. */
+function extractTopic(text: string): string | null {
+  const low = text.trim().toLowerCase();
+  // Capture text following a research keyword (context-aware, greedy to EOL).
+  const m = low.match(
+    /\b(?:cari|search|tentang|mengenai|ringkas|summarize|artikel|topik|info|informasi)\b\s*[:\-]?\s*(.+)$/,
+  );
+  if (!m) return null;
+  let topic = m[1]
+    .replace(/^(bantu|tolong|buatkan|please|let me|lagi|dong|sudah|untuk)\s*/i, "")
+    .replace(/[?.!,;:]+$/g, "")
+    .trim();
+  if (!topic) return null;
+  // If we captured filler instead of a real topic, require a min length.
+  return topic.length >= 3 ? topic.slice(0, 120) : null;
 }
 
 /** Read whether the owner has ratified a constitution (for /status). */
