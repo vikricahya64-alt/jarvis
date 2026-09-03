@@ -93,14 +93,35 @@ Stack ini mewarisi SEMUA kemampuan hierarki perintah L11 python sebelumnya:
 Perintah Telegram baru: `/never <frasa>`, `/mark_stop <frasa>`, `/pause`,
 `/resume`, `/obedience_report`, `/queue_status`, `/dms_status`.
 
+## 5c. Kognitif edge (menutup gap L4→L8/L10)
+
+Selain kepatuhan, edge kini punya jalur penalaran nyata di `lib/ai.ts`
+(fail-closed: saat offline/Groq kosong ia mundur ke balasan template, tak pernah
+menimbulkan error):
+
+| Kemampuan | Lokasi | Cara pakai |
+|-----------|--------|-----------|
+| **Respon generatif Groq** (llama-3.3-70b) | `groqRespond()` | otomatis — jawaban kalimat utuh, bukan label canned |
+| **Web search DuckDuckGo** (gratis, tanpa API key) | `ddgSearch()` | otomatis — kirim `cari <topik>` / `ringkas <artikel>` |
+| **Sintesis pencarian + LLM + konteks** | `searchAndSynthesize()` | otomatis di jalur EXECUTE untuk teks ber-topik |
+| **Memori giliran percakapan** (last N turn) | `appendMemory()`/`recentContext()` → `conversation_log` (D1) | otomatis; dibatasi ~100 turn per owner |
+| **Queue depth nyata** (dulu selalu 0) | `recordTaskCounters()` → `task_counters` (D1) | otomatis; lihat `/queue_status` |
+| **Laporan kepatuhan Mingguan dikirim** (dulu log-only) | `index.ts` `sendWeeklyObedienceReport()` | cron `0 8 * * *` (Minggu) |
+
+Contoh: `cari tentang implementasi iscsi` → DDG ambil hasil → Groq rangkum →
+balasan ke Telegram + giliran disimpan sebagai konteks turn berikutnya.
+
 ## 6. File penting (cf/)
 
 ```
 wrangler.toml            bindings + vars + cron (3)
 migrations/0001_init.sql schema D1
-src/index.ts             router + cron + queue
+migrations/0002_legacy_inline.sql inline vault payload
+migrations/0003_upgrade.sql task_counters + conversation_log
+src/index.ts             router + cron + queue (+ laporan Mingguan)
 src/workers/task_processor.ts      queue consumer
-src/workers/telegram_webhook.ts    webhook + inline consent/clarify
+src/workers/telegram_webhook.ts    webhook + consent/clarify + jalur AI
+src/lib/ai.ts            groqRespond + ddgSearch + searchAndSynthesize (kognitif)
 src/lib/command_hierarchy.ts       prioritas + clarity + consent + audit + pause
 src/lib/constitutional_guard.ts    fail-closed constitution (L11 python port)
 src/lib/dead_mans_switch.ts        state machine D1 (stage transitions)
