@@ -536,7 +536,21 @@ export async function orchestrateResearch(
     // 4) Writer (synthesize from verified facts + snippets)
     let reply = await runWriter(env, userText, topic, gathers, facts, owner);
     calls += 1;
-    if (!reply) return null;
+    // Partial preservation (Gloo/CometAPI 2026): if the writer fails but
+    // search results exist, construct a snippet-based answer rather than
+    // discarding them entirely — the owner always gets SOMETHING.
+    if (!reply) {
+      const hasFindings = gathers.some((g) => g.findings.length > 0);
+      if (hasFindings) {
+        const partial = gathers
+          .flatMap((g) => g.findings.map((f) => `• ${f.title}${f.url ? ` (${f.url})` : ""} — ${f.snippet}`))
+          .slice(0, 9)
+          .join("\n");
+        reply = `Hasil riset tentang *${topic}* (ringkasan mentah — writer gagal, partial preservation):\n\n${partial}\n\n(J.A.R.V.I.S. partial fallback — tanpa sintesis LLM.)`;
+      } else {
+        return null;
+      }
+    }
     if (calls > MAX_TOTAL_LLM_CALLS) return reply;
 
     // 5) Level 15 DEEP/RECURSIVE RESEARCH — bounded self-critique.

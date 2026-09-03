@@ -81,3 +81,24 @@ baru**.
   mengarang), jujur terhadap ketidakpastian ("Belum terverifikasi:"), dan memberi
   fallback yang jelas & berarah (hasil mentah / akui outage + coba lagi) — bukan
   "maaf generik". Menjaga prinsip Grice + grounding dari temuan riset jawaban-input.
+
+## Referensi input/output framework 2026
+
+| Modul | Temuan riset | Penerapan di JARVIS |
+|---|---|---|
+| `normalize.ts` | Han & Baldwin (2013) Lexical normalization for social media text | Kamus slang Indonesia curatorial OOV→canonical — "detect-then-normalize" layer termurah; hanya token non-standar yang diekspansi |
+| `normalize.ts` | MultiLexNorm++ (2026) | Pre-detection OOV flags → ekspansi hanya token yang sudah terdeteksi non-standar |
+| `normalize.ts` | ViLexNorm (EACL '24) | Corpus normalisasi sosial-media Asia → kamus slang Telegram/WhatsApp JARVIS |
+| `normalize.ts` | QueryStack Fuzzy (2026) Levenshtein/trigram/phonetic | Damerau-Levenshtein untuk typo + trigram pre-filter → routing tanpa vector DB |
+| `extractTopic` | QueryStack (2026) / Kondrak n-gram LCS | Misspelling tahan: "tenteng"→"tentang", "ulsn"→"ulasan", "gmn"→"bagaimana" → zero-budget routing |
+| `extractTopic` | Li et al. Hard-negative OOS (LREC '24) | Test hard negatives agar query nyaris topic marker tidak salah DEFER |
+| `isResearchClass` | FCSLM (EMNLP '25) + UDRIL (ACL-I '25) | Heuristic shortlist → LLM hanya saat konfidensi rendah — bounded-LLM-calls |
+| `isResearchClass` | Label Space Reduction (arXiv '25) | Feed hanya top intents heuristic ke LLM shot — hemat budget |
+| `subagents` writer | SLOT (EMNLP-I '25) | Post-processing deterministik: "produce content" dipisah dari "format it" → 99.5% schema accuracy |
+| `reflectOnTurn` | Schema RL (ACL '25) | `parseReflection`: validator fin-grained, skor partial, bukan cuma pass/fail — reflection output tetap parseable meskipun LLM deviates |
+| `searchAndSynthesize` | Gloo production guide (2026) + CometAPI (2026) | Partial preservation: jika writer gagal tapi gathers ada → konstruksi snippet-based answer daripada membuang semua hasil riset |
+| `searchAndSynthesize` | CometAPI (2026) "How to Build Robust LLM Fallback" | Fallback adalah keputusan rute; validasi output fallback sama skema — model swap aman downstream |
+| webhook `act()` | CLAM (NeurIPS '22) + ECLAIR (2025) | Clarification: saat konfidensi rendah → pertanyaan chiarifikasi daripada menebak — user tidak pernah terjebak |
+| webhook error | Fail-closed error handling | `try/catch` di `act()` → fallback "Maaf, terjadi kesalahan internal." → user selalu mendapat pesan |
+| `normalize.ts` | Resilience + fallback (CometAPI '26) | Semua fallback output divalidasi terhadap skema yang sama — model swap aman |
+| intent routing | MAC (IW-SDS '26) | Follow-up/continuation: bawa intent & konteks dari pesan sebelumnya, jangan deteksi dari nol |

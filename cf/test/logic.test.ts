@@ -12,7 +12,7 @@ import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
 import { isFollowUpQuery } from "../src/lib/ai";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
-import { behaviorAffinity, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
+import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 
 async function testPredictiveUrgencyRanking() {
   // Deterministic ranking: approval (open/expiring proposals) must rank first,
@@ -132,6 +132,23 @@ function testNonSlangPassThrough() {
   assert.strictEqual(normalizeInput("help"), "help");
 }
 
+function testExpandedSlang() {
+  // Extended Indonesian social-media/Telegram slang dictionary (research-backed:
+  // Han & Baldwin 2013, ViLexNorm EACL'24, MultiLexNorm++ 2026). All harmless
+  // filler — never expands into a verb/command the guard must see.
+  assert.strictEqual(normalizeInput("mksh ya"), "terima kasih ya", "mksh -> terima kasih");
+  assert.strictEqual(normalizeInput("klo gitu kapan"), "kalau gitu kapan", "klo -> kalau");
+  assert.strictEqual(normalizeInput("cma mau tanya"), "cma mau tanya", "'cma' (not in dict) passes");
+  assert.strictEqual(normalizeInput("mantul"), "mantap", "mantul -> mantap");
+  assert.strictEqual(normalizeInput("bener banget"), "benar banget", "bener -> benar");
+  assert.strictEqual(normalizeInput("jngn lupa"), "jangan lupa", "jngn -> jangan");
+  assert.strictEqual(normalizeInput("skrng gimana"), "sekarang gimana", "skrng -> sekarang");
+  assert.strictEqual(normalizeInput("plis bantu"), "tolong bantu", "plis -> tolong");
+  // A real verb/command word is NOT expanded (guard must still see it).
+  assert.strictEqual(normalizeInput("reset todo"), "reset todo", "real command words preserved");
+  assert.strictEqual(normalizeInput("hapus"), "hapus", "verb preserved");
+}
+
 function testFollowUpDetection() {
   // Follow-up phrasing that extends a prior answer (no fresh topic marker).
   for (const q of ["lebih dalam", "lanjut", "yang tadi", "perinci lebih detail", "tambahin informasi", "jelasin lebih", "expand dong"]) {
@@ -141,6 +158,30 @@ function testFollowUpDetection() {
   for (const q of ["cari bisnis kopi 2026", "Apa itu ribosom", "bandingkan hp dan laptop"]) {
     assert.ok(!isFollowUpQuery(q), `fresh topic must NOT be a follow-up: ${q}`);
   }
+}
+
+function testFuzzyExtractTopic() {
+  // extractTopic fuzzy tolerance (QueryStack/Kondrak 2026): common misspellings
+  // of topic markers must still be recognized, so JARVIS routes to search
+  // instead of wrongly DEFERing with "Aksi ditangguhkan."
+  const { extractTopic } = require("../src/lib/ai");
+  // Standard markers.
+  assert.ok(extractTopic("cari bisnis kopi"), "standard 'cari' marker");
+  assert.ok(extractTopic("tentang ekonomi digital"), "standard 'tentang' marker");
+  assert.ok(extractTopic("analisis pasar saham"), "standard 'analisis' marker");
+  assert.ok(extractTopic("info cuaca jakarta"), "standard 'info' marker");
+  assert.ok(extractTopic("review hp terbaru"), "standard 'review' marker");
+  assert.ok(extractTopic("bagaimana cara investasi"), "standard 'bagaimana' marker");
+  // Fuzzy misspelling variants.
+  assert.ok(extractTopic("carii bisnis kopi"), "extra 'i' in 'carii'");
+  assert.ok(extractTopic("tenteng ekonomi digital"), "'tenteng' variant of 'tentang'");
+  assert.ok(extractTopic("info cuaca jakarta"), "standard 'info'");
+  assert.ok(extractTopic("ulsn hp terbaru"), "'ulsn' variant of 'ulasan'");
+  assert.ok(extractTopic("gmn cara investasi"), "'gmn' variant of 'bagaimana'");
+  // Non-topic (no marker) must NOT match.
+  assert.strictEqual(extractTopic("reset todo"), null, "no marker -> null");
+  assert.strictEqual(extractTopic("hapus data ini"), null, "verb-only -> null");
+  assert.strictEqual(extractTopic("apa kabar"), null, "greeting -> null");
 }
 
 async function testFeedbackLearning() {
@@ -251,6 +292,43 @@ async function testBehaviorAlignmentRanking() {
     `half-life decay affine math must match (got ${atHalfLife["timing"]}, want ${expected})`);
 }
 
+function testReflectionParser() {
+  // Deterministic reflection parser (SLOT EMNLP-I '25 / SchemaRL ACL '25):
+  // must robustly extract SKOR/CACAT/PERBAIKAN even when the LLM deviates from
+  // the strict template — no fragile single-line regex dependency.
+
+  // Well-formed strict output.
+  const good = parseReflection(
+    "SKOR: 4\nCACAT: jawaban kurang sumber\nPERBAIKAN: tambahkan sitasi resmi pada klaim utama.",
+  );
+  assert.strictEqual(good.score, 4);
+  assert.ok(good.critique.includes("kurang sumber"));
+  assert.ok(good.improvement.includes("sitasi resmi"));
+
+  // Deviated: extra preface + lowercase labels + multi-line improvement.
+  const dev = parseReflection(
+    "Saya nilai:\nskor: 2\ncacat: terlalu panjang\nperbaikan: ringkas menjadi\n3 baris saja.",
+  );
+  assert.strictEqual(dev.score, 2);
+  assert.ok(dev.critique.includes("terlalu panjang"));
+  assert.ok(dev.improvement.includes("ringkas menjadi"));
+
+  // Score out of range is clamped to 1..5.
+  const clamp = parseReflection("SKOR: 9\nCACAT: x\nPERBAIKAN: perbaiki sesuatu yang jelas dan cukup panjang.");
+  assert.strictEqual(clamp.score, 5);
+  const low = parseReflection("SKOR: 0\nCACAT: y\nPERBAIKAN: perbaiki sesuatu yang jelas dan cukup panjang.");
+  assert.strictEqual(low.score, 1);
+
+  // Missing PERBAIKAN label -> no improvement (fail-closed: keep original).
+  const noFix = parseReflection("SKOR: 3\nCACAT: sedikit kurang relevan");
+  assert.strictEqual(noFix.improvement, "");
+
+  // Empty / no score -> safe defaults (score 0, no crash).
+  const empty = parseReflection("");
+  assert.strictEqual(empty.score, 0);
+  assert.strictEqual(empty.improvement, "");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -258,10 +336,13 @@ async function main() {
   testRawCommandArgsPreserved();
   testEmptyInput();
   testNonSlangPassThrough();
+  testExpandedSlang();
   testFollowUpDetection();
+  testFuzzyExtractTopic();
   await testPredictiveUrgencyRanking();
   await testFeedbackLearning();
   await testBehaviorAlignmentRanking();
+  testReflectionParser();
   console.log("LOGIC TESTS PASSED");
 }
 
