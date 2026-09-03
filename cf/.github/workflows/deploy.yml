@@ -1,0 +1,66 @@
+# Deploy the Cloudflare Worker from GitHub when code changes are pushed to
+# main. Builds with wrangler (reads bindings from cf/wrangler.toml) and pushes
+# straight to Cloudflare — no local token needed, so token IP-filtering is a
+# non-issue here.
+#
+# Secret required in the GitHub repo:
+#   CF_API_TOKEN = Cloudflare API token that can edit the "jarvis-sovereign"
+#                  Worker (Workers Scripts: Edit) AND D1 (account-scope).
+#                  Ideally NOT IP-restricted, since GitHub runner IPs rotate.
+#
+# Optional secrets (fall back to wrangler.toml [vars] if unset):
+#   CF_ACCOUNT_ID = the account id (019eb7798d76ffff19fe8f3527f39d47)
+
+name: Deploy Worker to Cloudflare
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cf/**"
+  workflow_dispatch:
+
+concurrency:
+  group: cf-deploy
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: cf
+
+jobs:
+  deploy:
+    name: Build & Deploy jarvis-sovereign
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cf/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Run safety tests
+        run: npm run test:safety
+
+      - name: Apply D1 migrations
+        id: migrate
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID || vars.CF_ACCOUNT_ID || '019eb7798d76ffff19fe8f3527f39d47' }}
+        run: npm run db:migrate
+
+      - name: Deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID || vars.CF_ACCOUNT_ID || '019eb7798d76ffff19fe8f3527f39d47' }}
+        run: npx wrangler deploy
