@@ -24,9 +24,16 @@ CREATE INDEX IF NOT EXISTS idx_cov_active ON covenant_clauses(is_active);
 -- Database-level immutability: prevent ANY update/delete of covenant rows.
 -- Signing a new version INSERTS a new row (and a separate INSERT toggles the
 -- old row's is_active via a NEWER row, never an UPDATE — handled in ts).
-DROP TRIGGER IF EXISTS prevent_covenant_modification;
-CREATE TRIGGER prevent_covenant_modification
-BEFORE UPDATE OR DELETE ON covenant_clauses
+-- Two triggers (one per event) because D1/SQLite rejects `UPDATE OR DELETE`.
+DROP TRIGGER IF EXISTS prevent_covenant_modification_update;
+DROP TRIGGER IF EXISTS prevent_covenant_modification_delete;
+CREATE TRIGGER prevent_covenant_modification_update
+BEFORE UPDATE ON covenant_clauses
+BEGIN
+    SELECT RAISE(ABORT, 'Covenant is immutable');
+END;
+CREATE TRIGGER prevent_covenant_modification_delete
+BEFORE DELETE ON covenant_clauses
 BEGIN
     SELECT RAISE(ABORT, 'Covenant is immutable');
 END;
