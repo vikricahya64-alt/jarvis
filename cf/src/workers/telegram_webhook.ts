@@ -9,7 +9,7 @@
 // holds D1 state and issues the inline-button consent flow.
 //=====================================================================
 
-import { Env, touchActivity, logConsent } from "../lib/db";
+import { Env, touchActivity, logConsent, getDmsConfig, DmsConfig } from "../lib/db";
 import { sendMessage, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, InlineButton } from "../lib/telegram";
 import {
   routeCommand, markExplicitStop, setAutonomyPaused, isAutonomyPaused,
@@ -100,6 +100,14 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     await sendMessage(env, r, JSON.stringify(await queueStatus(env)));
     return new Response("ok", { status: 200 });
   }
+  if (trimmed === "/status") {
+    const [paused, cfg] = await Promise.all([
+      isAutonomyPaused(env, r),
+      getStatusConfig(env, r),
+    ]);
+    await sendMessage(env, r, statusReport(cfg, paused));
+    return new Response("ok", { status: 200 });
+  }
   if (trimmed === "/checkin" || trimmed === "/stop" || trimmed === "/kill") {
     await sendMessage(env, r, await checkIn(env, r));
     return new Response("ok", { status: 200 });
@@ -132,6 +140,14 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
       `Audit kepatuhan: dictatat per perintah di obedience_audit.\n` +
       `Status otonomi: ${paused ? "⏸️ PAUSED" : "▶️ aktif"}\n` +
       `Lihat /queue_status, /dms_status.`);
+    return new Response("ok", { status: 200 });
+  }
+
+  // Friendly greeting (INFO, no action) — answered warmly instead of falling
+  // into the fail-closed guard. Greetings don't trigger any autonomous step.
+  if (trimmed === "/start" || /^(halo|hai|hi|hello|hey|pagi|siang|sore|malam|assalamualaikum|assalamu'alaikum|selamat)/.test(trimmed)) {
+    await sendMessage(env, r,
+      "Halo. J.A.R.V.I.S. siap. Ketik /status untuk kondisi sistem, atau /health untuk uji sehat.");
     return new Response("ok", { status: 200 });
   }
 
@@ -197,6 +213,27 @@ function applyDefault(res: Awaited<ReturnType<typeof routeCommand>>): string {
     30: "Ok.",
   };
   return label[res.decision.priority] ?? "Ok.";
+}
+
+/** Read whether the owner has ratified a constitution (for /status). */
+async function getStatusConfig(env: Env, owner: number): Promise<{ constitutionRatified: boolean }> {
+  const cfg: DmsConfig = await getDmsConfig(env, owner);
+  const constitutionRatified =
+    !!cfg.constitution && typeof cfg.constitution === "object" && Object.keys(cfg.constitution).length > 0;
+  return { constitutionRatified };
+}
+
+/** Compose the /status reply. */
+function statusReport(cfg: { constitutionRatified: boolean }, paused: boolean): string {
+  const lines = [
+    "📊 *Status J.A.R.V.I.S.*",
+    "",
+    `• Otonomi: ${paused ? "⏸️ PAUSED" : "▶️ aktif"}`,
+    `• Konstitusi: ${cfg.constitutionRatified ? "✅ diratifikasi" : "⚠️ belum diratifikasi (modus fail-closed)"}`,
+    ``,
+    `Perintah: /health · /dms_status · /queue_status · /pause · /resume · /obedience_report`,
+  ];
+  return lines.join("\n");
 }
 
 export { act, OWNER_OK, RATE_LIMIT_MS };
