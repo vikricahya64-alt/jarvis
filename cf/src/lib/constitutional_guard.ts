@@ -40,10 +40,10 @@ function matchesKeyword(low: string, key: string): boolean {
 /** Built-in immutable principles (the "sovereignty constitution"). */
 const PRINCIPLES: Array<{ id: string; key: string; reason: string }> = [
   { id: "no_deceive", key: "deceive/trick/manipulate", reason: "J.A.R.V.I.S. tidak boleh menipu pemilik." },
-  { id: "no_destroy", key: "wipe/delete/erase/destroy/terminate", reason: "Tindakan destruktif perlu izin eksplisit." },
-  { id: "no_exfiltrate", key: "share/publish/transfer/sell/release", reason: "PII/aset tidak boleh dibocorkan tanpa izin." },
+  { id: "no_destroy", key: "wipe/delete/erase/destroy/terminate/hapus/menghapus/menghapuskan/membobol/bobol", reason: "Tindakan destruktif perlu izin eksplisit." },
+  { id: "no_exfiltrate", key: "share/publish/transfer/sell/release/bocorkan", reason: "PII/aset tidak boleh dibocorkan tanpa izin." },
   { id: "no_autonomy_destructive", key: "kill/override/hard reset/full wipe", reason: "Saklar kelangsungan dipegang pemilik." },
-  { id: "no_money", key: "money/payment/bayar/transfer uang/otp/identity", reason: "Aksi finansial/identitas butuh persetujuan manusia." },
+  { id: "no_money", key: "money/payment/bayar/transfer uang/otp/identity/password/pin kartu/bobol", reason: "Aksi finansial/identitas butuh persetujuan manusia." },
 ];
 
 /** Keyword-based autonomous risk estimator (cheap, deterministic). */
