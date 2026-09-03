@@ -17,7 +17,7 @@ import {
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus, recordTaskCounters, appendMemory, rememberMemory } from "../lib/db";
-import { searchAndSynthesize, extractTopic } from "../lib/ai";
+import { searchAndSynthesize, extractTopic, parseTranslate, translateText } from "../lib/ai";
 import { covenantStatusText, signClause } from "../lib/covenant_core";
 import { identityStatusText } from "../lib/identity_anchor";
 import { getPlans, getScheduledTasks } from "../lib/maestro";
@@ -419,6 +419,19 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
       // Raise the edge from canned to real reasoning (L8/L10): if the owner
       // asked for research/search/recap, run DDG web search + Groq synthesis
       // with conversation-memory context. Fail-closed to the canned label.
+      // Translation is a dedicated read-only request ("Terjemahkan <teks>")
+      // handled here BEFORE the generic search path so it never falls through
+      // to the bare "Ok." reply.
+      const tr = parseTranslate(text);
+      if (tr) {
+        const translated = await translateText(env, tr.source, tr.target);
+        const out = translated
+          ? (tr.target ? `Terjemahan (${tr.target}):\n` : "Terjemahan:\n") + translated
+          : `Maaf, gagal menerjemahkan saat ini. Coba lagi sebentar.`;
+        await recordTaskCounters(env, "translate", owner);
+        await fire(sendMessage(env, owner, out));
+        break;
+      }
       const topic = extractTopic(text);
       if (topic) {
         // Friendly info/query EXECUTE → real search + synthesis (+ memory).

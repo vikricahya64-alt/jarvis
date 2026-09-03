@@ -718,6 +718,32 @@ async function testPreConstitutionResearchWhitelist() {
   }
 }
 
+async function testTranslatePath() {
+  // Regression for "Terjemahkan -> Ok." with no output: the translate request
+  // must be parsed and routed to a real translation path (read-only), not the
+  // generic EXECUTE "Ok." fallback.
+  const { parseTranslate } = await import("../src/lib/ai");
+
+  const ex = {
+    "Terjemahkan analisis tentang ekonomi": { target: null, source: "analisis tentang ekonomi" },
+    "Terjemahkan ke Inggris peluang bisnis 2026": { target: "English", source: "peluang bisnis 2026" },
+    "translate to Japanese hello world": { target: "Japanese", source: "hello world" },
+    "Terjemahkan bisnis kopi": { target: null, source: "bisnis kopi" },
+  };
+  for (const [q, want] of Object.entries(ex)) {
+    const got = parseTranslate(q);
+    assert.ok(got, `translate request must parse: ${q.slice(0, 30)}`);
+    assert.strictEqual(got.target, want.target, `target mismatch for: ${q}`);
+    assert.strictEqual(got.source, want.source, `source mismatch for: ${q}`);
+  }
+  // Bare "Terjemahkan" / "Terjemahkan ke Inggris" (no text) is NOT a translate
+  // request with content to translate — must parse to null (not a real reply).
+  assert.strictEqual(parseTranslate("Terjemahkan"), null, "bare translate is not a translation request");
+  assert.strictEqual(parseTranslate("Terjemahkan ke Inggris"), null, "no source text -> not translatable");
+  // A non-translate query must NOT parse as a translate request.
+  assert.strictEqual(parseTranslate("bagaimana menghapus data"), null, "non-translate must not parse");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -737,6 +763,7 @@ async function main() {
   await testLevel14Subagents();
   await testGuardDerivedForms();
   await testPreConstitutionResearchWhitelist();
+  await testTranslatePath();
   console.log("SAFETY TESTS PASSED");
 }
 
