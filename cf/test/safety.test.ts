@@ -374,6 +374,16 @@ async function testLevel12Integrity() {
   // Recognition of the owner's Telegram ID: the /ratify path must sit behind
   // the owner gate so non-owners can never ratify.
   assert.ok(/\bOWNER_OK\b/.test(wh), "webhook must gate commands with OWNER_OK (owner Telegram ID)");
+
+  // (10) /cari without a topic must NOT fall through to the misleading
+  //      "Sistem/override." — it must give usage instead. With a topic the
+  //      EXECUTE path must reach DDG search via extractTopic/searchAndSynthesize.
+  assert.ok(/Gunakan: \/cari <topik>/.test(wh),
+    "bare /cari must show usage, not 'Sistem/override.'");
+  const ai = await import("../src/lib/ai");
+  assert.strictEqual(ai.extractTopic("/cari artikel sejarah komputer"), "artikel sejarah komputer",
+    "extractTopic must capture topic after /cari");
+  assert.strictEqual(ai.extractTopic("/cari"), null, "bare /cari has no topic");
 }
 
 async function main() {
