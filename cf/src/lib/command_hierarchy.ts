@@ -333,7 +333,9 @@ export async function routeCommand(
   // clarity gate — otherwise benign "cari <topik>" conversations wrongly reply
   // "Aksi ditangguhkan." This only promotes queries that ALREADY passed the
   // fail-closed constitutional guard above, so no risk guard is weakened.
-  if (origin === "user" && /\b(?:cari|search|ringkas|summarize|tentang|mengenai|topik|info|informasi)\b/i.test(rawText)) {
+  // The marker set mirrors extractTopic() so research-style phrasing
+  // ("Analisis bisnis ...") is also served rather than defers.
+  if (origin === "user" && /\b(?:cari|search|ringkas|summarize|tentang|mengenai|topik|info|informasi|artikel|analis\w*|laporan|report|review|perbandingan|bandingkan|perkembangan|ulasan|kajian|menurut|menurutmu|bagaimana)\b/i.test(rawText)) {
     const decision: Decision = {
       action: "EXECUTE",
       compliance: "COMPLIANT",

@@ -22,11 +22,14 @@ const GROQ_MODEL = "llama-3.3-70b-versatile";
 const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models/";
 const GEMINI_FREE_MODEL = "gemma-4-31b-it";
 
-/** Pull a concrete topic from a search/summarize request (shared with webhook). */
+/** Pull a concrete topic from a search/summarize request (shared with webhook).
+ *  Recognizes explicit search verbs AND research/analytical markers so queries
+ *  like "Analisis bisnis paling menguntungkan..." (which carry no `cari`/`tentang`
+ *  word) still reach the search path instead of wrongly DEFERing. */
 export function extractTopic(text: string): string | null {
   const low = text.trim().toLowerCase();
   const m = low.match(
-    /\b(?:cari|search|tentang|mengenai|ringkas|summarize|artikel|topik|info|informasi)\b\s*[:\-]?\s*(.+)$/,
+    /\b(?:cari|search|tentang|mengenai|ringkas|summarize|artikel|topik|info|informasi|analis\w*|laporan|report|review|perbandingan|bandingkan|perkembangan|ulasan|kajian|menurut|menurutmu|bagaimana)\b\s*[:\-]?\s*(.+)$/,
   );
   if (!m) return null;
   let topic = m[1]
