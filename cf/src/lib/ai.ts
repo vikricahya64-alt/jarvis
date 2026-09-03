@@ -231,6 +231,52 @@ export async function ddgSearch(env: Env, query: string): Promise<string | null>
   return result;
 }
 
+/** A single web-search hit with its snippet (untrusted, must be spotlighted
+ *  before reaching any LLM — see retrieval rail in subagents.ts). */
+export interface SearchHit {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+/** Multi-result web search (parallel fan-out support). Same layered-fallback
+ *  strategy as ddgSearch() but returns the top N structured findings — richer
+ *  evidence for the sub-agent writer to synthesize across multiple angles.
+ *  Always fail-open: returns [] when unreachable (caller degrades gracefully). */
+export async function searchTopResults(env: Env, query: string, limit = 3): Promise<SearchHit[]> {
+  const attempts: Array<() => Promise<SearchHit[]>> = [
+    // 1) DDG HTML endpoint — multiple titled results with snippets + hrefs.
+    async () => {
+      const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      const res = await fetchWithTimeout(url, { headers: { "Accept-Language": "id,id-ID;q=0.9,en;q=0.8" } }, 10000);
+      if (!res.ok) return [];
+      const html = await res.text();
+      const titles = [...html.matchAll(/class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi)];
+      const snips = [...html.matchAll(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi)];
+      const hits: SearchHit[] = [];
+      for (let i = 0; i < titles.length && hits.length < limit; i++) {
+        const title = stripTags(titles[i][2] || "").slice(0, 180);
+        if (!title) continue;
+        const snippet = (snips[i]?.[1] ? stripTags(snips[i][1]) : "").slice(0, 340);
+        // href is a DDG redirect; keep a short urlsafe form for citation.
+        const href = titles[i][1] || "";
+        const url = /uddg=([^&]+)/.test(href) ? decodeURIComponent(href.match(/uddg=([^&]+)/)![1]) : href.slice(0, 200);
+        hits.push({ title, url, snippet });
+      }
+      return hits;
+    },
+  ];
+  let hits: SearchHit[] = [];
+  for (const tryFn of attempts) {
+    const r = await tryFn().catch(() => []);
+    if (r.length) {
+      hits = r;
+      break;
+    }
+  }
+  return hits;
+}
+
 /** Combined: search the web AND get a generative (Groq→Gemini) synthesis.
  *  Falls back gracefully at each step. Returns { reply, source, topic }. */
 export async function searchAndSynthesize(

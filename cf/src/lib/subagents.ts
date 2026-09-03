@@ -32,7 +32,7 @@
 //=====================================================================
 
 import { Env, searchMemory, recentContext } from "./db";
-import { ddgSearch, llmRespond } from "./ai";
+import { llmRespond, searchTopResults } from "./ai";
 import { getBehaviorContext } from "./evolution";
 import { isObj, parseStructured, cleanStr } from "./structured";
 
@@ -94,24 +94,32 @@ export function isResearchClass(topic: string, userText: string): boolean {
 // ---- fetch per-angle (deterministic, no LLM per angle) -----------------
 interface Finding {
   title: string;
+  url: string;
   snippet: string;
 }
 interface AngleGather {
   angle: string;
   findings: Finding[];
 }
+/** Gather top-N findings for one angle (deterministic; no LLM call per angle).
+ *  Every hit is untrusted and gets spotlighted by the caller before the writer. */
 async function gatherAngle(env: Env, angle: string): Promise<AngleGather> {
-  const raw = await ddgSearch(env, angle);
-  const findings: Finding[] = [];
-  if (raw) {
-    // ddgSearch returns a " — " joined title/snippet string. Split on the
-    // first separator to (tentatively) separate title from snippet.
-    const sep = raw.indexOf(" — ");
-    const title = sep > 0 ? raw.slice(0, sep) : raw;
-    const snippet = sep > 0 ? raw.slice(sep + 3) : "";
-    findings.push({ title: title.slice(0, 160), snippet: snippet.slice(0, 340) || title.slice(0, 340) });
-  }
+  const hits = await searchTopResults(env, angle, MAX_FINDINGS_PER_ANGLE);
+  const findings: Finding[] = hits.map((h) => ({
+    title: h.title.slice(0, 180),
+    url: h.url.slice(0, 200),
+    snippet: h.snippet.slice(0, 340),
+  }));
   return { angle, findings };
+}
+
+/** Fan out all angle searches in PARALLEL (independent I/O — no shared state,
+ *  per the Anthropic parallelization pattern) to cut latency vs. sequential.
+ *  Each angle is its own sub-agent worker with isolated results. Returns leans
+ *  toward the angles that found evidence but keeps all for the writer. */
+async function gatherAllParallel(env: Env, angles: string[]): Promise<AngleGather[]> {
+  const results = await Promise.all(angles.slice(0, MAX_ANGLES).map((a) => gatherAngle(env, a)));
+  return results;
 }
 
 // ---- sub-agent system prompts (fresh context + constraint manifest) -----
@@ -194,7 +202,12 @@ async function runWriter(
   if (behaviorContext) context.push({ role: "user", content: behaviorContext });
 
   const spots = gathers
-    .map((g) => `${g.angle}:\n` + g.findings.map((f) => spotlightUntrusted(g.angle, `${f.title} - ${f.snippet}`)).join("\n"))
+    .map((g) =>
+      `${g.angle}:\n` +
+      g.findings
+        .map((f) => spotlightUntrusted(g.angle, `${f.title}${f.url ? ` (${f.url})` : ""} - ${f.snippet}`))
+        .join("\n"),
+    )
     .join("\n\n");
   const prompt =
     `Pertanyaan pemilik: "${userText}"\n` +
@@ -245,11 +258,9 @@ export async function orchestrateResearch(
     calls += 1;
     if (calls > MAX_TOTAL_LLM_CALLS) return null;
 
-    // 2) Searcher (deterministic per angle, no LLM each — stays cheap)
-    const gathers: AngleGather[] = [];
-    for (const angle of plan.angles.slice(0, MAX_ANGLES)) {
-      gathers.push(await gatherAngle(env, angle));
-    }
+    // 2) Searcher (fan out ALL angles IN PARALLEL — deterministic DDG, no LLM
+    //    each — so richer multi-finding evidence arrives with less latency).
+    const gathers = await gatherAllParallel(env, plan.angles);
 
     // 3) Writer (synthesize)
     const reply = await runWriter(env, userText, topic, gathers, owner);

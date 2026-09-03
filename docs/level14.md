@@ -47,14 +47,23 @@ small LLM (Groq llama + Gemini fallback) on Cloudflare Workers free tier:
 ```
 Router (deterministic effort-scaling: isResearchClass?)
   └─ if research-class ──▶ Researcher sub-agent (1 LLM: plans 1..3 angles)
-         ▼ (per angle, deterministic DDG — no extra LLM per angle)
-      Searcher (sanitize + spotlight findings)
-         ▼
-      Writer sub-agent (1 LLM: synthesizes evidence-based reply;
+         ▼ (per angle — ALL FANNED OUT IN PARALLEL via Promise.all;
+            deterministic DDG, no LLM per angle)
+      Searcher (multi-finding: searchTopResults extracts title+url+snippet)
+         ▼ (sanitize + spotlight each hit; urls preserved for citation)
+      Writer sub-agent (1 LLM: synthesizes cross-angle, evidence-based reply;
                         injects memory + L13 behavior context)
          ▼
       Verifier (optional 1 LLM, only for long replies): output rail / abstain
 ```
+
+> **Parallel fan-out (enhancement):** the per-angle searches now run **in
+> parallel** (`Promise.all`), not sequentially — lowering latency on
+> multi-angle research. Each angle is an independent worker with isolated,
+> rich evidence: `searchTopResults` returns up to `MAX_FINDINGS_PER_ANGLE`
+> structured hits (title, real URL, snippet) per angle, preserving the URL
+> for citation while still spotlighting every hit as untrusted. `ddgSearch`
+> (single-result) stays untouched for the cheap single-pass path.
 
 **LLM-call budget** (research-backed cap): simple = **1**; complex = **2–3**
 (researcher + writer [+ verifier]). `MAX_TOTAL_LLM_CALLS = 3`.
@@ -71,11 +80,13 @@ Router (deterministic effort-scaling: isResearchClass?)
 ## Files
 
 - `src/lib/structured.ts` — Instructor-style JSON scaffold + validators.
-- `src/lib/subagents.ts` — the orchestrator-worker pipeline + roles.
+- `src/lib/subagents.ts` — the orchestrator-worker pipeline + roles
+  (parallel fan-out via `gatherAllParallel`).
 - `src/lib/ai.ts` — `searchAndSynthesize` now gates orchestration on
-  `isResearchClass` for research-class queries, else single-pass.
+  `isResearchClass` for research-class queries, else single-pass; adds
+  `searchTopResults` (multi-finding, url-bearing) for the fan-out.
 - `test/safety.test.ts` — `testLevel14Subagents` (effort-scaling, budget caps,
-  structured-output correction, sovereignty wiring)
+  structured-output correction, sovereignty wiring, parallel fan-out)
 
 ## Budget / Free-Tier Impact
 
