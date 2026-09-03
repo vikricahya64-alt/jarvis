@@ -50,6 +50,31 @@ wrangler tail                    # stream log real-time
 Bila melihat `stage2(armed)` dan kamu **masih ada di sini**, kirim `/checkin`
 segera untuk reset ke `idle`.
 
+## 4b. Level 12 (Transcendent Steward) — log & status baru
+
+Cron `0 */6` kini juga menjalankan identity-epoch dan quota refresh (tetap
+dalam budget 3/5 trigger):
+
+- `[cron] identity_epoch: <id> verified` — epoch baru dirantai (konfigurasi di-hash).
+- `[cron] identity_epoch failed <msg>` — rantai identitas gagal → periksa
+  `covenant_clauses`/`identity_epochs`/env. Pastikan konfigurasi tak melenceng.
+- `identityStatusText`/`covenantStatusText` — cek via Telegram `/identity_verify`
+  dan `/covenant_status`.
+
+Status kuota & degradasi (fitur non-esensial dimatikan saat kuota menipis;
+fitur esensial — covenant/DMS/override — **tidak pernah** dimatikan):
+
+- `/degradation_status` — persen kuota + daftar fitur dinonaktifkan.
+- Row `degradation_alerts` ditulis saat ada fitur yang ditangguhkan (nanti
+  diintegrasikan ke kiriman Telegram).
+
+Immutability covenant: tiap percobaan UPDATE/DELETE pada `covenant_clauses`
+ditolak di level DB oleh trigger `prevent_covenant_modification_{update,delete}`
+(log error `Covenant is immutable`). Ini **normal** — bukan kegagalan sistem.
+
+Sunset: `/sunset_preview` hanya evaluasi read-only; tidak ada purge ireversibel
+yang bisa dipicu lewat perintah.
+
 ## 5. Rotasi praktis
 
 - `TELEGRAM_TOKEN`, `TELEGRAM_SECRET`, `GROQ_API_KEY` — set via `bash deploy.sh secrets`.
