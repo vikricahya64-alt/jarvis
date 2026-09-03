@@ -13,7 +13,7 @@
 
 import { Env, recentContext, appendMemory, searchMemory } from "./db";
 import { withResilience, fetchWithTimeout, logRequest } from "./resilience";
-import { getBehaviorContext, reflectOnTurn } from "./evolution";
+import { getAnswerBehaviorContext, reflectOnTurn } from "./evolution";
 import { isResearchClass, orchestrateResearch } from "./subagents";
 
 const GROQ_MODEL = "llama-3.3-70b-versatile";
@@ -460,7 +460,11 @@ export async function searchAndSynthesize(
   // context — this steers behavior toward owner preferences without modifying
   // the system prompt (metacognitive guardrail: append-only context, never
   // prompt rewrite). Fail-open: missing evolution data doesn't block replies.
-  const behaviorContext = await getBehaviorContext(env, topic);
+  // L17: getAnswerBehaviorContext applies the answer-behavior alignment loop —
+  // it suppresses insight categories the reflection loop keeps correcting
+  // (fail-closed dampening), tuning how JARVIS answers without rewriting any
+  // framework logic or prompt.
+  const behaviorContext = await getAnswerBehaviorContext(env, topic);
   if (behaviorContext) {
     context.push({ role: "user", content: behaviorContext });
   }

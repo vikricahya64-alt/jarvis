@@ -508,6 +508,7 @@ async function testLevel13Evolution() {
     "reflectOnTurn", "extractInsightFromCluster", "saveInsight", "runDreamCycle",
     "generateMorningBriefing", "setPreference", "getActivePreferences",
     "disablePreference", "listInsights", "getBehaviorContext", "auditPhantomRules",
+    "behaviorAffinity", "getAnswerBehaviorContext",
   ]) {
     assert.strictEqual(typeof evo[fn as keyof typeof evo], "function", `evolution must export ${fn}`);
   }
@@ -536,7 +537,7 @@ async function testLevel13Evolution() {
   const ai2 = await import("../src/lib/ai");
   assert.ok(typeof (ai2 as unknown as Record<string, unknown>).searchAndSynthesize === "function");
   const aiSrc = readFileSync(new URL("../src/lib/ai.ts", import.meta.url), "utf-8");
-  assert.ok(/getBehaviorContext/.test(aiSrc), "ai must inject behavior context into replies");
+  assert.ok(/getAnswerBehaviorContext/.test(aiSrc), "ai must inject answer-behavior feedback context into replies");
   assert.ok(/reflectOnTurn/.test(aiSrc), "ai must trigger bounded reflection");
 }
 
@@ -893,6 +894,82 @@ async function testAnswerGrounding() {
     "final fallback must give the owner a clear next action");
 }
 
+async function testBehaviorAlignmentFailClosed() {
+  const evo = await import("../src/lib/evolution");
+
+  // FAIL-CLOSED affinity: the answer-behavior learning loop can only DAMPEN a
+  // behavioral category's influence, never amplify it (Learning-from-Negative-
+  // Feedback RecSys '23; Fail-Closed Alignment '26). Exposed bounds enforce it.
+  assert.strictEqual(evo.BEHAVIOR_AFFINITY_NEUTRAL, 1,
+    "trusted categories must sit at identity (no boosting)");
+  assert.ok(evo.BEHAVIOR_AFFINITY_MIN >= 0 && evo.BEHAVIOR_AFFINITY_MIN < 1,
+    "affinity floor must be a valid dampener, strictly below neutral");
+  assert.ok(evo.BEHAVIOR_AFFINITY_MIN > 0,
+    "affinity must never fully zero out a category (stabilized forgetting — no permanent suppression)");
+  assert.ok(evo.BEHAVIOR_HALF_LIFE_DAYS > 0,
+    "correction signal must decay over time so influence recovers (FadeMem/PMORS)");
+
+  // Deterministic aggregate: a category with only *correction* reflections
+  // (reflected=1) must land at the floor, while no reflections stays neutral.
+  const makeDb = (rows: Array<{ category: string; reflected: number; created_at: number }>) => ({
+    prepare: () => ({ bind: () => ({ all: async () => ({ results: rows }) }) }),
+  });
+  const now = Date.now();
+
+  const empty = await evo.behaviorAffinity(
+    { DB: makeDb([]) } as unknown as Parameters<typeof evo.behaviorAffinity>[0], now,
+  );
+  assert.deepStrictEqual(empty, {}, "no reflection history -> no affinity map (all neutral)");
+
+  // Saturated corrections (>= saturation) -> floor, and NEVER above neutral.
+  const saturated = await evo.behaviorAffinity(
+    { DB: makeDb([
+      { category: "format", reflected: 1, created_at: now },
+      { category: "format", reflected: 1, created_at: now },
+      { category: "format", reflected: 1, created_at: now },
+    ]) } as unknown as Parameters<typeof evo.behaviorAffinity>[0], now,
+  );
+  assert.strictEqual(saturated["format"], evo.BEHAVIOR_AFFINITY_MIN,
+    "a category the reflection loop keeps correcting is dampened to the floor");
+
+  // Non-corrections (answer unchanged) are NOT a negative signal.
+  const nonCorrections = await evo.behaviorAffinity(
+    { DB: makeDb([
+      { category: "tone", reflected: 0, created_at: now },
+      { category: "tone", reflected: 0, created_at: now },
+      { category: "tone", reflected: 0, created_at: now },
+    ]) } as unknown as Parameters<typeof evo.behaviorAffinity>[0], now,
+  );
+  assert.strictEqual(nonCorrections["tone"] ?? evo.BEHAVIOR_AFFINITY_NEUTRAL, evo.BEHAVIOR_AFFINITY_NEUTRAL,
+    "answers left unchanged must never count as negative feedback (neutral)");
+
+  // Decay: the SAME corrections, far in the past, must lose weight so a category
+  // that stopped being corrected recovers above the floor (no permanent ban).
+  const oldNow = now + 100 * evo.BEHAVIOR_HALF_LIFE_DAYS * 86400_000; // evaluate 100 half-lives later
+  const recovered = await evo.behaviorAffinity(
+    { DB: makeDb([
+      { category: "timing", reflected: 1, created_at: now },
+      { category: "timing", reflected: 1, created_at: now },
+      { category: "timing", reflected: 1, created_at: now },
+    ]) } as unknown as Parameters<typeof evo.behaviorAffinity>[0], oldNow,
+  );
+  assert.ok((recovered["timing"] ?? evo.BEHAVIOR_AFFINITY_NEUTRAL) > evo.BEHAVIOR_AFFINITY_MIN,
+    "stale corrections must decay so a category's influence recovers over time");
+
+  // Wiring: both answer-production paths (single-pass research + deep writer)
+  // must steer replies through the FAIL-CLOSED feedback-aware context.
+  const ai = readFileSync(new URL("../src/lib/ai.ts", import.meta.url), "utf-8");
+  const sub = readFileSync(new URL("../src/lib/subagents.ts", import.meta.url), "utf-8");
+  assert.ok(/getAnswerBehaviorContext/.test(ai), "single-pass research must use feedback-aware context");
+  assert.ok(/getAnswerBehaviorContext/.test(sub), "deep-research writer must use feedback-aware context");
+
+  // Migration 0009 must attribute reflections to a category (backfill-safe).
+  const mig = readFileSync(new URL("../migrations/0009_behavior_feedback.sql", import.meta.url), "utf-8")
+    .replace(/--[^\n]*/g, "");
+  assert.ok(/ADD COLUMN category TEXT NOT NULL DEFAULT 'behavior'/.test(mig),
+    "0009 must add a backfill-safe category column to reflection_log");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -916,6 +993,7 @@ async function main() {
   await testLevel15DeepResearch();
   await testLevel16Predictive();
   await testAnswerGrounding();
+  await testBehaviorAlignmentFailClosed();
   console.log("SAFETY TESTS PASSED");
 }
 

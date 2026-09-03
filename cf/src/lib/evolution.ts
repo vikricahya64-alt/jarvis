@@ -34,6 +34,30 @@ export const MIN_INSIGHT_EVIDENCE = 3;
 export const PREFERENCE_DECAY_DAYS = 45;   // unvalidated confidence halves ~ /14d
 export const CONSOLIDATION_WINDOW_MS = 24 * 3600_000;
 
+// ---- Level 17: answer-behavior alignment feedback loop ----
+// The reflection loop (reflection_log) records when the critic flags a defect
+// and JARVIS actually changes its answer. Aggregating that per behavioral
+// category gives a FAIL-CLOSED affinity weight: a category that is repeatedly
+// reflected-to-correct is negative feedback on that answer behavior, so its
+// lessons are suppressed from steering future answers. Affinity stays in
+// [BEHAVIOR_AFFINITY_MIN, 1] — learning can only dampen influence, NEVER
+// amplify it (Learning-from-Negative-Feedback / Fail-Closed-Alignment). The
+// negative signal is ALSO recency-decayed (Ebbinghaus forgetting curve /
+// FadeMem / PMORS) so a category that STOPS being corrected gradually recovers
+// its influence instead of being permanently suppressed (stabilized forgetting).
+export const BEHAVIOR_AFFINITY_NEUTRAL = 1;
+export const BEHAVIOR_AFFINITY_MIN = 0.4;
+// This many recency-weighted corrections drives a category to the floor.
+export const BEHAVIOR_CORRECTION_SATURATION = 3;
+// Half-life of a correction signal: past corrections lose half their weight
+// every BEHAVIOR_HALF_LIFE_DAYS days, so influence recovers once JARVIS stops
+// repeating the corrected behavior (no permanent suppression).
+export const BEHAVIOR_HALF_LIFE_DAYS = 14;
+// Answer-behavior lessons whose category falls below this affinity are withheld
+// from steering replies (suppressed), while the owner's explicit preferences
+// are never suppressed.
+export const BEHAVIOR_AFFINITY_KEEP = 0.5;
+
 export interface ReflectedTurn {
   id: number;
   turnText: string;
@@ -76,6 +100,7 @@ export async function reflectOnTurn(
   turnText: string,
   output: string,
   errors: string[] = [],
+  category = "behavior",
 ): Promise<string> {
   const rubric =
     "Nilai jawaban Anda sebagai kritik terhadap asisten J.A.R.V.I.S. (Bahasa Indonesia). " +
@@ -99,11 +124,11 @@ export async function reflectOnTurn(
   }
   try {
     await env.DB.prepare(
-      `INSERT INTO reflection_log (created_at, turn_text, output, errors, critique, refined, score, reflected)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO reflection_log (created_at, turn_text, output, errors, critique, refined, score, reflected, category)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(Date.now(), turnText.slice(0, 500), output.slice(0, 1000),
       (errors.join("; ") || "").slice(0, 200), critique, refined.slice(0, 1000), score,
-      refined !== output ? 1 : 0).run();
+      refined !== output ? 1 : 0, (category || "behavior").slice(0, 32)).run();
   } catch { /* availability */ }
   return refined;
 }
@@ -363,4 +388,77 @@ export async function auditPhantomRules(env: Env): Promise<string> {
   }
   if (suspicious.length === 0) return "Tidak ada aturan tanpa bukti (phantom). ✅";
   return "Aturan dengan bukti tipis (kandidat disable):\n" + suspicious.join("\n");
+}
+
+// ---------------------------------------------------------------------
+// Pillar 7 — Answer-behavior alignment (Level 17)
+// ---------------------------------------------------------------------
+
+/** Deterministic, FAIL-CLOSED affinity weight per behavioral category, derived
+ *  from reflection_log. A "correction" is a reflection where the critic made
+ *  JARVIS actually change its answer (reflected=1): that is implicit negative
+ *  feedback on the category's answer behavior (Reflexion; RESPECT; CHI '25
+ *  intentional-implicit feedback). Aggregate corrections per category, decaying
+ *  old ones via an Ebbinghaus/recency half-life (FadeMem; PMORS; Generative
+ *  Agents recency) so a category that STOPS being corrected recovers influence
+ *  instead of being permanently suppressed (stabilized forgetting). Affinity is
+ *  clamped to [BEHAVIOR_AFFINITY_MIN, 1] — never above neutral, so learning can
+ *  only dampen influence, never amplify it. Fail-open: any DB problem => all
+ *  categories stay neutral (1), behavior context just no longer filtered. */
+export async function behaviorAffinity(
+  env: Env,
+  now = Date.now(),
+): Promise<Record<string, number>> {
+  const halfLife = BEHAVIOR_HALF_LIFE_DAYS * 86400_000;
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT category, reflected, created_at FROM reflection_log`,
+    ).bind().all<{ category: string; reflected: number; created_at: number }>();
+    const rows = results ?? [];
+    if (rows.length === 0) return {};
+    const damped: Record<string, number> = {};
+    for (const r of rows) {
+      const cat = r.category || "behavior";
+      if (!r.reflected) continue; // only corrections are the negative signal
+      const age = Math.max(0, now - (r.created_at || now));
+      const weight = Math.pow(0.5, age / halfLife); // half-life decay
+      damped[cat] = (damped[cat] ?? 0) + weight;
+    }
+    const out: Record<string, number> = {};
+    for (const [cat, d] of Object.entries(damped)) {
+      const affinity = Math.max(BEHAVIOR_AFFINITY_MIN, 1 - d / BEHAVIOR_CORRECTION_SATURATION);
+      out[cat] = Math.min(BEHAVIOR_AFFINITY_NEUTRAL, affinity); // never > 1
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Fail-closed version of getBehaviorContext: inject owner preferences (always,
+ *  they are explicit statements) plus only the insight lessons whose category
+ *  still has trust (affinity >= BEHAVIOR_AFFINITY_KEEP). A category that the
+ *  reflection loop keeps correcting is suppressed from steering future answers
+ *  — JARVIS stops repeating answer behaviors it keeps being told are wrong,
+ *  without ever amplifying any behavior. Fail-open: any failure falls back to
+ *  the unfiltered context so replies are never blocked. */
+export async function getAnswerBehaviorContext(
+  env: Env,
+  topic: string | null,
+  now = Date.now(),
+): Promise<string> {
+  const parts: string[] = [];
+  const prefs = await getActivePreferences(env);
+  if (prefs.length) parts.push("Preferensi pemilik: " + prefs.map((p) => `${p.key}=${p.value}`).join("; "));
+  try {
+    const affinity = await behaviorAffinity(env, now);
+    const insights = await listInsights(env, false);
+    const kept = insights.filter((i) => (affinity[i.category] ?? BEHAVIOR_AFFINITY_NEUTRAL) >= BEHAVIOR_AFFINITY_KEEP);
+    if (kept.length) parts.push("Pelajaran yang dipelajari: " + kept.map((i) => i.ruleText).join(" | "));
+  } catch {
+    const insights = await listInsights(env, false);
+    if (insights.length) parts.push("Pelajaran yang dipelajari: " + insights.map((i) => i.ruleText).join(" | "));
+  }
+  if (parts.length === 0) return "";
+  return parts.join("\n").slice(0, 1500);
 }

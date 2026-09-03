@@ -25,7 +25,7 @@ import { getPlans, getScheduledTasks } from "../lib/maestro";
 import { getDegradationStatus } from "../lib/degradation";
 import {
   listInsights, setPreference, disablePreference, getActivePreferences,
-  auditPhantomRules, reflectOnTurn, getBehaviorContext,
+  auditPhantomRules, reflectOnTurn,
 } from "../lib/evolution";
 import { listSuggestions, resolveSuggestion } from "../lib/predictive";
 
