@@ -16,7 +16,7 @@
 //=====================================================================
 
 import { Env, getActivity, getDmsState } from "../lib/db";
-import { sendMessage } from "../lib/telegram";
+import { sendMessage, sanitizeTelegramMarkdown } from "../lib/telegram";
 
 export type Stage = "idle" | "verify" | "stage2" | "executed";
 
@@ -119,7 +119,7 @@ export async function runDms(env: Env, owner: number): Promise<string> {
          WHERE owner_id=? AND stage='stage2'`,
       ).bind(now, now, owner).run();
       if (r.meta.changes === 1) {
-        const wiped = await wipeLegacy(env);
+        const wiped = await wipeLegacy(env, owner);
         await notify(env, owner, [
           "🕳️ *Dead Man's Switch — EXECUTED*",
           "Legacy vault metadata + D1 incidents have been wiped.",
@@ -163,7 +163,7 @@ export async function touchInteraction(env: Env, owner: number): Promise<void> {
 
 async function notify(env: Env, owner: number, text: string): Promise<void> {
   try {
-    await sendMessage(env, owner, text, { parseMode: "Markdown" });
+    await sendMessage(env, owner, sanitizeTelegramMarkdown(text), { parseMode: "Markdown" });
   } catch (e) {
     // Non-fatal: the cron tick is cadenced every 6h, next tick re-alerts.
     console.error("[dms] notify failed", (e as Error).message);
@@ -175,13 +175,14 @@ async function notify(env: Env, owner: number, text: string): Promise<void> {
  * so a wipe zeroes the ciphertext + tombstones status atomically — no external
  * object storage. Returns count removed.
  */
-export async function wipeLegacy(env: Env): Promise<number> {
+export async function wipeLegacy(env: Env, owner: number): Promise<number> {
   const res = await env.DB.prepare(
     `UPDATE legacy_vault_metadata
      SET encrypted_blob='', status='revoked', updated_at=?
-     WHERE status='armed' OR status='verifying'`,
-  ).bind(Date.now()).run();
+     WHERE owner_id = ? AND (status='armed' OR status='verifying')`,
+  ).bind(Date.now(), owner).run();
   const removed = res.meta.changes ?? 0;
-  await env.DB.prepare(`DELETE FROM interaction_logs`).run();
+  // Owner-scoped: never wipe another owner's value-alignment/drift history.
+  await env.DB.prepare(`DELETE FROM interaction_logs WHERE owner_id = ?`).bind(owner).run();
   return removed;
 }

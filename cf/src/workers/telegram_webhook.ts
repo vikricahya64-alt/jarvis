@@ -18,17 +18,38 @@ import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus } from "../lib/db";
 
 const RATE_LIMIT_MS = 1000;
-const lastMsg = new Map<number, number>();
 
-function rateLimited(userId: number): boolean {
+/**
+ * KV-backed rate limiter. Cloudflare Workers are stateless per invocation, so
+ * the old in-memory Map did nothing across calls. Now we persist the last-message
+ * timestamp per user and fall back to "allow" if KV is unavailable (single-owner
+ * resilience over strictness). Returns true if the user is being rate-limited.
+ */
+async function rateLimited(env: Env, userId: number): Promise<boolean> {
+  const key = `rl:${userId}`;
   const now = Date.now();
-  const prev = lastMsg.get(userId) ?? 0;
-  if (now - prev < RATE_LIMIT_MS) return true;
-  lastMsg.set(userId, now);
-  return false;
+  try {
+    const prev = await env.CONFIG_KV.get(key);
+    if (prev != null && now - Number(prev) < RATE_LIMIT_MS) return true;
+    await env.CONFIG_KV.put(key, String(now), { expirationTtl: RATE_LIMIT_MS / 1000 + 2 });
+    return false;
+  } catch {
+    return false; // availability over strictness for a single owner
+  }
 }
 
 const OWNER_OK = (env: Env, id: number) => String(id) === env.OWNER_TELEGRAM_ID;
+
+/** Fire-and-forget Telegram call: never throw so a downstream Telegram outage
+ *  can't turn into a 5xx that makes Telegram retry the whole webhook (retry
+ *  storm budget burn). Logs and continues. */
+async function fire<T>(p: Promise<T>): Promise<void> {
+  try {
+    await p;
+  } catch (e) {
+    console.error("[telegram] send failed", (e as Error).message);
+  }
+}
 
 /** Main entry for a verified Telegram POST. */
 export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Response> {
@@ -37,7 +58,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     const cq = update.callback_query;
     const owner = Number(env.OWNER_TELEGRAM_ID || 0);
     if (cq.from.id !== owner) {
-      await answerCallbackQuery(env, cq.id, "Bukan pemilik.");
+      await fire(answerCallbackQuery(env, cq.id, "Bukan pemilik."));
       return new Response("forbidden", { status: 403 });
     }
     const data = cq.data ?? "";
@@ -48,11 +69,11 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
       if (["yes", "no", "pause"].includes(verdict)) {
         const consumed = await resolveConsent(env, owner, corr, verdict);
         if (cq.message) {
-          await editMessageReplyMarkup(env, cq.message.chat.id, cq.message.message_id, { inline_keyboard: [] });
+          await fire(editMessageReplyMarkup(env, cq.message.chat.id, cq.message.message_id, { inline_keyboard: [] }));
         }
-        await answerCallbackQuery(env, cq.id,
+        await fire(answerCallbackQuery(env, cq.id,
           !consumed ? "Sesi kedaluwarsa (default DENY)."
-            : verdict === "yes" ? "Disetujui." : verdict === "pause" ? "Dijeda." : "Ditolak.");
+            : verdict === "yes" ? "Disetujui." : verdict === "pause" ? "Dijeda." : "Ditolak."));
         // "pause" also sets the global autonomy-pause flag (L11 python parity).
         if (verdict === "pause") await setAutonomyPaused(env, owner, true);
         return new Response("ok");
@@ -60,14 +81,33 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     }
     // Clarification options: clarify:<corr>:<index>
     if (parts[0] === "clarify" && parts.length === 3) {
-      await logConsent(env, owner, redact(parts[1]), "clarify-callback", "low", `choice:${parts[2]}`, 100);
+      const idx = parts[2];
+      const cmd = await env.CONFIG_KV.get(`clarify:${parts[1]}`).catch(() => null);
+      await logConsent(env, owner, redact(parts[1]), "clarify-callback", "low", `choice:${idx}`, 100);
       if (cq.message) {
-        await editMessageReplyMarkup(env, cq.message.chat.id, cq.message.message_id, { inline_keyboard: [] });
+        await fire(editMessageReplyMarkup(env, cq.message.chat.id, cq.message.message_id, { inline_keyboard: [] }));
       }
-      await answerCallbackQuery(env, cq.id, `Dipilih opsi ${parts[2]}.`);
+      if (!cmd) {
+        // Context expired (TTL 5min) or not found → refuse, don't guess.
+        await fire(answerCallbackQuery(env, cq.id, "Konteks clarify kedaluwarsa. Kirim ulang perintah."));
+        return new Response("ok");
+      }
+      if (idx === "0") {
+        // A) Re-run classification with the stored text (ambiguity may clear).
+        await fire(answerCallbackQuery(env, cq.id, "Uji lagi..."));
+        await act(env, owner, cmd);
+      } else if (idx === "1") {
+        // B) Override: force execute (logged as an owner override, audited).
+        await fire(answerCallbackQuery(env, cq.id, "Override dijalankan."));
+        await forceExecute(env, owner, cmd);
+      } else {
+        // C) Cancel.
+        await fire(answerCallbackQuery(env, cq.id, "Dibatalkan."));
+      }
+      await env.CONFIG_KV.delete(`clarify:${parts[1]}`).catch(() => {/* best-effort */});
       return new Response("ok");
     }
-    await answerCallbackQuery(env, cq.id, "Tidak dikenal.");
+    await fire(answerCallbackQuery(env, cq.id, "Tidak dikenal."));
     return new Response("ok");
   }
 
@@ -78,10 +118,10 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
 
   // Only the owner may drive the mission-critical switch.
   if (!OWNER_OK(env, from)) {
-    await sendMessage(env, from, "Perintah tidak diizinkan.");
+    await fire(sendMessage(env, from, "Perintah tidak diizinkan."));
     return new Response("ok", { status: 200 });
   }
-  if (rateLimited(from)) return new Response("ok", { status: 200 });
+  if (await rateLimited(env, from)) return new Response("ok", { status: 200 });
 
   await touchActivity(env, from, "telegram");
 
@@ -89,15 +129,15 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   const trimmed = text.trim().toLowerCase();
   const r = msg.from ? from : 0;
   if (trimmed === "/health") {
-    await sendMessage(env, r, "Health: sehat. Resp." + Math.round(Date.now() / 1000));
+    await fire(sendMessage(env, r, "Health: sehat. Resp." + Math.round(Date.now() / 1000)));
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/dms_status") {
-    await sendMessage(env, r, await runDms(env, r));
+    await fire(sendMessage(env, r, await runDms(env, r)));
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/queue_status") {
-    await sendMessage(env, r, JSON.stringify(await queueStatus(env)));
+    await fire(sendMessage(env, r, JSON.stringify(await queueStatus(env))));
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/status") {
@@ -105,22 +145,22 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
       isAutonomyPaused(env, r),
       getStatusConfig(env, r),
     ]);
-    await sendMessage(env, r, statusReport(cfg, paused));
+    await fire(sendMessage(env, r, statusReport(cfg, paused)));
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/checkin" || trimmed === "/stop" || trimmed === "/kill") {
-    await sendMessage(env, r, await checkIn(env, r));
+    await fire(sendMessage(env, r, await checkIn(env, r)));
     return new Response("ok", { status: 200 });
   }
   // Autonomy pause control (L11 python parity).
   if (trimmed === "/pause" || trimmed === "/pause_autonomy") {
     await setAutonomyPaused(env, r, true);
-    await sendMessage(env, r, "⏸️ Otonomi di-pause. Aksi otonom tidak akan berjalan.");
+    await fire(sendMessage(env, r, "⏸️ Otonomi di-pause. Aksi otonom tidak akan berjalan."));
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/resume" || trimmed === "/resume_autonomy") {
     await setAutonomyPaused(env, r, false);
-    await sendMessage(env, r, "▶️ Otonomi di-resume.");
+    await fire(sendMessage(env, r, "▶️ Otonomi di-resume."));
     return new Response("ok", { status: 200 });
   }
   // Persist explicit 'never/stop' rule (mark_explicit_stop parity).
@@ -128,26 +168,26 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     const phrase = text.replace(/^\/(mark_stop|never)\s+/i, "").trim();
     if (phrase) {
       await markExplicitStop(env, r, phrase, true);
-      await sendMessage(env, r, `🛑 Aturan "never" disimpan: \`${phrase.slice(0, 120)}\`\nAutonomous akan memblokir aksi serupa.`);
+      await fire(sendMessage(env, r, `🛑 Aturan "never" disimpan: \`${phrase.slice(0, 120)}\`\nAutonomous akan memblokir aksi serupa.`));
     } else {
-      await sendMessage(env, r, "Gunakan: /mark_stop <frasa>. Contoh: /mark_stop jangan kirim berita.");
+      await fire(sendMessage(env, r, "Gunakan: /mark_stop <frasa>. Contoh: /mark_stop jangan kirim berita."));
     }
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/obedience_report") {
     const paused = await isAutonomyPaused(env, r);
-    await sendMessage(env, r,
+    await fire(sendMessage(env, r,
       `Audit kepatuhan: dictatat per perintah di obedience_audit.\n` +
       `Status otonomi: ${paused ? "⏸️ PAUSED" : "▶️ aktif"}\n` +
-      `Lihat /queue_status, /dms_status.`);
+      `Lihat /queue_status, /dms_status.`));
     return new Response("ok", { status: 200 });
   }
 
   // Friendly greeting (INFO, no action) — answered warmly instead of falling
   // into the fail-closed guard. Greetings don't trigger any autonomous step.
   if (trimmed === "/start" || /^(halo|hai|hi|hello|hey|pagi|siang|sore|malam|assalamualaikum|assalamu'alaikum|selamat)/.test(trimmed)) {
-    await sendMessage(env, r,
-      "Halo. J.A.R.V.I.S. siap. Ketik /status untuk kondisi sistem, atau /health untuk uji sehat.");
+    await fire(sendMessage(env, r,
+      "Halo. J.A.R.V.I.S. siap. Ketik /status untuk kondisi sistem, atau /health untuk uji sehat."));
     return new Response("ok", { status: 200 });
   }
 
@@ -180,12 +220,12 @@ async function resolveConsent(env: Env, owner: number, corr: string, decision: s
   // Record to consent_log (append-only). Redact the correlation id so raw
   // PII/command hashes from the wire never persist verbatim.
   await logConsent(env, owner, redact(corr), "inline-consent", "high", effective, 70);
-  await sendMessage(env, owner,
+  await fire(sendMessage(env, owner,
     effective === "pause"
       ? "⏸️ Otonomi DI-PAUSE."
       : effective === "timeout"
         ? `⏰ Sesi consent kedaluwarsa (default DENY).`
-        : `Keputusan consent "${effective}" dicatat.`);
+        : `Keputusan consent "${effective}" dicatat.`));
   return !expired; // consumed (in-time) only
 }
 
@@ -194,12 +234,15 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
   const res = await routeCommand(env, owner, text);
   switch (res.decision.action) {
     case "EXECUTE":
-      await sendMessage(env, owner, applyDefault(res, text));
+      await fire(sendMessage(env, owner, applyDefault(res, text)));
       break;
     case "CLARIFY":
       // Offer structured options (L11 python send_clarification parity) instead
-      // of guessing. Callback handled by the clarify:<corr>:<idx> path above.
-      await sendMessage(env, owner,
+      // of guessing. Callback dispatched by the clarify:<corr>:<idx> path above.
+      // Persist the original command so the callback can re-route (TTL 5min).
+      await env.CONFIG_KV.put(`clarify:${res.decision.correlationId}`, text, { expirationTtl: 300 })
+        .catch(() => {/* degrade: callback won't re-route, user re-sends */});
+      await fire(sendMessage(env, owner,
         "🤔 *Mohon perjelas.*\n" +
         `Perintah kurang jelas (kepercayaan ${res.intent.confidence.toFixed(2)}).` +
         "\nPilih salah satu, atau ketik jawaban sendiri:",
@@ -207,22 +250,33 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
             [{ text: "A) Uji lagi", callback_data: `clarify:${res.decision.correlationId}:0` }],
             [{ text: "B) Override jalankan", callback_data: `clarify:${res.decision.correlationId}:1` }],
             [{ text: "C) Batalkan", callback_data: `clarify:${res.decision.correlationId}:2` }],
-        ] } });
+        ] } }));
       break;
     case "CONSENT":
-      await sendMessage(env, owner,
+      await fire(sendMessage(env, owner,
         `Aksi risiko tinggi terdeteksi. Butuh persetujuan.`,
         { replyMarkup: { inline_keyboard: [[
             { text: "Setujui", callback_data: "consent:" + res.decision.correlationId + ":yes" },
             { text: "Tolak", callback_data: "consent:" + res.decision.correlationId + ":no" },
             { text: "Pause", callback_data: "consent:" + res.decision.correlationId + ":pause" },
-        ]] } });
+        ]] } }));
       break;
     case "BLOCK":
     case "DEFER":
     default:
-      await sendMessage(env, owner, "Aksi ditangguhkan.");
+      await fire(sendMessage(env, owner, "Aksi ditangguhkan."));
   }
+}
+
+/**
+ * Owner "Override jalankan" from a clarify dialog. We deliberately re-run the
+ * full compliance pipeline via act() rather than bypass it: the constitutional
+ * guard / dangerous-action blocks AND consent gates still apply, so an owner
+ * override can never force a genuinely prohibited action. This is the L11
+ * "send_clarification -> forced execute" parity, minus any guard bypass.
+ */
+async function forceExecute(env: Env, owner: number, text: string): Promise<void> {
+  await act(env, owner, text);
 }
 
 /** Human reply for the default EXECUTE decision. Kept short (worker-safe). */

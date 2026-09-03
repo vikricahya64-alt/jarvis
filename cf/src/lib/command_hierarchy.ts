@@ -14,7 +14,7 @@
 //   * Owner telegram ID match (env.OWNER_TELEGRAM_ID).
 //=====================================================================
 
-import { Env, logObedience, logConsent, logViolation, getDmsConfig, writeDmsConfig, DmsConfig } from "./db";
+import { Env, logObedience, logViolation, getDmsConfig, writeDmsConfig, DmsConfig } from "./db";
 import { validateAction, riskScore } from "./constitutional_guard";
 
 export const TIERS = {
@@ -410,16 +410,6 @@ export async function setAutonomyPaused(env: Env, owner: number, paused: boolean
 /** Whether autonomy is currently paused for this owner. */
 export async function isAutonomyPaused(env: Env, owner: number): Promise<boolean> {
   return (await getDmsConfig(env, owner)).autonomy_paused ?? false;
-}
-
-/** Resolve an inline-button consent/callback into its command chain. */
-export async function resolveCallback(
-  env: Env,
-  owner: number,
-  correlationId: string,
-  decision: "approve" | "deny" | "pause" | "timeout",
-): Promise<void> {
-  await logConsent(env, owner, redact(correlationId), "inline-callback", "low", decision, TIERS.DANGEROUS);
 }
 
 /** Mask sensitive ids before persisting (L11 `_redact` parity). */

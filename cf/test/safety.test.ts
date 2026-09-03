@@ -11,7 +11,8 @@
 //=====================================================================
 
 import assert from "node:assert";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import {
   routeCommand, heuristicClassify, TIERS, markExplicitStop, setAutonomyPaused,
 } from "../src/lib/command_hierarchy";
@@ -149,6 +150,33 @@ async function testValueAlignmentShape() {
   assert.strictEqual(typeof mod.getConstitution, "function");
 }
 
+async function testAppendOnlyIntegrity() {
+  // The audit / consent / violation logs are append-only BY POLICY. No source
+  // file may run UPDATE/DELETE against them (SQLite has no REVOKE, so we guard
+  // at the source level). Writes must only go through INSERT helpers.
+  const appendOnly = ["obedience_audit", "consent_log", "constitutional_violations"];
+  const mutations = new RegExp(`\\b(?:UPDATE|DELETE)\\s+(?:FROM\\s+)?(${appendOnly.join("|")})`, "i");
+
+  const srcDir = new URL("../src/", import.meta.url).pathname;
+  const files: string[] = [];
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (p.endsWith(".ts")) files.push(p);
+    }
+  };
+  walk(srcDir);
+
+  for (const f of files) {
+    const src = readFileSync(f, "utf-8");
+    assert.ok(
+      !mutations.test(src),
+      `append-only integrity violated: ${f} must not UPDATE/DELETE ${appendOnly.join(", ")}`,
+    );
+  }
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -157,6 +185,7 @@ async function main() {
   await testOriginPriority();
   await testMigrationIntegrity();
   await testValueAlignmentShape();
+  await testAppendOnlyIntegrity();
   console.log("SAFETY TESTS PASSED");
 }
 
