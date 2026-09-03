@@ -71,6 +71,15 @@ const ALLOWED_BY_DEFAULT: string[] = [
   "/list", "/vault list", "what is", "apa itu", "summarize", "ringkas",
   "translate", "terjemahkan", "remind", "rekap", "search", "cari",
   "privacy", "/privacy", "/dms_status", "/queue_status", "/obedience_report",
+  // Read-only research/analytical phrasings: harmless, only trigger a web
+  // search + synthesis (never an action). PRINCIPLES (no_destroy/no_money/...)
+  // are matched BEFORE this whitelist, so destructive derived forms (hapus,
+  // membobol, transfer uang...) stay BLOCKED even pre-constitution.
+  "analis", "analyze", "laporan", "report", "review", "perbandingan",
+  "bandingkan", "bandingin", "perkembangan", "ulasan", "kajian", "research",
+  "menurut", "bagaimana", "cara", "what is", "jelaskan", "jelasin",
+  "tentang", "mengenai", "informasi", "info", "topik", "trend", "tren",
+  "terbaru", "2026",
 ];
 
 function isWhitelisted(actionDesc: string): boolean {
