@@ -39,6 +39,25 @@ export default {
         }
       }
       const update = (await request.json()) as Parameters<typeof handleUpdate>[1];
+      // Idempotency: Telegram delivers at-least-once and retries on lost 2xx.
+      // Dedupe by update_id (KV, 48h TTL) so retries don't re-run side effects
+      // (duplicate DMS resets, duplicate audit rows, double consent resolution).
+      // Only mark "seen" AFTER a successful handleUpdate so a 5xx retry path is
+      // still delivered exactly-once effective but failure still triggers retry.
+      const updId = update?.update_id;
+      if (updId != null) {
+        try {
+          const seen = await env.CONFIG_KV.get(`upd:${updId}`);
+          if (seen) return new Response("ok", { status: 200 });
+        } catch {
+          /* proceed; availability over dedupe */
+        }
+        const res = await handleUpdate(env, update);
+        await env.CONFIG_KV
+          .put(`upd:${updId}`, "1", { expirationTtl: 172800 })
+          .catch(() => {/* availability over dedupe */});
+        return res;
+      }
       return await handleUpdate(env, update);
     }
 
@@ -77,11 +96,16 @@ export default {
         // Value alignment: expire stale unconfirmed proposals (TTL 7 days).
         const expired = await sweepExpiredProposals(env);
         console.log(`[cron] value_alignment: ${expired} expired (${Date.now() - start}ms)`);
-      } else if (cron === "0 8 * * *") {
-        // Weekly obedience report — Cloudflare disallows `*` DOM + numeric DOW,
-        // so this runs daily and only dispatches on Sunday.
+      } else if (cron === "0 8 * * 0" || cron === "0 8 * * *") {
+        // Weekly obedience report — trigger registered as Sunday-only
+        // (`0 8 * * 0`). Match both legacy/spended spellings; keep a defensive
+        // Sunday guard so the daily-form can never fire on other days.
         const isSunday = new Date().getUTCDay() === 0;
-        console.log(`[cron] obedience_report: ${isSunday ? "dispatch" : "skip"} (${Date.now() - start}ms)`);
+        if (isSunday) {
+          console.log(`[cron] obedience_report: dispatch (${Date.now() - start}ms)`);
+        } else {
+          console.log(`[cron] obedience_report: skip (not Sunday) (${Date.now() - start}ms)`);
+        }
       }
     } catch (e) {
       console.error(`[cron:${cron}] failed`, (e as Error).message);

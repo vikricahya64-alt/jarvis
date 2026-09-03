@@ -53,13 +53,27 @@ async function call(
   return data.result;
 }
 
+const MAX_MSG_LEN = 4000;
+
+/** Sanitize Telegram Markdown special chars so unbalanced formatting never
+ *  triggers a MalformedRequest error. Escapes, doesn't strip. */
+export function sanitizeTelegramMarkdown(text: string): string {
+  return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, (m) => (m === "*" ? "*" : `\\${m}`));
+}
+
+/** Truncate to Telegram's 4096 limit defensively (keep 4000 headroom). */
+function truncate(text: string): string {
+  if (text.length <= MAX_MSG_LEN) return text;
+  return text.slice(0, MAX_MSG_LEN - 16) + "...\n[truncated]";
+}
+
 export async function sendMessage(
   env: { TELEGRAM_TOKEN?: string },
   chatId: number,
   text: string,
   extra: { replyMarkup?: { inline_keyboard: InlineButton[][] }; parseMode?: string } = {},
 ): Promise<unknown> {
-  const body: Record<string, unknown> = { chat_id: chatId, text };
+  const body: Record<string, unknown> = { chat_id: chatId, text: truncate(text) };
   if (extra.parseMode) body.parse_mode = extra.parseMode;
   if (extra.replyMarkup) body.reply_markup = extra.replyMarkup;
   return call(env, "sendMessage", body);
