@@ -192,6 +192,7 @@ export interface DmsConfig {
   autonomy_paused?: boolean;
   constitution?: Record<string, unknown>;
   created_by_isr?: boolean;
+  privacy_mode?: boolean;
 }
 
 export async function getDmsConfig(env: Env, owner: number): Promise<DmsConfig> {
@@ -385,9 +386,11 @@ export async function recordTaskCounters(env: Env, queue: string, owner: number)
   } catch { /* availability */ }
 }
 
-/** Append a turn to the conversation log (bounded). Returns true. */
+/** Append a turn to the conversation log (bounded). Returns true. When
+ *  privacy_mode is on, the write is skipped (owner `/privacy on` switch). */
 export async function appendMemory(env: Env, owner: number, role: "user" | "assistant", content: string, searchUsed = ""): Promise<void> {
   try {
+    if ((await (await getDmsConfig(env, owner)).privacy_mode)) return;
     await env.DB.prepare(
       `INSERT INTO conversation_log (owner_id, ts, role, content, search_used) VALUES (?, ?, ?, ?, ?)`,
     ).bind(owner, Date.now(), role, content.slice(0, 2000), searchUsed).run();

@@ -252,25 +252,29 @@ export async function routeCommand(
 
   // Otherwise classify via Groq first, fallback heuristics on miss.
   const groq = await groqClassify(env, rawText);
-  const intent = groq ?? heuristicClassify(rawText);
-  const clarityOk = intent.confidence >= gate;
+  // Ownership principle: a "/"-prefixed command IS an explicit owner command.
+  // Never let Groq's low-confidence classification demote it to DEFER/BLOCK —
+  // the owner's direct command outranks any autonomous ambiguity heuristic.
+  // Still audited, and still subject to "never"/something and constitutional stop.
+  const slashExplicit = /^\s*\//.test(rawText);
+  const intent = (groq && !slashExplicit) ? groq : heuristicClassify(rawText);
+  const clarityOk = slashExplicit || intent.confidence >= gate;
 
-  // ORIGIN PRIORITY (python evaluate_priority parity). Predictive/proactive
-  // suggestions NEVER auto-run: they DEFER at tier 50, no consent can elevate.
-  const pri = evaluatePriority(origin, intent, gate);
-  if (pri.decision === "DEFER" && origin === "predictive") {
-    const decision: Decision = {
-      action: "DEFER",
-      compliance: "BLOCKED",
-      priority: pri.priority,
-      reason: "Predictive suggestion — never auto-runs.",
-      correlationId: cmdHash,
-    };
-    await logObedience(env, owner, "AUTONOMOUS_ACTION", pri.priority, "DEFER", "PENDING", {
-      commandHash: cmdHash,
-      evidence: { source: pri.source, label: intent.label },
-    });
-    return { decision, intent, cmdHash };
+  // Predictive/proactive suggestions still DEFER (never auto-run) — that is an
+  // origin rule, not a Groq-confidence thing, and never an owner command.
+  if (origin !== "user") {
+    const pri0 = evaluatePriority(origin, intent, gate);
+    if (pri0.decision === "DEFER") {
+      const decision: Decision = {
+        action: "DEFER", compliance: "BLOCKED", priority: pri0.priority,
+        reason: "Non-user origin — deferred (never auto-runs).",
+        correlationId: cmdHash,
+      };
+      await logObedience(env, owner, "AUTONOMOUS_ACTION", pri0.priority, "DEFER", "PENDING", {
+        commandHash: cmdHash, evidence: { source: pri0.source, label: intent.label },
+      });
+      return { decision, intent, cmdHash };
+    }
   }
 
   // AUTONOMY PAUSE: if the owner paused autonomy, autonomous/predictive actions
@@ -410,6 +414,19 @@ export async function setAutonomyPaused(env: Env, owner: number, paused: boolean
 /** Whether autonomy is currently paused for this owner. */
 export async function isAutonomyPaused(env: Env, owner: number): Promise<boolean> {
   return (await getDmsConfig(env, owner)).autonomy_paused ?? false;
+}
+
+/** Enable/disable strict privacy mode (stops persisting conversation memory).
+ *  Owner command `/privacy on|off` — under the owner's direct control. */
+export async function setPrivacyMode(env: Env, owner: number, on: boolean): Promise<void> {
+  const cfg = await getDmsConfig(env, owner);
+  cfg.privacy_mode = on;
+  await writeDmsConfig(env, owner, cfg);
+}
+
+/** Current privacy mode for this owner. */
+export async function isPrivacyMode(env: Env, owner: number): Promise<boolean> {
+  return (await getDmsConfig(env, owner)).privacy_mode ?? false;
 }
 
 /** Mask sensitive ids before persisting (L11 `_redact` parity). */

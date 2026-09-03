@@ -53,6 +53,7 @@ const ALLOWED_BY_DEFAULT: string[] = [
   "read my messages", "baca pesan", "show", "tampilkan", "list", "daftar",
   "/list", "/vault list", "what is", "apa itu", "summarize", "ringkas",
   "translate", "terjemahkan", "remind", "rekap", "search", "cari",
+  "privacy", "/privacy", "/dms_status", "/queue_status", "/obedience_report",
 ];
 
 function isWhitelisted(actionDesc: string): boolean {
