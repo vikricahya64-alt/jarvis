@@ -17,6 +17,9 @@ import { requireCert } from "./lib/zero_trust";
 import { covenantStatusText, validateActionAgainstCovenant, signClause, isCovenantManagement, covenantHash } from "./lib/covenant_core";
 import { identityStatusText, createEpoch, verifyContinuity, markEpochVerified } from "./lib/identity_anchor";
 import { refreshQuotaSnapshot as monitorRefresh } from "./lib/monitor";
+import { ddgSearch } from "./lib/ai";
+
+const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
 
 const OWNER = (env: Env) => Number(env.OWNER_TELEGRAM_ID || 0);
 
@@ -163,6 +166,37 @@ export default {
       const target = url.searchParams.get("url") ?? url.origin + "/webhook";
       await setWebhook(env, target, env.TELEGRAM_SECRET);
       return Response.json({ ok: true, target });
+    }
+
+    // Admin diagnostic for the AI/search path — owner-only (token = TELEGRAM_SECRET).
+    // Never returns the secret: only booleans + the key length. Confirms whether
+    // GROQ_API_KEY is set & valid and whether DuckDuckGo is reachable, so a
+    // repeated "belum bisa menghubungi mesin pencari" can be root-caused.
+    if (path === "/ai_diag") {
+      const t = url.searchParams.get("token");
+      const tokenOk = t !== null && (t === env.TELEGRAM_SECRET || t === env.TELEGRAM_TOKEN);
+      if (!certOr(request, tokenOk)) return new Response("unauthorized", { status: 401 });
+      const key = env.GROQ_API_KEY ?? "";
+      const ddgProbe = await ddgSearch("sejarah komputer").then((r) => (r ? r.slice(0, 60) : null)).catch(() => null);
+      let groqModels = "unset";
+      if (key) {
+        try {
+          const res = await fetch(GROQ_MODELS_URL, {
+            headers: { Authorization: `Bearer ${key}` },
+          });
+          groqModels = res.ok ? `ok` : `http_${res.status}`;
+        } catch {
+          groqModels = "err";
+        }
+      }
+      return Response.json({
+        ok: true,
+        groqKey: key ? `set(len=${key.length})` : "unset",
+        groqModels,
+        ddg: ddgProbe ? "reachable" : "unreachable",
+        ddgProbe,
+        ts: Date.now(),
+      });
     }
 
     // Read-only append-only audit integrity report (gap detection).
