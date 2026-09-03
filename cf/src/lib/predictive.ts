@@ -21,7 +21,15 @@
 //     never execute. Acting on an offer is an explicit owner decision.
 //   * Learned dismiss — a dismissed suggestion's source is never re-offered
 //     (driven by the dedup guard + offeredSourceKeys), so JARVIS learns what
-//     the owner ignores. Observed acceptance/dismissal can later tune urgency.
+//     the owner ignores.
+//   * Feedback learning (Google RecSys '23 "Learn from Negative User Feedback";
+//     Beirlant et al. 2025 "Beyond Explicit and Implicit"; Jawaheer et al. 2014
+//     "Modeling User Preferences") — a responsible system must respond to
+//     explicit negative feedback (dismiss) by *reducing* similar recommendations
+//     quickly. So JARVIS dampens each category's urgency by its historical
+//     acceptance rate. This is FAIL-CLOSED: the multiplier is in [0.4, 1.0] and
+//     can only LOWER urgency below the base score — learning makes JARVIS less
+//     intrusive, never more, and categorical dismiss lowers that kind quickly.
 //
 // Skip-if-nothing (owner-fatigue guard): offerSuggestions returns null and the
 // cron sends no Telegram message when there are no NEW, undismissed suggestions.
@@ -56,6 +64,46 @@ export interface SuggestionCandidate {
 export const URGENCY_THRESHOLD = 0.5;   // offer only candidates at/above this
 export const MAX_OFFER_BATCH = 3;       // tight cap — never overwhelm the owner (was 6)
 
+// --- Feedback learning (fail-closed) ----------------------------------------
+// JARVIS learns from owner outcomes (accept vs dismiss) to *hold back* on the
+// kinds of suggestion the owner repeatedly ignores. The multiplier is built to
+// be FAIL-CLOSED: its range is [0.4, 1.0] — it can only lower a candidate's
+// urgency below its base score, never raise it. So learning can only make
+// JARVIS *less* intrusive, never more so (no risk of amplified nagging).
+export const FEEDBACK_MIN_MULT = 0.4;   // floor when a category is always dismissed
+export const FEEDBACK_NEUTRAL = 1.0;    // no data yet → untouched (net zero)
+
+/**
+ * Compute per-category owner acceptance from the suggestion history (append-only
+ * `suggestions` rows where the owner resolved accept/dismiss). Deterministic D1
+ * aggregate — no LLM, negligible cost on cron.
+ *
+ * Returns a map category -> multiplier in [FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL].
+ * Categories with no resolved history map to FEEDBACK_NEUTRAL (no change).
+ */
+export async function feedbackMultipliers(env: Env, owner: number): Promise<Record<string, number>> {
+  const mult: Record<string, number> = {};
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT category,
+              SUM(CASE WHEN status = 'accepted' THEN 1 ELSE 0 END) AS accepted,
+              SUM(CASE WHEN status = 'dismissed' THEN 1 ELSE 0 END) AS dismissed
+       FROM suggestions WHERE owner_id = ? AND status IN ('accepted','dismissed')
+       GROUP BY category`,
+    ).bind(owner).all<{ category: string; accepted: number; dismissed: number }>();
+    for (const r of results ?? []) {
+      const total = Number(r.accepted) + Number(r.dismissed);
+      if (total <= 0) { mult[r.category] = FEEDBACK_NEUTRAL; continue; }
+      const rate = Number(r.accepted) / total;          // 0..1
+      // fail-closed: only ever dampen (0.4..1.0), fully-dismissed → floor.
+      mult[r.category] = FEEDBACK_MIN_MULT + (FEEDBACK_NEUTRAL - FEEDBACK_MIN_MULT) * rate;
+    }
+  } catch {
+    // fail-open: on any DB error, learning is neutral — never blocks an offer.
+  }
+  return mult;
+}
+
 /**
  * Deterministically gather NEW, high-urgency suggestion candidates from signals
  * JARVIS already holds. Each returns a concrete, actionable, one-line offer in
@@ -71,6 +119,11 @@ export async function gatherSuggestionCandidates(
   // Ranked pool, closed later by urgency threshold + batch cap.
   const pool: SuggestionCandidate[] = [];
 
+  // Feedback learning: dampen urgency of categories the owner has historically
+  // dismissed, so JARVIS holds back. Neutral (1.0) when there's no history yet.
+  const fb = await feedbackMultipliers(env, owner);
+  const damp = (cat: SuggestionCandidate["category"], u: number) => u * (fb[cat] ?? FEEDBACK_NEUTRAL);
+
   // 1) Approval signals — highest urgency: open value-alignment / configuration
   //    proposals are deviations waiting on the owner's explicit consent (L13
   //    warrant). Never validate on JARVIS's own say-so.
@@ -81,12 +134,11 @@ export async function gatherSuggestionCandidates(
     // An open proposal expiring soon is the most pressing item JARVIS can surface.
     const timeLeft = p.expires_at - Date.now();
     const recency = Math.max(0, 1 - timeLeft / 7_776_000_000); // 90d window
-    const urgency = Math.min(1, 0.65 + p.confidence * 0.15 + recency * 0.2);
     pool.push({
       category: "approval",
       text: `⚠️ Tinjau proposal: "${p.new_proposal.slice(0, 90)}"`,
       sourceKey: key,
-      urgency,
+      urgency: damp("approval", Math.min(1, 0.65 + p.confidence * 0.15 + recency * 0.2)),
     });
   }
 
@@ -103,7 +155,7 @@ export async function gatherSuggestionCandidates(
       category: "task",
       text: `🗓️ ${t.approved ? "Jalankan segera:" : "Belum disetujui:"} "${t.description.slice(0, 90)}"`,
       sourceKey: key,
-      urgency,
+      urgency: damp("task", urgency),
     });
   }
 
@@ -118,7 +170,7 @@ export async function gatherSuggestionCandidates(
         category: "insight",
         text: `🧠 Konfirmasi pelajaran: "${ins.ruleText.slice(0, 90)}"`,
         sourceKey: key,
-        urgency: 0.35 + ins.confidence * 0.25,
+        urgency: damp("insight", 0.35 + ins.confidence * 0.25),
       });
     }
   }
@@ -134,7 +186,7 @@ export async function gatherSuggestionCandidates(
         category: "preference",
         text: `🔁 Rutinkan preferensi "${p.key}=${p.value}"?`,
         sourceKey: key,
-        urgency: 0.35 + p.confidence * 0.25,
+        urgency: damp("preference", 0.35 + p.confidence * 0.25),
       });
     }
   }
