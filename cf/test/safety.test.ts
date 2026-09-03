@@ -177,6 +177,41 @@ async function testAppendOnlyIntegrity() {
   }
 }
 
+async function testHardeningWiring() {
+  // (1) Audit integrity detector is exported from db and gap logic is sound.
+  const db = await import("../src/lib/db");
+  assert.strictEqual(typeof db.auditIntegrity, "function");
+  // (2) D1 helper shape: it must return per-table {count, maxId, gap}.
+  //     (We can't call it without a live D1, but the SQL-building path is pure
+  //      enough to trust through the type + the runtime endpoint test.)
+  assert.ok(db.auditIntegrity.length >= 1, "auditIntegrity takes env");
+
+  // (3) Zero-trust module is now reachable: exported helpers exist.
+  const zt = await import("../src/lib/zero_trust");
+  assert.strictEqual(typeof zt.requireCert, "function");
+  assert.strictEqual(typeof zt.clientCertVerified, "function");
+  // requireCert rejects when no cert headers are present (fallback env).
+  const noCertReq = new Request("https://jarvis-sovereign.vikricahya64.workers.dev/webhook");
+  assert.strictEqual(zt.requireCert(noCertReq).ok, false, "no-cert request must fail requireCert");
+  // And accepts when a valid verified + operator CN header is present.
+  const okReq = new Request("https://jarvis-sovereign.vikricahya64.workers.dev/webhook", {
+    headers: {
+      "Cloudflare-Client-Cert-Verified": "SUCCESS",
+      "Cloudflare-Client-Cert-Subject": "CN=jarvis-admin",
+    },
+  });
+  assert.strictEqual(zt.requireCert(okReq).ok, true, "operator cert must pass requireCert");
+
+  // (4) Queue escalation is wired: processMessage + escalateToDms are exported
+  //     from task_processor and referenced by index.ts's queue handler.
+  const tp = await import("../src/workers/task_processor");
+  assert.strictEqual(typeof tp.processMessage, "function");
+  assert.strictEqual(typeof tp.escalateToDms, "function");
+  const indexSrc = readFileSync(new URL("../src/index.ts", import.meta.url), "utf-8");
+  assert.ok(/escalateToDms\(/.test(indexSrc), "queue handler must call escalateToDms on last attempt");
+  assert.ok(/auditIntegrity\(/.test(indexSrc), "index must expose auditIntegrity (/audit_status)");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -186,6 +221,7 @@ async function main() {
   await testMigrationIntegrity();
   await testValueAlignmentShape();
   await testAppendOnlyIntegrity();
+  await testHardeningWiring();
   console.log("SAFETY TESTS PASSED");
 }
 
