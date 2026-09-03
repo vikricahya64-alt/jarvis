@@ -188,6 +188,17 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
 
+  // /cari without a topic (or bare /search) would otherwise be classified as a
+  // command-prefixed SYSTEM (tier 100) → confusing "Sistem/override." Be helpful
+  // instead: show usage. With a topic ("/cari <topik>") it flows into the real
+  // EXECUTE path where extractTopic() triggers DDG search + Groq synthesis.
+  if (trimmed === "/cari" || trimmed === "/search" || trimmed === "/cari " || trimmed === "/search ") {
+    await fire(sendMessage(env, r,
+      "Gunakan: /cari <topik>\nContoh: /cari artikel sejarah komputer\n" +
+      "Menjalankan pencarian web (DuckDuckGo) + rangkum AI."));
+    return new Response("ok", { status: 200 });
+  }
+
   // ------------------------------------------------------------------
   // Level 12 (Transcendent Steward) — covenant / identity / sunset / degradation
   // ------------------------------------------------------------------
