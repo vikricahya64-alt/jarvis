@@ -37,6 +37,7 @@ hit `/healthz` dan posting ke Telegram bila non-200 (lihat bot yang sama).
 ```bash
 wrangler tail                    # stream log real-time
 # cari baris [cron:*] / [task:*] / [dms:*]
+# laporan Mingguan: [cron] obedience_report: sent/skip (not Sunday)
 ```
 
 ## 4. Pola alarm DMS yang perlu diperhatikan
