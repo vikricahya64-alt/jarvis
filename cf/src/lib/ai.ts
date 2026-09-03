@@ -268,6 +268,34 @@ export async function searchTopResults(env: Env, query: string, limit = 3): Prom
       }
       return hits;
     },
+    // 2) Bing lightweight HTML — different egress reputation; diversifies the
+    //    reference pool for the same query with ONE extra subrequest only when
+    //    DDG returned fewer than requested. Still well inside the 50/subreq cap.
+    async () => {
+      const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${Math.min(limit, 10)}&setlang=id`;
+      const res = await fetchWithTimeout(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (Linux; Android 10)", "Accept-Language": "id,en;q=0.8" },
+      }, 10000);
+      if (!res.ok) return [];
+      const html = await res.text();
+      const blocks = [...html.matchAll(/<li class="b_algo"[^>]*>([\s\S]*?)<\/li>/gi)];
+      const hits: SearchHit[] = [];
+      for (let i = 0; i < blocks.length && hits.length < limit; i++) {
+        const text = stripTags(blocks[i][1] || "");
+        const m = text.match(/^(.{1,160}?)\s*(https?:\/\/[^\s]+)/i);
+        // Bing blocks don't expose URL cleanly via this regex; fall back to title-only.
+        const title = (m?.[1] || text.slice(0, 160)).trim();
+        if (!title) continue;
+        // Try to pull the real href for citation.
+        const hrefMatch = blocks[i][1].match(/href="(https?:\/\/[^"]*)"/i);
+        hits.push({
+          title: title.slice(0, 180),
+          url: (hrefMatch?.[1] || "").slice(0, 200),
+          snippet: text.slice(0, 340),
+        });
+      }
+      return hits;
+    },
   ];
   let hits: SearchHit[] = [];
   for (const tryFn of attempts) {

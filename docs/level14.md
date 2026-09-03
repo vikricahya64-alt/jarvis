@@ -69,8 +69,17 @@ Router (deterministic effort-scaling: isResearchClass?)
 > for citation while still spotlighting every hit as untrusted. `ddgSearch`
 > (single-result) stays untouched for the cheap single-pass path.
 
+> **Richer references (enhancement):** `MAX_FINDINGS_PER_ANGLE` is now `6`
+> (was `2`) and `searchTopResults` gained a **Bing HTML fallback** so more,
+> diversified references are harvested per query. This is cheap — each DDG query
+> is just **one subrequest** (≈3–6 total for fan-out, vs 50 allowed) — so many
+> snippets come in **without** spending page fetches. The Evidence Extractor
+> then ranks all candidate URLs by **relevance score** (keyword overlap of
+> title/snippet with topic+question) and fetches only the top `MAX_PAGES_TO_READ`
+> pages, so the scarce fetch slots always go to the most on-topic, richest pages.
+
 > **Evidence Extractor (new role):** fetch up to `MAX_PAGES_TO_READ` of the
-> found pages in parallel, strip to clean text with zero-dependency
+> (relevance-ranked) pages in parallel, strip to clean text with zero-dependency
 > `htmlToText` (no DOM lib needed in Workers), then a **quarantined** LLM
 > call (dual-LLM pattern, Willison 2023 / arXiv:2506.08837) extracts only
 > structured, citable `{claim, source, confidence}` facts. The writer never
@@ -78,9 +87,16 @@ Router (deterministic effort-scaling: isResearchClass?)
 > spotlighting. Blocked/unreachable pages fail-open to snippet-only evidence.
 > Each page fetch is 1 of the 50 free-tier subrequests per invocation.
 
+> **Cross-agent / multi-turn memory (enhancement):** the Researcher pulls
+> relevant persisted memories (`searchMemory`) before planning, so its angles
+> **extend** prior findings instead of repeating them — and the Writer/Verifier
+> share the same evidence store (gathers + flagged verified facts) for a
+> coherent, coordinated synthesis.
+
 **LLM-call budget** (research-backed cap): simple = **1**; complex = **2–4**
 (researcher + extractor + writer [+ verifier]). `MAX_TOTAL_LLM_CALLS = 4`;
-`MAX_PAGES_TO_READ = 3` bounds fetch subrequests.
+`MAX_PAGES_TO_READ = 3` bounds fetch subrequests — enrichment comes from
+cheap DDG snippets + smarter page selection, **not** extra fetches/LLM calls.
 
 ## Fail-Closed Guarantees
 
