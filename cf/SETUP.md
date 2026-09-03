@@ -112,6 +112,32 @@ menimbulkan error):
 Contoh: `cari tentang implementasi iscsi` → DDG ambil hasil → Groq rangkum →
 balasan ke Telegram + giliran disimpan sebagai konteks turn berikutnya.
 
+## 5d. Level 12 — Transcendent Steward (covenant, identity, maestro, degradasi)
+
+Level 12 menaikkan J.A.R.V.I.S. dari mesin kepatuhan menjadi maestro proaktif,
+tetap **di bawah hierarki perintah dan consent pemilik**. Semua free-tier
+(tanpa R2/IPFS — butuh kartu; sunset sengaja preview-only, tak ada purge
+ireversibel). Detail identitas & alur: `docs/level12.md`.
+
+| Modul | Lokasi | Perintah |
+|-------|--------|----------|
+| **Immutable Covenant** (append-only, trigger RAISE(ABORT)) | `covenant_core.ts` + `0005` | `/covenant_status`, `/covenant_sign <klausa>` |
+| **Identity Anchor** (rantai epoch temporal + hash snapshot) | `identity_anchor.ts` + `0005` | `/identity_verify` |
+| **Autonomous Maestro** (decompose→plan→step, consent-guarded, audited) | `maestro.ts` + `0004` | `/maestro_status` |
+| **Graceful Degradation** (kuota → disable fitur non-esensial) | `degradation.ts`/`monitor.ts` + `0004` | `/degradation_status` |
+| **Sunset Preview** (evaluasi read-only, tanpa purge) | handler webhook | `/sunset_preview` |
+
+Cron L12 (identity epoch + quota refresh) dijalankan dari cron `0 */6` yang
+sudah ada — **tidak menambah trigger**, tetap 3/5 dalam budget free-tier.
+
+Aturan kedaulatan (tetap matuh perintah Anda):
+1. Covenant immutable di tingkat DB — AI bisa baca, tak bisa ubah/hapus.
+2. Autonomous hanya untuk item **eksplisit didelegasikan** + lolos
+   `validateActionAgainstCovenant`; semua eksekusi dicatat (origin=autonomous).
+3. `/pause` menghentikan maestro sepenuhnya.
+4. Fitur esensial (covenant/DMS/override) **tidak pernah** dimatikan oleh degradasi.
+5. Sunset preview TIDAK mengeksekusi purge — inisiasi manual + konfirmasi ganda.
+
 ## 6. File penting (cf/)
 
 ```
@@ -119,12 +145,19 @@ wrangler.toml            bindings + vars + cron (3)
 migrations/0001_init.sql schema D1
 migrations/0002_legacy_inline.sql inline vault payload
 migrations/0003_upgrade.sql task_counters + conversation_log
-src/index.ts             router + cron + queue (+ laporan Mingguan)
+migrations/0004_maestro.sql maestro (plans/plan_steps/scheduled_tasks) + degradasi
+migrations/0005_covenant.sql covenant immutable + identity epoch + quota + sunset preview
+src/index.ts             router + cron + queue (+ laporan Mingguan, identity epoch, quota)
 src/workers/task_processor.ts      queue consumer
-src/workers/telegram_webhook.ts    webhook + consent/clarify + jalur AI
+src/workers/telegram_webhook.ts    webhook + consent/clarify + jalur AI + perintah L12
 src/lib/ai.ts            groqRespond + ddgSearch + searchAndSynthesize (kognitif)
 src/lib/command_hierarchy.ts       prioritas + clarity + consent + audit + pause
 src/lib/constitutional_guard.ts    fail-closed constitution (L11 python port)
+src/lib/covenant_core.ts           covenant immutable (signing INSERT-only + validasi)
+src/lib/identity_anchor.ts         rantai epoch identitas temporal
+src/lib/maestro.ts                 maestro otonom (decompose + schedule + execute)
+src/lib/degradation.ts             kuota free-tier → feature disable (non-esensial)
+src/lib/monitor.ts                 refresh kuota + status + alert degradasi
 src/lib/dead_mans_switch.ts        state machine D1 (stage transitions)
 src/lib/zero_trust.ts              mTLS/context
 src/lib/db.ts / telegram.ts        helper
