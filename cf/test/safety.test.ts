@@ -212,6 +212,72 @@ async function testHardeningWiring() {
   assert.ok(/auditIntegrity\(/.test(indexSrc), "index must expose auditIntegrity (/audit_status)");
 }
 
+async function testUpgradeMigration() {
+  // 0003 must create task_counters (fixes always-zeros /queue_status) and
+  // conversation_log (turn memory) — the two fixes this development adds.
+  const sql3 = readFileSync(
+    new URL("../migrations/0003_upgrade.sql", import.meta.url),
+    "utf-8",
+  );
+  assert.ok(/CREATE TABLE IF NOT EXISTS task_counters/.test(sql3),
+    "0003 must create task_counters");
+  assert.ok(/CREATE TABLE IF NOT EXISTS conversation_log/.test(sql3),
+    "0003 must create conversation_log");
+
+  // The helpers that use them must be exported and shaped correctly.
+  const db = await import("../src/lib/db");
+  assert.strictEqual(typeof db.appendMemory, "function");
+  assert.strictEqual(typeof db.recentContext, "function");
+  assert.strictEqual(typeof db.recordTaskCounters, "function");
+  assert.strictEqual(typeof db.pruneConversationLog, "function");
+
+  // redact is shared from command_hierarchy (deduped; webhook no longer
+  // defines its own copy).
+  const ch = await import("../src/lib/command_hierarchy");
+  assert.strictEqual(typeof ch.redact, "function");
+  const wh = readFileSync(new URL("../src/workers/telegram_webhook.ts", import.meta.url), "utf-8");
+  assert.ok(!/^function redact\(value: string\)/.test(wh),
+    "telegram_webhook must not redefine redact (dedupe)");
+  assert.ok(/from "\.\.\/lib\/command_hierarchy"/.test(wh),
+    "telegram_webhook must import redact from command_hierarchy");
+
+  // AI module must export the search + generative + topic helpers, wired into
+  // the EXECUTE path of the webhook.
+  const ai = await import("../src/lib/ai");
+  assert.strictEqual(typeof ai.groqRespond, "function");
+  assert.strictEqual(typeof ai.ddgSearch, "function");
+  assert.strictEqual(typeof ai.searchAndSynthesize, "function");
+  assert.strictEqual(typeof ai.extractTopic, "function");
+  assert.ok(/searchAndSynthesize\(/.test(wh), "webhook must wire searchAndSynthesize");
+
+  // extractTopic must yield the topic after a research keyword.
+  assert.strictEqual(ai.extractTopic("cari tentang iklim jakarta"), "iklim jakarta");
+  assert.strictEqual(ai.extractTopic("ringkas artikel AI pada tahun 2026").toLowerCase(), "artikel ai pada tahun 2026");
+  assert.strictEqual(ai.extractTopic("/status"), null, "non-search text has no topic");
+}
+
+async function testAiFailClosed() {
+  // Offline / no API key → groqRespond and ddgSearch return null (never throw),
+  // so the webhook EXECUTE path falls back safely to the canned reply.
+  const ai = await import("../src/lib/ai");
+  const noKey = { GROQ_API_KEY: "" } as unknown as Record<string, unknown>;
+  assert.strictEqual(await ai.groqRespond(noKey as never, "halo"), null,
+    "no API key must fail closed (null)");
+
+  // searchAndSynthesize with no key must still return a safe canned reply
+  // (require an Env-shaped object with DB; a stub suffices for the offline path
+  // because recentContext/appendMemory swallow DB errors).
+  const stubEnv = {
+    GROQ_API_KEY: "",
+    DB: {
+      prepare: () => ({ bind: () => ({ all: async () => ({ results: [] }), run: async () => ({ meta: {} }) }) }),
+    },
+  } as never;
+  const out = await ai.searchAndSynthesize(stubEnv, 1, "cari tentang xyz", "xyz");
+  assert.strictEqual(typeof out.reply, "string");
+  assert.ok(out.reply.length > 0, "canned fallback must be non-empty");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -222,6 +288,8 @@ async function main() {
   await testValueAlignmentShape();
   await testAppendOnlyIntegrity();
   await testHardeningWiring();
+  await testUpgradeMigration();
+  await testAiFailClosed();
   console.log("SAFETY TESTS PASSED");
 }
 

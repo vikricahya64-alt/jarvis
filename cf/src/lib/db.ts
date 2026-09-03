@@ -376,7 +376,51 @@ export async function sweepExpiredProposals(env: Env, now = Date.now()): Promise
   return res.meta.changes ?? 0;
 }
 
-/** List an owner's pending proposals (for /confirm_value, /reject_value). */
+/** Record a task counter for a queue class (used by producer side). */
+export async function recordTaskCounters(env: Env, queue: string, owner: number): Promise<void> {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO task_counters (queue, owner_id, created_at) VALUES (?, ?, ?)`,
+    ).bind(queue, owner, Date.now()).run();
+  } catch { /* availability */ }
+}
+
+/** Append a turn to the conversation log (bounded). Returns true. */
+export async function appendMemory(env: Env, owner: number, role: "user" | "assistant", content: string, searchUsed = ""): Promise<void> {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO conversation_log (owner_id, ts, role, content, search_used) VALUES (?, ?, ?, ?, ?)`,
+    ).bind(owner, Date.now(), role, content.slice(0, 2000), searchUsed).run();
+    // Keep bounded to ~100 turns per owner (cheap SQLite DELETE with LIMIT).
+    await env.DB.prepare(
+      `DELETE FROM conversation_log WHERE id IN (
+        SELECT id FROM conversation_log WHERE owner_id = ? ORDER BY ts ASC LIMIT -1 OFFSET 100
+      )`,
+    ).bind(owner).run().catch(() => {});
+  } catch { /* availability */ }
+}
+
+/** Retrieve the last N turns of conversation context for the LLM. */
+export async function recentContext(env: Env, owner: number, n = 6): Promise<Array<{ role: string; content: string }>> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT role, content FROM conversation_log WHERE owner_id = ? ORDER BY ts DESC LIMIT ?`,
+    ).bind(owner, n).all<{ role: string; content: string }>();
+    return (results ?? []).reverse().map((r) => ({ role: r.role, content: r.content }));
+  } catch {
+    return [];
+  }
+}
+
+/** Prune old conversation turns (keep last keep_days) to bound storage. */
+export async function pruneConversationLog(env: Env, owner: number, keepDays = 7): Promise<void> {
+  try {
+    const cutoff = Date.now() - keepDays * 86400_000;
+    await env.DB.prepare(
+      `DELETE FROM conversation_log WHERE owner_id = ? AND ts < ?`,
+    ).bind(owner, cutoff).run().catch(() => {});
+  } catch { /* availability */ }
+}
 export async function pendingProposals(
   env: Env,
   owner: number,
