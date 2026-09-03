@@ -78,26 +78,74 @@ export async function groqRespond(
   }
 }
 
-/** DuckDuckGo instant-answer search via plain fetch (no API key, free).
- *  Returns a short, human-readable summary or null when offline. */
+/** Generic text extractor: strip HTML tags & entity whitespace. */
+function stripTags(s: string): string {
+  return s
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&amp;|&lt;|&gt;|&quot;/g, (m) =>
+      m === "&nbsp;" ? " " : m === "&amp;" ? "&" : m === "&lt;" ? "<" : m === "&gt;" ? ">" : '"',
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** DuckDuckGo search via plain fetch (no API key, free), with layered fallbacks.
+ *  Tries the Official Instant Answer API (JSON) then the HTML endpoint, and
+ *  finally Bing's lightweight HTML as a last resort. Returns a short human-
+ *  readable summary or null when every source is unreachable.
+ *  Returns an object so the caller can also know which source responded. */
 export async function ddgSearch(query: string): Promise<string | null> {
-  try {
-    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const res = await fetch(url, {
-      headers: { "Accept-Language": "id,id-ID;q=0.9,en;q=0.8" },
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
-    // Extract the first result snippet (lightweight regex; no parser dependency).
-    const resultMatch = html.match(/<a rel="nofollow"[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/i);
-    const snippetMatch = html.match(/<a rel="nofollow"[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i);
-    const title = resultMatch?.[1] ? resultMatch[1].replace(/<[^>]+>/g, "").trim() : null;
-    const snippet = snippetMatch?.[1] ? snippetMatch[1].replace(/<[^>]+>/g, "").trim() : null;
-    if (!title && !snippet) return null;
-    return [title, snippet].filter(Boolean).join(" — ").slice(0, 400);
-  } catch {
-    return null;
+  const attempts: Array<() => Promise<string | null>> = [
+    // 1) Official Instant Answer API (JSON) — most stable, no scraping.
+    async () => {
+      const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+      const res = await fetch(url, { headers: { "Accept-Language": "id,id,en;q=0.8" } });
+      if (!res.ok) return null;
+      const d = (await res.json()) as {
+        AbstractText?: string;
+        Heading?: string;
+        AbstractURL?: string;
+        RelatedTopics?: Array<{ Text?: string }>;
+      };
+      const parts: string[] = [];
+      if (d.AbstractText) parts.push(`${d.Heading || query}: ${d.AbstractText}`);
+      const first = d.RelatedTopics?.find((t) => t.Text);
+      if (first?.Text && parts.length < 2) parts.push(String(first.Text));
+      return parts.length ? parts.join(" — ").slice(0, 400) : null;
+    },
+    // 2) HTML endpoint (scrape) — bots/challenges may block; regex-tolerant.
+    async () => {
+      const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      const res = await fetch(url, { headers: { "Accept-Language": "id,id-ID;q=0.9,en;q=0.8" } });
+      if (!res.ok) return null;
+      const html = await res.text();
+      const a = html.match(/class="result__a"[^>]*>([\s\S]*?)<\/a>/i);
+      const sn = html.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i);
+      if (!a && !sn) return null;
+      const title = a?.[1] ? stripTags(a[1]) : null;
+      const snippet = sn?.[1] ? stripTags(sn[1]) : null;
+      if (!title && !snippet) return null;
+      return [title, snippet].filter(Boolean).join(" — ").slice(0, 400);
+    },
+    // 3) Bing lightweight HTML — different egress reputation, likely reachable.
+    async () => {
+      const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=1`;
+      const res = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (Linux; Android 10)", "Accept-Language": "en,id;q=0.8" },
+      });
+      if (!res.ok) return null;
+      const html = await res.text();
+      const m = html.match(/<li class="b_algo"[^>]*>([\s\S]*?)<\/li>/i);
+      if (!m?.[1]) return null;
+      const block = stripTags(m[1]).slice(0, 400);
+      return block || null;
+    },
+  ];
+  for (const tryFn of attempts) {
+    const r = await tryFn().catch(() => null);
+    if (r) return r;
   }
+  return null;
 }
 
 /** Combined: search the web AND get a Groq-generated synthesis.
