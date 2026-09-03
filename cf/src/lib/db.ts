@@ -445,3 +445,82 @@ export async function pendingProposals(
     reason: string; confidence: number; expires_at: number; ts: number;
   }[]);
 }
+
+// ---------------------------------------------------------------------
+// Persistent memory (FTS5-indexed) — adopted from public-intelligence
+// references: `memories` + `memories_fts` virtual table with sync triggers.
+// ---------------------------------------------------------------------
+
+/** Store a curated memory (fact/decision/context/person) into the FTS5 index. */
+export async function rememberMemory(
+  env: Env,
+  content: string,
+  opts: {
+    type?: "fact" | "decision" | "context" | "person";
+    tags?: string[];
+    importance?: number;
+    source?: string;
+    ttlMs?: number;
+  } = {},
+): Promise<void> {
+  const now = Date.now();
+  const id = (() => {
+    try {
+      const c = (globalThis as { crypto?: { randomUUID: () => string } }).crypto;
+      if (c?.randomUUID) return c.randomUUID();
+    } catch { /* fall through */ }
+    return `${now}-${Math.random().toString(16).slice(2)}`;
+  })();
+  const expires = opts.ttlMs ? now + opts.ttlMs : 0;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO memories (id, type, content, tags, importance, source, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      id,
+      opts.type ?? "fact",
+      String(content).slice(0, 2000),
+      JSON.stringify(opts.tags ?? []),
+      opts.importance ?? 1,
+      opts.source ?? "turn",
+      now,
+      expires,
+    ).run();
+  } catch { /* availability */ }
+}
+
+/** BM25 keyword retrieval over memories (D1 native FTS5). Returns top k. */
+export async function searchMemory(
+  env: Env,
+  query: string,
+  k = 5,
+): Promise<Array<{ id: string; type: string; content: string; importance: number }>> {
+  try {
+    const tail = query.trim().replace(/[^\w\s-]/g, " ").slice(0, 60);
+    if (!tail) return [];
+    const { results } = await env.DB.prepare(
+      `SELECT m.id, m.type, m.content, m.importance,
+              bm25(memories_fts, 10.0, 5.0, 2.0) AS rank
+       FROM memories_fts
+       JOIN memories m ON m.rowid = memories_fts.rowid
+       WHERE memories_fts MATCH ?
+       ORDER BY rank ASC, m.importance DESC
+       LIMIT ?`,
+    ).bind(tail, k).all<{ id: string; type: string; content: string; importance: number }>();
+    return (results ?? []).map((r) => ({ id: r.id, type: r.type, content: r.content, importance: r.importance }));
+  } catch {
+    return [];
+  }
+}
+
+/** Delete expired memories (call from cron; frees D1 + keeps FTS5 tidy). */
+export async function sweepExpiredMemories(env: Env, now = Date.now()): Promise<number> {
+  try {
+    const res = await env.DB.prepare(
+      `DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at != 0 AND expires_at < ?`,
+    ).bind(now).run();
+    return res.meta.changes ?? 0;
+  } catch {
+    return 0;
+  }
+}

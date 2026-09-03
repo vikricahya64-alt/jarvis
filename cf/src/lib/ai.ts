@@ -11,7 +11,8 @@
 // CPU is I/O-wait only). DuckDuckGo instant answer is plain fetch.
 //=====================================================================
 
-import { Env, recentContext, appendMemory } from "./db";
+import { Env, recentContext, appendMemory, searchMemory } from "./db";
+import { withResilience, fetchWithTimeout, logRequest } from "./resilience";
 
 const GROQ_MODEL = "llama-3.3-70b-versatile";
 // Google Gemini as a resilience fallback when Groq is rate-limited/down.
@@ -59,8 +60,10 @@ export async function groqRespond(
     ...context.map((c) => ({ role: c.role, content: c.content })),
     { role: "user" as const, content: userText + topicHint },
   ];
-  try {
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  // Resilient call: retry on 429/5xx, breaker-aware, time-budgeted, logged.
+  let reply: string | null = null;
+  const ok = await withResilience(env, "groq", 0, async (timeoutMs) => {
+    const res = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -72,14 +75,13 @@ export async function groqRespond(
         messages,
         max_tokens: 500,
       }),
-    });
-    if (!res.ok) return null;
+    }, timeoutMs);
+    if (!res.ok) return { ok: false, status: res.status };
     const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
-    return raw || null;
-  } catch {
-    return null;
-  }
+    reply = data.choices?.[0]?.message?.content?.trim() ?? "";
+    return { ok: Boolean(reply), status: res.status };
+  });
+  return ok ? reply : null;
 }
 
 /** Google Gemini generative response (free-tier gemma) — resilience fallback
@@ -110,23 +112,27 @@ export async function geminiRespond(
     topicHint +
     "\n\nBalas dalam Bahasa Indonesia ringkas.";
   for (const apiKey of keys) {
-    try {
-      const model = env.GEMINI_MODEL || GEMINI_FREE_MODEL;
-      const res = await fetch(`${GEMINI_API}${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.4, maxOutputTokens: 600 },
-        }),
-      });
-      if (!res.ok) continue;
+    const model = env.GEMINI_MODEL || GEMINI_FREE_MODEL;
+    let reply: string | null = null;
+    const ok = await withResilience(env, "gemini", 1, async (timeoutMs) => {
+      const res = await fetchWithTimeout(
+        `${GEMINI_API}${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.4, maxOutputTokens: 600 },
+          }),
+        },
+        timeoutMs,
+      );
+      if (!res.ok) return { ok: false, status: res.status };
       const data = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-      const raw = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
-      if (raw) return raw;
-    } catch {
-      /* try next key */
-    }
+      reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
+      return { ok: Boolean(reply), status: res.status };
+    });
+    if (ok && reply) return reply;
   }
   return null;
 }
@@ -162,12 +168,12 @@ function stripTags(s: string): string {
  *  finally Bing's lightweight HTML as a last resort. Returns a short human-
  *  readable summary or null when every source is unreachable.
  *  Returns an object so the caller can also know which source responded. */
-export async function ddgSearch(query: string): Promise<string | null> {
+export async function ddgSearch(env: Env, query: string): Promise<string | null> {
   const attempts: Array<() => Promise<string | null>> = [
     // 1) Official Instant Answer API (JSON) — most stable, no scraping.
     async () => {
       const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-      const res = await fetch(url, { headers: { "Accept-Language": "id,id,en;q=0.8" } });
+      const res = await fetchWithTimeout(url, { headers: { "Accept-Language": "id,id,en;q=0.8" } }, 10000);
       if (!res.ok) return null;
       const d = (await res.json()) as {
         AbstractText?: string;
@@ -184,7 +190,7 @@ export async function ddgSearch(query: string): Promise<string | null> {
     // 2) HTML endpoint (scrape) — bots/challenges may block; regex-tolerant.
     async () => {
       const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-      const res = await fetch(url, { headers: { "Accept-Language": "id,id-ID;q=0.9,en;q=0.8" } });
+      const res = await fetchWithTimeout(url, { headers: { "Accept-Language": "id,id-ID;q=0.9,en;q=0.8" } }, 10000);
       if (!res.ok) return null;
       const html = await res.text();
       const a = html.match(/class="result__a"[^>]*>([\s\S]*?)<\/a>/i);
@@ -198,9 +204,9 @@ export async function ddgSearch(query: string): Promise<string | null> {
     // 3) Bing lightweight HTML — different egress reputation, likely reachable.
     async () => {
       const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=1`;
-      const res = await fetch(url, {
+      const res = await fetchWithTimeout(url, {
         headers: { "User-Agent": "Mozilla/5.0 (Linux; Android 10)", "Accept-Language": "en,id;q=0.8" },
-      });
+      }, 10000);
       if (!res.ok) return null;
       const html = await res.text();
       const m = html.match(/<li class="b_algo"[^>]*>([\s\S]*?)<\/li>/i);
@@ -209,11 +215,18 @@ export async function ddgSearch(query: string): Promise<string | null> {
       return block || null;
     },
   ];
+  let result: string | null = null;
+  const start = Date.now();
   for (const tryFn of attempts) {
     const r = await tryFn().catch(() => null);
-    if (r) return r;
+    if (r) {
+      result = r;
+      break;
+    }
   }
-  return null;
+  await logRequest(env, "ddg", result ? "ok" : "fail", Date.now() - start, 0,
+    result ? "search ok" : "all layers failed");
+  return result;
 }
 
 /** Combined: search the web AND get a generative (Groq→Gemini) synthesis.
@@ -224,8 +237,17 @@ export async function searchAndSynthesize(
   userText: string,
   topic: string,
 ): Promise<{ reply: string; source: string }> {
-  const searchResult = await ddgSearch(topic);
+  const searchResult = await ddgSearch(env, topic);
   const context = await recentContext(env, owner, 4);
+  // FTS5 retrieval: pull relevant persisted memories so the generative reply
+  // can draw on what JARVIS already knows about this topic (free-tier memory).
+  const mems = await searchMemory(env, topic, 4);
+  if (mems.length > 0) {
+    context.push({
+      role: "assistant",
+      content: "Kenang-kenangan relevan: " + mems.map((m) => m.content).join(" | ").slice(0, 1200),
+    });
+  }
   const g = await llmRespond(env, userText, { context, topic });
   if (g.reply) {
     await appendMemory(env, owner, "user", userText, topic);
