@@ -8,13 +8,40 @@
 // the queue consumer, both bounded. All GOTCHA-free, no external SDK.
 //=====================================================================
 
-import { Env, sweepExpiredProposals } from "./lib/db";
+import { Env, auditIntegrity, sweepExpiredProposals } from "./lib/db";
 import { handleUpdate } from "./workers/telegram_webhook";
 import { setWebhook } from "./lib/telegram";
 import { runDms } from "./daemons/dead_mans_switch";
-import { processMessage, TaskMessage } from "./workers/task_processor";
+import { processMessage, escalateToDms, TaskMessage } from "./workers/task_processor";
+import { requireCert } from "./lib/zero_trust";
 
 const OWNER = (env: Env) => Number(env.OWNER_TELEGRAM_ID || 0);
+
+/**
+ * Environment-adaptive privileged-endpoint gate.
+ *
+ * On a deployment fronted by Cloudflare Access (mTLS enforced), the worker
+ * sees Cloudflare-Client-Cert-* headers and we require a valid cert. On the
+ * current *.workers.dev exposure (no Access configured) those headers are
+ * absent, so we fall back to the caller-supplied secret/token check that the
+ * caller already performed. This keeps zero-trust code live AND the existing
+ * webhook auth working — no behavior regression.
+ */
+function certOr(request: Request, fallback: boolean): boolean {
+  const hasCertHeaders =
+    request.headers.has("Cloudflare-Client-Cert-Verified") &&
+    request.headers.has("Cloudflare-Client-Cert-Subject");
+  if (!hasCertHeaders) return fallback; // not behind Access → trust caller's token/secret check
+  return requireCert(request).ok;
+}
+
+/** Read a numeric env var with a default (defensive against NaN/empty). */
+function numberOrDefault(env: Env, key: string, dflt: number): number {
+  const raw = env[key as keyof Env];
+  if (typeof raw !== "string" || raw === "") return dflt;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : dflt;
+}
 
 export default {
   //----------------------------------------------------------------------
@@ -64,12 +91,20 @@ export default {
     // Admin helper — point Telegram to this worker.
     if (path === "/setwebhook") {
       const token = url.searchParams.get("token");
-      if (token !== env.TELEGRAM_SECRET && token !== env.TELEGRAM_TOKEN) {
+      const tokenOk = token === env.TELEGRAM_SECRET || token === env.TELEGRAM_TOKEN;
+      // Behind Access, require mTLS too; on raw workers.dev fall back to token.
+      if (!certOr(request, tokenOk)) {
         return new Response("unauthorized", { status: 401 });
       }
       const target = url.searchParams.get("url") ?? url.origin + "/webhook";
       await setWebhook(env, target, env.TELEGRAM_SECRET);
       return Response.json({ ok: true, target });
+    }
+
+    // Read-only append-only audit integrity report (gap detection).
+    if (path === "/audit_status") {
+      const summary = await auditIntegrity(env);
+      return Response.json({ ok: true, ts: Date.now(), ...summary });
     }
 
     return new Response("not found", { status: 404 });
@@ -118,11 +153,19 @@ export default {
   //----------------------------------------------------------------------
   async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
     for (const message of batch.messages) {
-      const outcome = await processMessage(env, message.body as TaskMessage);
+      const msg = message.body as TaskMessage;
+      const outcome = await processMessage(env, msg);
       if (outcome === "ok") {
         message.ack();
       } else if (outcome === "retry") {
-        // allow Cloudflare to retry per the consumer's max_retries/backoff config
+        // Allow Cloudflare to retry per the consumer's max_retries/backoff.
+        // If this is the final permitted attempt before the DLQ, escalate so the
+        // owner isn't left waiting on a silently-dead notification.
+        const attemptsSoFar = message.attempts ?? 1;
+        const maxRetries = numberOrDefault(env, "QUEUE_MAX_RETRIES", 3);
+        if (attemptsSoFar >= maxRetries) {
+          await escalateToDms(env, msg.ownerId, `queue_dlq for ${msg.correlationId}`);
+        }
       }
       // "dead": let it stay unacked → lands in DLQ after retries are exhausted.
     }

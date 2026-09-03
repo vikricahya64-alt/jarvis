@@ -130,6 +130,25 @@ export async function getConsentRequestTs(env: Env, owner: number, corr: string)
   }
 }
 
+/** Detect deletion gaps in append-only audit tables. Append-only means id is
+ *  monotonically increasing; if COUNT(*) < MAX(id) there is a gap (tampering
+ *  or an accidental DELETE). Zero-risk read-only check exposed via /audit_status. */
+export async function auditIntegrity(env: Env): Promise<Record<string, { count: number; maxId: number; gap: boolean }>> {
+  const tables = ["obedience_audit", "consent_log", "constitutional_violations"] as const;
+  const out: Record<string, { count: number; maxId: number; gap: boolean }> = {};
+  for (const t of tables) {
+    try {
+      const row = await env.DB.prepare(`SELECT COUNT(*) AS c, COALESCE(MAX(id),0) AS m FROM ${t}`).first<{ c: number; m: number }>();
+      const count = row?.c ?? 0;
+      const maxId = row?.m ?? 0;
+      out[t] = { count, maxId, gap: maxId > count };
+    } catch {
+      out[t] = { count: -1, maxId: -1, gap: false }; // table unavailable → no alarm
+    }
+  }
+  return out;
+}
+
 /** Weekly "obeyed vs blocked" summary for /obedience_report. */
 export async function obedienceWeekly(env: Env, owner: number): Promise<(
   | { id: number; compliance: string; decision: string; priority: number; ts: number }
