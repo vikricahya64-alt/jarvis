@@ -19,6 +19,7 @@ import { identityStatusText, createEpoch, verifyContinuity, markEpochVerified } 
 import { refreshQuotaSnapshot as monitorRefresh } from "./lib/monitor";
 import { ddgSearch } from "./lib/ai";
 import { acquireCronLock, releaseCronLock } from "./lib/resilience";
+import { runDreamCycle, generateMorningBriefing, decayPreferences } from "./lib/evolution";
 
 const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
 
@@ -256,6 +257,20 @@ export default {
           console.log(`[cron] obedience_report: sent (${Date.now() - start}ms)`);
         } else {
           console.log(`[cron] obedience_report: skip (not Sunday) (${Date.now() - start}ms)`);
+        }
+      } else if (cron === "0 7 * * *") {
+        // Level 13 (Reflective Apprentice): dream-cycle consolidation + adaptive
+        // preference decay + proactive morning sentinel. Skip-if-nothing logic
+        // means usually no Telegram message is sent (no owner fatigue).
+        await decayPreferences(env);
+        const dream = await runDreamCycle(env);
+        console.log(`[cron] dream: scanned=${dream.scanned} insights=${dream.insightsExtracted} archived=${dream.archived} (${Date.now() - start}ms)`);
+        const briefing = await generateMorningBriefing(env, owner);
+        if (briefing) {
+          await sendMessage(env, owner, briefing);
+          console.log(`[cron] morning_briefing: sent ${briefing.length} chars`);
+        } else {
+          console.log(`[cron] morning_briefing: skip (nothing notable)`);
         }
       }
     } catch (e) {

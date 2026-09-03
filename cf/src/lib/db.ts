@@ -499,15 +499,23 @@ export async function searchMemory(
     const tail = query.trim().replace(/[^\w\s-]/g, " ").slice(0, 60);
     if (!tail) return [];
     const { results } = await env.DB.prepare(
-      `SELECT m.id, m.type, m.content, m.importance,
+      `SELECT m.rowid, m.id, m.type, m.content, m.importance,
               bm25(memories_fts, 10.0, 5.0, 2.0) AS rank
        FROM memories_fts
        JOIN memories m ON m.rowid = memories_fts.rowid
        WHERE memories_fts MATCH ?
        ORDER BY rank ASC, m.importance DESC
        LIMIT ?`,
-    ).bind(tail, k).all<{ id: string; type: string; content: string; importance: number }>();
-    return (results ?? []).map((r) => ({ id: r.id, type: r.type, content: r.content, importance: r.importance }));
+    ).bind(tail, k).all<{ rowid: number; id: string; type: string; content: string; importance: number }>();
+    const rows = results ?? [];
+    // Bump recency/access so consolidation knows which memories stay useful.
+    if (rows.length > 0) {
+      await env.DB.prepare(
+        `UPDATE memories SET access_count=access_count+1, last_retrieved=?
+         WHERE rowid IN (${rows.map(() => "?").join(",")})`,
+      ).bind(Date.now(), ...rows.map((r) => r.rowid)).run().catch(() => {});
+    }
+    return rows.map((r) => ({ id: r.id, type: r.type, content: r.content, importance: r.importance }));
   } catch {
     return [];
   }

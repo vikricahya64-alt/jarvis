@@ -138,19 +138,43 @@ Aturan kedaulatan (tetap matuh perintah Anda):
 4. Fitur esensial (covenant/DMS/override) **tidak pernah** dimatikan oleh degradasi.
 5. Sunset preview TIDAK mengeksekusi purge — inisiasi manual + konfirmasi ganda.
 
+## 5e. Level 13 — Reflective Apprentice (self-improvement yang aman)
+
+Level 13 menaikkan J.A.R.V.I.S. dari steward menjadi *pembelajar*: merefleksikan
+output (1-ronde), mengonsolidasikan pengalaman harian menjadi insight berbukti,
+beradaptasi pada preferensi pemilik, dan mengirim briefing pagi *skip-if-nothing*.
+Tetap 100% free-tier, append-only, dan di bawah kedaulatan pemilik. Detail:
+`docs/level13.md`.
+
+| Modul | Lokasi | Perintah |
+|-------|--------|----------|
+| **Verbal Reflection** (Relexion/Self-Refine, 1-ronde) | `evolution.ts` + `0007` | `/reflect` |
+| **Dreaming Consolidation** (cron `0 7`) | `evolution.ts`/`index.ts` | otomatis |
+| **Experiential Insight** (≥3 bukti, ExpeL) | `evolution.ts` + `0007` | `/insights`, `/disable-insight`, `/audit-phantom` |
+| **Adaptive Preference** (confidence+TLL) | `evolution.ts` + `0007` | `/preferences`, `/set-preference`, `/disable-preference` |
+| **Morning Sentinel** (skip-if-nothing) | `evolution.ts`/`index.ts` | otomatis |
+
+Cron L13 (`0 7 * * *`) ditambah dari 3 → 4 (tetap ≤5 dalam budget free-tier) dan
+memakai cron-lock D1. `ai.ts` menyisipkan preferensi+insight aktif ke konteks LLM
+dan memicu refleksi bounded (fire-and-forget) tanpa mengubah sistem-prompt.
+
 ## 6. File penting (cf/)
 
 ```
-wrangler.toml            bindings + vars + cron (3)
+wrangler.toml            bindings + vars + cron (4)
 migrations/0001_init.sql schema D1
 migrations/0002_legacy_inline.sql inline vault payload
 migrations/0003_upgrade.sql task_counters + conversation_log
 migrations/0004_maestro.sql maestro (plans/plan_steps/scheduled_tasks) + degradasi
 migrations/0005_covenant.sql covenant immutable + identity epoch + quota + sunset preview
-src/index.ts             router + cron + queue (+ laporan Mingguan, identity epoch, quota)
+migrations/0006_resilience.sql circuit breaker, observability, FTS5 memory, cron lock
+migrations/0007_evolution.sql L13: reflection_log, insights, owner_preferences, dream_cycles
+src/index.ts             router + cron + queue (+ laporan Mingguan, identity epoch, quota, dream L13)
 src/workers/task_processor.ts      queue consumer
-src/workers/telegram_webhook.ts    webhook + consent/clarify + jalur AI + perintah L12
-src/lib/ai.ts            groqRespond + ddgSearch + searchAndSynthesize (kognitif)
+src/workers/telegram_webhook.ts    webhook + consent/clarify + jalur AI + perintah L12/L13
+src/lib/ai.ts            groqRespond + ddgSearch + searchAndSynthesize (kognitif) + refleksi
+src/lib/resilience.ts    circuit breaker, retry/timeout, observability, cron lock D1
+src/lib/evolution.ts     L13: refleksi, konsolidasi, insight, preferensi, sentinel, guardrail
 src/lib/command_hierarchy.ts       prioritas + clarity + consent + audit + pause
 src/lib/constitutional_guard.ts    fail-closed constitution (L11 python port)
 src/lib/covenant_core.ts           covenant immutable (signing INSERT-only + validasi)

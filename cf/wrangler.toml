@@ -77,4 +77,4 @@ QUEUE_RETRY_BACKOFF_MS = "1000"
 # The single Worker dispatches by scheduled cron name (see src/index.ts).
 #------------------------------------------------------------------------------
 [triggers]
-crons = ["0 */6 * * *", "0 3 * * *", "0 8 * * *"]
+crons = ["0 */6 * * *", "0 3 * * *", "0 8 * * *", "0 7 * * *"]

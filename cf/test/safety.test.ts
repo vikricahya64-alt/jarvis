@@ -461,6 +461,61 @@ async function testResilienceLayer() {
   assert.ok(/sweepExpiredMemories/.test(idx), "index must sweep expired memories on cron");
 }
 
+async function testLevel13Evolution() {
+  // Migration 0007 must create the L13 self-improvement tables (append-only,
+  // owner-overridable) and extend memories with recency/access tracking.
+  const sql = readFileSync(
+    new URL("../migrations/0007_evolution.sql", import.meta.url),
+    "utf-8",
+  );
+  for (const t of ["reflection_log", "insights", "owner_preferences", "dream_cycles"]) {
+    assert.ok(new RegExp(`CREATE TABLE IF NOT EXISTS ${t}\\b`).test(sql), `0007 must create ${t}`);
+  }
+  assert.ok(/ALTER TABLE memories ADD COLUMN access_count/.test(sql),
+    "0007 must add access_count to memories");
+  assert.ok(/ALTER TABLE memories ADD COLUMN last_retrieved/.test(sql),
+    "0007 must add last_retrieved to memories");
+
+  const evo = await import("../src/lib/evolution");
+  // Phantom guard: an insight REQUIRES minimum evidence before acting.
+  assert.ok(evo.MIN_INSIGHT_EVIDENCE >= 3,
+    "insight warrant must require at least 3 supporting memories");
+  for (const fn of [
+    "reflectOnTurn", "extractInsightFromCluster", "saveInsight", "runDreamCycle",
+    "generateMorningBriefing", "setPreference", "getActivePreferences",
+    "disablePreference", "listInsights", "getBehaviorContext", "auditPhantomRules",
+  ]) {
+    assert.strictEqual(typeof evo[fn as keyof typeof evo], "function", `evolution must export ${fn}`);
+  }
+
+  // Sovereignty: the self-improvement layer must NOT modify the agent's own
+  // constitution/covenant schema or gate owner commands. It only ADDs learned
+  // context and soft-disables; it must never ALTER its own schema.
+  const evoSrc = readFileSync(new URL("../src/lib/evolution.ts", import.meta.url), "utf-8");
+  assert.ok(!/\bALTER TABLE\b/.test(evoSrc), "evolution must never ALTER schema (owner-only)");
+  assert.ok(!/covenant_clauses|\bcovenant_core\b/i.test(evoSrc),
+    "evolution must not reach into the immutable covenant layer");
+
+  // webhook must expose the owner-overridable self-improvement surface.
+  const wh = readFileSync(new URL("../src/workers/telegram_webhook.ts", import.meta.url), "utf-8");
+  for (const cmd of ["/insights", "/audit-phantom", "/preferences", "/set-preference", "/disable-insight", "/disable-preference"]) {
+    assert.ok(wh.includes(`"${cmd}"`) || wh.includes(`'${cmd}'`), `webhook must handle ${cmd}`);
+  }
+
+  // index.ts must run the dream cycle on the new cron and honor the cron lock.
+  const idx = readFileSync(new URL("../src/index.ts", import.meta.url), "utf-8");
+  assert.ok(/runDreamCycle/.test(idx), "index must run the dream cycle on cron");
+  assert.ok(/0 7 \* \* \*/.test(readFileSync(new URL("../wrangler.toml", import.meta.url), "utf-8")),
+    "wrangler.toml must register the 0 7 dream cron");
+
+  // ai.ts must inject learned behavior context and trigger bounded reflection.
+  const ai2 = await import("../src/lib/ai");
+  assert.ok(typeof (ai2 as unknown as Record<string, unknown>).searchAndSynthesize === "function");
+  const aiSrc = readFileSync(new URL("../src/lib/ai.ts", import.meta.url), "utf-8");
+  assert.ok(/getBehaviorContext/.test(aiSrc), "ai must inject behavior context into replies");
+  assert.ok(/reflectOnTurn/.test(aiSrc), "ai must trigger bounded reflection");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -476,6 +531,7 @@ async function main() {
   await testAiFailClosed();
   await testLevel12Integrity();
   await testResilienceLayer();
+  await testLevel13Evolution();
   console.log("SAFETY TESTS PASSED");
 }
 
