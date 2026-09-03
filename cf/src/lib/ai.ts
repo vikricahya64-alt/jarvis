@@ -13,6 +13,7 @@
 
 import { Env, recentContext, appendMemory, searchMemory } from "./db";
 import { withResilience, fetchWithTimeout, logRequest } from "./resilience";
+import { getBehaviorContext, reflectOnTurn } from "./evolution";
 
 const GROQ_MODEL = "llama-3.3-70b-versatile";
 // Google Gemini as a resilience fallback when Groq is rate-limited/down.
@@ -248,10 +249,23 @@ export async function searchAndSynthesize(
       content: "Kenang-kenangan relevan: " + mems.map((m) => m.content).join(" | ").slice(0, 1200),
     });
   }
+  // L13: inject accumulated insights + owner preferences into the reply
+  // context — this steers behavior toward owner preferences without modifying
+  // the system prompt (metacognitive guardrail: append-only context, never
+  // prompt rewrite). Fail-open: missing evolution data doesn't block replies.
+  const behaviorContext = await getBehaviorContext(env, topic);
+  if (behaviorContext) {
+    context.push({ role: "user", content: behaviorContext });
+  }
   const g = await llmRespond(env, userText, { context, topic });
   if (g.reply) {
     await appendMemory(env, owner, "user", userText, topic);
     await appendMemory(env, owner, "assistant", g.reply, topic);
+    // L13 bounded reflection (max 1 round): fire-and-forget so it never delays
+    // the reply or triggers a Telegram retry storm. Fail-open by design.
+    if (g.reply.length > 120) {
+      void reflectOnTurn(env, userText, g.reply, []).catch(() => {});
+    }
     return { reply: g.reply, source: `${g.source}+ddg` };
   }
   if (searchResult) {

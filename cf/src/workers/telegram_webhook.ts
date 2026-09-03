@@ -16,12 +16,16 @@ import {
   setPrivacyMode, isPrivacyMode,
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
-import { queueStatus, recordTaskCounters, appendMemory } from "../lib/db";
+import { queueStatus, recordTaskCounters, appendMemory, rememberMemory } from "../lib/db";
 import { searchAndSynthesize, extractTopic } from "../lib/ai";
 import { covenantStatusText, signClause } from "../lib/covenant_core";
 import { identityStatusText } from "../lib/identity_anchor";
 import { getPlans, getScheduledTasks } from "../lib/maestro";
 import { getDegradationStatus } from "../lib/degradation";
+import {
+  listInsights, setPreference, disablePreference, getActivePreferences,
+  auditPhantomRules, reflectOnTurn, getBehaviorContext,
+} from "../lib/evolution";
 
 const RATE_LIMIT_MS = 1000;
 
@@ -278,6 +282,71 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
       : "Belum ada tugas terjadwal.";
     await fire(sendMessage(env, r,
       `🪝 *Maestro*\n*Rencana* (n=${plans.length}):\n${planLines}\n\n*Tugas* (n=${tasks.length}):\n${taskLines}`));
+    return new Response("ok", { status: 200 });
+  }
+
+  // ------------------------------------------------------------------
+  // Level 13 (Reflective Apprentice) — self-improvement surface.
+  // Everything is append-only, evidence-warranted, and owner-overridable.
+  // ------------------------------------------------------------------
+  if (trimmed === "/reflect") {
+    await fire(sendMessage(env, r,
+      "🧠 *Refleksi*\nJ.A.R.V.I.S. merefleksikan output ~1 ronde setelah tugas kompleks, " +
+      "mencatat kritik + versi perbaikan di \`reflection_log\`, lalu mengonsolidasikan " +
+      "pola menjadi \`insights\` setiap pagi (cron 0 7).\n" +
+      "Lihat: /insights · /audit-phantom"));
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed === "/insights") {
+    const insights = await listInsights(env, false);
+    if (insights.length === 0) {
+      await fire(sendMessage(env, r, "💡 Belum ada insight. J.A.R.V.I.S. masih belajar dari pengalaman Anda."));
+    } else {
+      const lines = insights.map((i) =>
+        `• #${i.id} [${i.category}] c=${i.confidence.toFixed(2)} bukti=${i.evidenceCount}\n  ${i.ruleText.slice(0, 120)}`,
+      ).join("\n");
+      await fire(sendMessage(env, r,
+        `💡 *Insights yang dipelajari* (${insights.length})\n${lines}\n\nNonaktifkan: /disable-insight <id>`));
+    }
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed.startsWith("/disable-insight")) {
+    const id = Number(text.replace(/^\/disable-insight\s*/i, "").trim());
+    if (!id) { await fire(sendMessage(env, r, "Gunakan: /disable-insight <id>")); return new Response("ok", { status: 200 }); }
+    try {
+      const rr = await env.DB.prepare(`UPDATE insights SET disabled=1 WHERE id=? AND disabled=0`).bind(id).run();
+      await fire(sendMessage(env, r, rr.meta.changes > 0 ? `📵 Insight #${id} dinonaktifkan.` : `Tidak ada insight aktif #${id}.`));
+    } catch { await fire(sendMessage(env, r, "Gagal menonaktifkan insight.")); }
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed === "/audit-phantom") {
+    const audit = await auditPhantomRules(env);
+    await fire(sendMessage(env, r, `🛡️ *Audit Phantom*\n${audit}`));
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed === "/preferences" || trimmed === "/prefs") {
+    const prefs = await getActivePreferences(env);
+    if (prefs.length === 0) {
+      await fire(sendMessage(env, r, "⚙️ Belum ada preferensi. Setel: /set-preference <kunci> = <nilai>"));
+    } else {
+      const lines = prefs.map((p) => `• \`${p.key}\` = ${p.value.slice(0, 60)} (${p.source}, c=${p.confidence.toFixed(2)})`).join("\n");
+      await fire(sendMessage(env, r, `⚙️ *Preferensi aktif*\n${lines}\n\nNonaktifkan: /disable-preference <kunci>`));
+    }
+    return new Response("ok", { status: 200 });
+  }
+  const setPref = trimmed.match(/^\/set-preference\s+(.+?)\s*=\s*(.+)$/);
+  if (setPref) {
+    await fire(sendMessage(env, r, await setPreference(env, setPref[1], setPref[2])));
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed.startsWith("/disable-preference")) {
+    const key = text.replace(/^\/disable-preference\s*/i, "").trim();
+    await fire(sendMessage(env, r, await disablePreference(env, key)));
+    return new Response("ok", { status: 200 });
+  }
+  // "/set-preference" but malformed (no "=").
+  if (trimmed.startsWith("/set-preference")) {
+    await fire(sendMessage(env, r, "Gunakan: /set-preference <kunci> = <nilai>. Contoh: /set-preference format = markdown singkat"));
     return new Response("ok", { status: 200 });
   }
 
