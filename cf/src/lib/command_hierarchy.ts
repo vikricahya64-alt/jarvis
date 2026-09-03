@@ -413,7 +413,7 @@ export async function isAutonomyPaused(env: Env, owner: number): Promise<boolean
 }
 
 /** Mask sensitive ids before persisting (L11 `_redact` parity). */
-function redact(value: string): string {
+export function redact(value: string): string {
   if (!value) return "";
   const val = String(value);
   if (val.length <= 4) return "***";

@@ -12,10 +12,11 @@
 import { Env, touchActivity, logConsent, getConsentRequestTs, getDmsConfig, DmsConfig } from "../lib/db";
 import { sendMessage, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, InlineButton } from "../lib/telegram";
 import {
-  routeCommand, markExplicitStop, setAutonomyPaused, isAutonomyPaused,
+  routeCommand, markExplicitStop, setAutonomyPaused, isAutonomyPaused, redact,
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
-import { queueStatus } from "../lib/db";
+import { queueStatus, recordTaskCounters, appendMemory } from "../lib/db";
+import { searchAndSynthesize, extractTopic } from "../lib/ai";
 
 const RATE_LIMIT_MS = 1000;
 
@@ -196,19 +197,6 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   return new Response("ok", { status: 200 });
 }
 
-/**
- * Redact sensitive identifiers before persisting to audit/consent logs
- * (L11 python `_redact` + data-sovereignty L6 parity). Correlation ids and
- * command hashes on the wire are masked so raw values never persist verbatim,
- * while a short prefix is retained for correlation/debugging.
- */
-function redact(value: string): string {
-  if (!value) return "";
-  const val = String(value);
-  if (val.length <= 4) return "***";
-  return val.slice(0, 4) + "…redacted/" + val.length;
-}
-
 async function resolveConsent(env: Env, owner: number, corr: string, decision: string): Promise<boolean> {
   // Enforce consent TTL (default-DENY). If the request was raised longer ago
   // than CONSENT_TIMEOUT_S (default 60s) and no matching request row exists,
@@ -234,6 +222,18 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
   const res = await routeCommand(env, owner, text);
   switch (res.decision.action) {
     case "EXECUTE":
+      // Raise the edge from canned to real reasoning (L8/L10): if the owner
+      // asked for research/search/recap, run DDG web search + Groq synthesis
+      // with conversation-memory context. Fail-closed to the canned label.
+      const topic = extractTopic(text);
+      if (topic) {
+        // Friendly info/query EXECUTE → real search + synthesis (+ memory).
+        const r = await searchAndSynthesize(env, owner, text, topic);
+        await appendMemory(env, owner, "assistant", r.reply, topic);
+        await recordTaskCounters(env, "standard", owner);
+        await fire(sendMessage(env, owner, r.reply));
+        break;
+      }
       await fire(sendMessage(env, owner, applyDefault(res, text)));
       break;
     case "CLARIFY":
@@ -288,34 +288,12 @@ function applyDefault(res: Awaited<ReturnType<typeof routeCommand>>, rawText = "
     50: "Status dimuat.",
     30: "Ok.",
   };
-  // Search / research requests → helpful, state WHAT I'll look into (no live
-  // browsing, just a declared plan so the user know what was understood).
-  const searchTopic = extractTopic(rawText);
-  if (searchTopic) {
-    return (
-      `Saya akan bantu mencari: *${searchTopic}*.\n` +
-      `Sebagai J.A.R.V.I.S. di edge, tempat terbaik memulai: ` +
-      `/health, /status, /dms_status — atau beri lokasi web/topik spesifik.`
-    );
+  if (extractTopic(rawText)) {
+    // Topic is handled by the real search+generative path in act(); this is
+    // only a defensive fallback if that path is ever bypassed.
+    return "Mencari topik itu. Kirim ulang jika perlu jawaban lebih dalam.";
   }
   return label[res.decision.priority] ?? "Ok.";
-}
-
-/** Pull a concrete topic from a search/summarize request. */
-function extractTopic(text: string): string | null {
-  const low = text.trim().toLowerCase();
-  // Capture text following a research keyword (context-aware, greedy to EOL).
-  const m = low.match(
-    /\b(?:cari|search|tentang|mengenai|ringkas|summarize|artikel|topik|info|informasi)\b\s*[:\-]?\s*(.+)$/,
-  );
-  if (!m) return null;
-  let topic = m[1]
-    .replace(/^(bantu|tolong|buatkan|please|let me|lagi|dong|sudah|untuk)\s*/i, "")
-    .replace(/[?.!,;:]+$/g, "")
-    .trim();
-  if (!topic) return null;
-  // If we captured filler instead of a real topic, require a min length.
-  return topic.length >= 3 ? topic.slice(0, 120) : null;
 }
 
 /** Read whether the owner has ratified a constitution (for /status). */

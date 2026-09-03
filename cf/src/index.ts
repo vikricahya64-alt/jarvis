@@ -8,9 +8,9 @@
 // the queue consumer, both bounded. All GOTCHA-free, no external SDK.
 //=====================================================================
 
-import { Env, auditIntegrity, sweepExpiredProposals } from "./lib/db";
+import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary } from "./lib/db";
 import { handleUpdate } from "./workers/telegram_webhook";
-import { setWebhook } from "./lib/telegram";
+import { setWebhook, sendMessage } from "./lib/telegram";
 import { runDms } from "./daemons/dead_mans_switch";
 import { processMessage, escalateToDms, TaskMessage } from "./workers/task_processor";
 import { requireCert } from "./lib/zero_trust";
@@ -41,6 +41,42 @@ function numberOrDefault(env: Env, key: string, dflt: number): number {
   if (typeof raw !== "string" || raw === "") return dflt;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : dflt;
+}
+
+/** Compose + send the Sunday obedience report to the owner via Telegram.
+ *  Fire-and-forget: a Telegram outage cannot raise a cron failure (next tick
+ *  is a week away, so we best-effort send and log). */
+async function sendWeeklyObedienceReport(env: Env, owner: number): Promise<void> {
+  const rows = await obedienceWeekly(env, owner);
+  const violated = await violationSummary(env, owner);
+  let executed = 0;
+  let blocked = 0;
+  let pending = 0;
+  for (const r of rows) {
+    if (r.compliance === "COMPLIANT") executed++;
+    else if (r.compliance === "BLOCKED") blocked++;
+    else if (r.compliance === "PENDING") pending++;
+  }
+  const violations = Object.entries(violated)
+    .map(([k, v]) => `• ${k}: ${v}×`)
+    .join("\n") || "Tidak ada blok konstitusi minggu ini.";
+  const lines = [
+    "📋 *Laporan Kepatuhan Mingguan J.A.R.V.I.S.*",
+    "",
+    `Periode: 7 hari terakhir (n=${rows.length})`,
+    `• Di-eksekusi (COMPLIANT): ${executed}`,
+    `• Diblokir (BLOCKED): ${blocked}`,
+    `• Menunggu (PENDING): ${pending}`,
+    "",
+    `Pelanggaran konstitusi:\n${violations}`,
+    "",
+    `Lihat /audit_status atau /status untuk detail.`,
+  ];
+  try {
+    await sendMessage(env, owner, lines.join("\n"));
+  } catch (e) {
+    console.error("[cron] obedience_report send failed", (e as Error).message);
+  }
 }
 
 export default {
@@ -137,7 +173,8 @@ export default {
         // Sunday guard so the daily-form can never fire on other days.
         const isSunday = new Date().getUTCDay() === 0;
         if (isSunday) {
-          console.log(`[cron] obedience_report: dispatch (${Date.now() - start}ms)`);
+          await sendWeeklyObedienceReport(env, owner);
+          console.log(`[cron] obedience_report: sent (${Date.now() - start}ms)`);
         } else {
           console.log(`[cron] obedience_report: skip (not Sunday) (${Date.now() - start}ms)`);
         }
