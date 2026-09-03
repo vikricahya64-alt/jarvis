@@ -10,6 +10,7 @@
 
 import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
+import { isFollowUpQuery } from "../src/lib/ai";
 
 function testSlangExpansion() {
   assert.strictEqual(normalizeInput("gmn cara bikin website"), "bagaimana cara bikin website",
@@ -63,6 +64,17 @@ function testNonSlangPassThrough() {
   assert.strictEqual(normalizeInput("help"), "help");
 }
 
+function testFollowUpDetection() {
+  // Follow-up phrasing that extends a prior answer (no fresh topic marker).
+  for (const q of ["lebih dalam", "lanjut", "yang tadi", "perinci lebih detail", "tambahin informasi", "jelasin lebih", "expand dong"]) {
+    assert.ok(isFollowUpQuery(q), `follow-up must be detected: ${q}`);
+  }
+  // A fresh topic query is NOT a follow-up.
+  for (const q of ["cari bisnis kopi 2026", "Apa itu ribosom", "bandingkan hp dan laptop"]) {
+    assert.ok(!isFollowUpQuery(q), `fresh topic must NOT be a follow-up: ${q}`);
+  }
+}
+
 function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -70,6 +82,7 @@ function main() {
   testRawCommandArgsPreserved();
   testEmptyInput();
   testNonSlangPassThrough();
+  testFollowUpDetection();
   console.log("LOGIC TESTS PASSED");
 }
 

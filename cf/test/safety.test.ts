@@ -558,10 +558,11 @@ async function testLevel14Subagents() {
     true, "'langkah/bagaimana cara' are faceting signals");
 
   // Budget caps keep us inside free-tier / per-reply latency (research-backed).
-  // The Evidence Extractor adds at most 1 call, so the full pipeline can reach 4
-  // (researcher + extractor + writer [+ verifier]) — still well within budget.
+  // The Evidence Extractor adds at most 1 call. Level 15 raises the cap to 6 to
+  // afford the deep/recursive Critic + second pass (researcher + extractor +
+  // writer + critic + extractor + writer2), still bounded and free-tier safe.
   assert.ok(MAX_TOTAL_LLM_CALLS >= 4, "orchestration must afford researcher+extractor+writer");
-  assert.ok(MAX_TOTAL_LLM_CALLS <= 4, "must not exceed 4 LLM calls per orchestration");
+  assert.ok(MAX_TOTAL_LLM_CALLS <= 6, "must not exceed 6 LLM calls per orchestration");
   assert.ok(MAX_ANGLES <= 3, "research must cap at 3 angles");
   assert.ok(MAX_FINDINGS_PER_ANGLE >= 1, "must keep >=1 finding per angle");
   // Richer references: findings per angle > fetch budget — DDG snippets are
@@ -718,8 +719,7 @@ async function testPreConstitutionResearchWhitelist() {
   }
 }
 
-async function testTranslatePath() {
-  // Regression for "Terjemahkan -> Ok." with no output: the translate request
+async function testTranslatePath() {  // Regression for "Terjemahkan -> Ok." with no output: the translate request
   // must be parsed and routed to a real translation path (read-only), not the
   // generic EXECUTE "Ok." fallback.
   const { parseTranslate } = await import("../src/lib/ai");
@@ -744,6 +744,57 @@ async function testTranslatePath() {
   assert.strictEqual(parseTranslate("bagaimana menghapus data"), null, "non-translate must not parse");
 }
 
+async function testLevel15DeepResearch() {
+  const sub = await import("../src/lib/subagents");
+  const ai = await import("../src/lib/ai");
+
+  // Budget: deep/recursive research needs headroom for the Critic + second
+  // writer pass (and possibly a second extractor) on top of researcher+extractor
+  // +writer. LLM calls are I/O-wait only (10ms CPU unaffected) and Groq free
+  // tier is 100k req/day, so 6 stays comfortably within free-tier while still
+  // bounded (not unbounded recursion).
+  assert.ok(sub.MAX_TOTAL_LLM_CALLS >= 5,
+    "orchestration must afford researcher+extractor+writer+critic+writer2 for deep research");
+  assert.ok(sub.MAX_TOTAL_LLM_CALLS <= 6,
+    "deep research must stay bounded (6 LLM calls), not unbounded recursion");
+  assert.ok(Number.isFinite(sub.CRITIC_MIN_DRAFT_LEN) && sub.CRITIC_MIN_DRAFT_LEN > 0,
+    "critic only runs on a substantial draft (guards against per-query noise)");
+
+  // Critic sub-agent must exist and be wired into the orchestration, and the
+  // deep pass must extend a prior draft rather than start from scratch.
+  const subSrc = readFileSync(new URL("../src/lib/subagents.ts", import.meta.url), "utf-8");
+  assert.ok(/runCritic/.test(subSrc), "orchestrator must expose the Critic sub-agent");
+  assert.ok(/criticSystem/.test(subSrc), "critic must have its own sovereign system prompt");
+  assert.ok(/followupAngles/.test(subSrc), "critic must propose follow-up search angles");
+  assert.ok(/priorDraft/.test(subSrc), "deep writer must accept the prior draft to extend it");
+  assert.ok(/PERDALAM/.test(subSrc), "deep writer prompt must tell it to deepen, not repeat");
+
+  // Depth is BUDGET-GATED: the deep pass must only spend when there is LLM-call
+  // headroom after the first draft — never unbounded.
+  assert.ok(/calls < MAX_TOTAL_LLM_CALLS/.test(subSrc),
+    "deep/recursive refine must be gated on remaining LLM-call budget");
+
+  // Follow-up resolution: ai must detect follow-up phrasing and resolve an
+  // anchor from the most recent assistant analysis.
+  assert.strictEqual(typeof ai.isFollowUpQuery, "function", "ai must export isFollowUpQuery");
+  assert.strictEqual(typeof ai.resolveFollowUpAnchor, "function", "ai must export resolveFollowUpAnchor");
+  assert.ok(ai.isFollowUpQuery("lebih dalam"), "'lebih dalam' is a follow-up");
+  assert.ok(ai.isFollowUpQuery("yang tadi"), "'yang tadi' is a follow-up");
+  assert.ok(!ai.isFollowUpQuery("cari bisnis kopi 2026"), "a fresh topic query is NOT a follow-up");
+  const anchor = ai.resolveFollowUpAnchor([
+    { role: "user", content: "cari bisnis kopi" },
+    { role: "assistant", content: "Berikut analisis bisnis kopi yang cukup panjang untuk dijadikan anchor..." },
+  ]);
+  assert.ok(anchor && anchor.topic && anchor.prior, "follow-up anchor resolves prior assistant analysis");
+
+  // webhook must route follow-ups (no topic marker) to the deep search path
+  // instead of the generic "Ok." fallback.
+  const wh = readFileSync(new URL("../src/workers/telegram_webhook.ts", import.meta.url), "utf-8");
+  assert.ok(/isFollowUpQuery\(/.test(wh), "webhook must check for follow-up queries");
+  assert.ok(/resolveFollowUpAnchor\(/.test(wh), "webhook must resolve a follow-up anchor");
+  assert.ok(/isFollowUpQuery\(text\)/.test(wh), "webhook follow-up branch triggers in EXECUTE path");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -764,6 +815,7 @@ async function main() {
   await testGuardDerivedForms();
   await testPreConstitutionResearchWhitelist();
   await testTranslatePath();
+  await testLevel15DeepResearch();
   console.log("SAFETY TESTS PASSED");
 }
 

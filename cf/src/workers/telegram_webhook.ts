@@ -17,7 +17,7 @@ import {
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus, recordTaskCounters, appendMemory, rememberMemory, recentContext } from "../lib/db";
-import { searchAndSynthesize, extractTopic, parseTranslate, translateText } from "../lib/ai";
+import { searchAndSynthesize, extractTopic, parseTranslate, translateText, isFollowUpQuery, resolveFollowUpAnchor } from "../lib/ai";
 import { normalizeInput, isEmptyInput } from "../lib/normalize";
 import { covenantStatusText, signClause } from "../lib/covenant_core";
 import { identityStatusText } from "../lib/identity_anchor";
@@ -469,6 +469,22 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
         await recordTaskCounters(env, "standard", owner);
         await fire(sendMessage(env, owner, r.reply));
         break;
+      }
+      // Level 15 FOLLOW-UP: an explicit follow-up request that carries no fresh
+      // topic marker (e.g. "lebih dalam", "yang tadi", "terus, kan?") resolves
+      // against the most recent assistant analysis and deepens THAT answer —
+      // instead of wrongly falling to "Ok.". Fail-closed: no prior analysis or
+      // not a follow-up → fall through to the generic reply.
+      if (isFollowUpQuery(text)) {
+        const ctx = await recentContext(env, owner, 8).catch(() => []);
+        const anchor = resolveFollowUpAnchor(ctx);
+        if (anchor) {
+          const r = await searchAndSynthesize(env, owner, text, anchor.topic);
+          await appendMemory(env, owner, "assistant", r.reply, anchor.topic);
+          await recordTaskCounters(env, "standard", owner);
+          await fire(sendMessage(env, owner, r.reply));
+          break;
+        }
       }
       await fire(sendMessage(env, owner, applyDefault(res, text)));
       break;

@@ -22,6 +22,39 @@ const GROQ_MODEL = "llama-3.3-70b-versatile";
 const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models/";
 const GEMINI_FREE_MODEL = "gemma-4-31b-it";
 
+// ---- Level 15 follow-up resolution --------------------------------------
+// A follow-up query continues a PRIOR research answer in the same session even
+// when it carries no fresh topic/search marker (e.g. "lebih dalam", "yang tadi",
+// "terus, kan?") — we anchor it to the most recent assistant analysis instead of
+// wrongly replying "Ok." or "Aksi ditangguhkan.".
+const FOLLOWUP_RE =
+  /\b(lebih dalam|lebih dalam lagi|lebih detail|lebih lanjut|lanjutkan|lanjut|lengkapin|lengkapi|perdalam|perinci|detail|detailin|terus(?:,|kan)?|yang tadi|yg tadi|tadi itu|tambahin|tambahkan|expand|go deeper|jelasin lebih|jelaskan lebih|sampe? tuntas|ceritain lebih|info lebih)\b/i;
+
+/** True if the (already normalized) message is a follow-up request that extends
+ *  a prior answer rather than starting a brand-new topic. Read-only. */
+export function isFollowUpQuery(text: string): boolean {
+  if (!text) return false;
+  const low = text.trim();
+  // Very short follow-ups ("lanjut", "terus", "lebih dalam") are almost always
+  // conversational continuations, not new topics.
+  if (low.length <= 12 && /^(lanjut|terus|lebih dalam|lebih detail|lebih lanjut|expand|go deeper|yang tadi|yg tadi|itu maksudnya apa)\b/i.test(low)) {
+    return true;
+  }
+  return FOLLOWUP_RE.test(low);
+}
+
+/** Derive a research topic from the last assistant analysis (for follow-up
+ *  anchoring). Returns the last assistant reply's content as the anchor topic,
+ *  or null if there's no prior assistant analysis to build on. */
+export function resolveFollowUpAnchor(
+  context: Array<{ role: string; content: string }>,
+): { topic: string; prior: string } | null {
+  const lastAssistant = [...(context || [])].reverse().find((c) => c.role === "assistant");
+  if (!lastAssistant || !lastAssistant.content || lastAssistant.content.trim().length < 30) return null;
+  const text = lastAssistant.content.trim();
+  return { topic: text.slice(0, 120), prior: text.slice(0, 3000) };
+}
+
 /** Pull a concrete topic from a search/summarize request (shared with webhook).
  *  Recognizes explicit search verbs AND research/analytical markers so queries
  *  like "Analisis bisnis paling menguntungkan..." (which carry no `cari`/`tentang`
@@ -394,8 +427,17 @@ export async function searchAndSynthesize(
   // Effort-scaling (Anthropic): do not spawn sub-agents for trivial queries.
   // Fail-closed: if orchestration returns null, fall through to the existing
   // single-pass synthesis so we ALWAYS return a real reply.
+  // Level 15: FOLLOW-UP queries (that carry the research-class markers but
+  // extend a prior answer) are anchored to the most recent assistant analysis
+  // so the researcher DEEPENS it instead of searching a fresh topic.
+  let followupAnchor = "";
+  if (isFollowUpQuery(userText)) {
+    const ctx = await recentContext(env, owner, 8).catch(() => []);
+    const anchor = resolveFollowUpAnchor(ctx);
+    if (anchor) followupAnchor = anchor.prior;
+  }
   if (isResearchClass(topic, userText)) {
-    const sub = await orchestrateResearch(env, owner, userText, topic);
+    const sub = await orchestrateResearch(env, owner, userText, topic, followupAnchor);
     if (sub) {
       await appendMemory(env, owner, "user", userText, topic);
       await appendMemory(env, owner, "assistant", sub, topic);
