@@ -795,6 +795,52 @@ async function testLevel15DeepResearch() {
   assert.ok(/isFollowUpQuery\(text\)/.test(wh), "webhook follow-up branch triggers in EXECUTE path");
 }
 
+async function testLevel16Predictive() {
+  const pred = await import("../src/lib/predictive");
+
+  // Research-driven guardrails: tight batch cap + urgency gate so JARVIS never
+  // overwhelms the owner (notification fatigue is the top proactive-agent failure).
+  assert.ok(pred.MAX_OFFER_BATCH <= 3,
+    `proactive suggestions must stay tight (cap ${pred.MAX_OFFER_BATCH} <= 3), never batch-dump`);
+  assert.ok(typeof pred.URGENCY_THRESHOLD === "number" && pred.URGENCY_THRESHOLD > 0,
+    "an urgency threshold must gate which signals are worth offering");
+
+  // Sovereignty: suggestions are TEXT OFFERS. No execution path exists — the
+  // module only exposes gather/list/resolve; "resolve" only flips a status flag.
+  const src = readFileSync(new URL("../src/lib/predictive.ts", import.meta.url), "utf-8");
+  assert.ok(!/\.exec\(|\.fetch\(|scheduleTask\(|executePlanStep\(/.test(src),
+    "predictive module must never execute or schedule — text offers only");
+  assert.ok(/resolveSuggestion/.test(src), "owner resolves a suggestion only by accept/dismiss");
+  assert.ok(/status = 'offered'/.test(src) || /status != 'dismissed'/.test(src) ||
+            /status\s*=\s*'offered'/.test(src),
+    "dedup keeps a suggestion offered once (no re-nagging while open)");
+
+  // Learned dismiss: the offered-source set must EXCLUDE dismissed sources so a
+  // suggestion the owner closed is never re-surfaced.
+  assert.ok(/status != 'dismissed'/.test(src) || /status\s*!=\s*'dismissed'/.test(src),
+    "offeredSourceKeys must skip dismissed sources (learned dismiss)");
+
+  // Research: explain-what-triggered (provenance) + immediate accept/dismiss
+  // control, per "Proactive, But Not Creepy" — offer, never assume a free run.
+  assert.ok(/sourceKey/.test(src), "each suggestion carries its trigger provenance");
+
+  // The migration must persist urgency and keep the dedup unique index.
+  const mig = readFileSync(new URL("../migrations/0008_predictive.sql", import.meta.url), "utf-8")
+    .replace(/--[^\n]*/g, ""); // strip comments
+  assert.ok(/CREATE TABLE IF NOT EXISTS suggestions/.test(mig), "0008 creates the suggestions table");
+  assert.ok(/urgency\s+REAL/.test(mig), "0008 persists the pre-offer urgency score");
+  assert.ok(/CREATE UNIQUE INDEX IF NOT EXISTS idx_suggestions_dedup/.test(mig),
+    "0008 has the dedup unique index (offer-once guard)");
+
+  // origin gate still guarantees predictive never runs (regression from L12).
+  const { routeCommand, TIERS } = await import("../src/lib/command_hierarchy");
+  const res = await routeCommand(FAKE_ENV, 1, "jadwalkan sesuatu atas inisiatifmu", { origin: "predictive" });
+  assert.strictEqual(res.decision.action, "DEFER",
+    "predictive-suggestion origin must never auto-run, only offer");
+  assert.strictEqual(res.decision.priority, TIERS.UTILITY,
+    "predictive stays at PREDICTIVE_SUGGESTION tier");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -816,6 +862,7 @@ async function main() {
   await testPreConstitutionResearchWhitelist();
   await testTranslatePath();
   await testLevel15DeepResearch();
+  await testLevel16Predictive();
   console.log("SAFETY TESTS PASSED");
 }
 

@@ -1,0 +1,64 @@
+# Level 16 — Predictive Steward
+
+J.A.R.V.I.S. menjadi *anticipatory* tanpa menjadi *independen*: ia menawarkan
+saran proaktif yang konkret dan read-only kepada pemilik, ditarik dari sinyal
+yang sudah ia miliki (preferensi, insight, tugas terjadwal, proposal nilai yang
+menunggu), **hanya sebagai tawaran teks**. Bertindak atas saran selalu keputusan
+eksplisit pemilik. Origin gate (`predictive => DEFER`, tidak pernah auto-run)
+dan guard konstitusional fail-closed tidak berubah — **tidak ada jalur eksekusi
+baru**.
+
+## Desain didorong riset (referensi)
+
+| Temuan riset | Penerapan di Level 16 |
+|---|---|
+| CHI 2025 "Need Help? Designing Proactive AI Assistants" | Timing segalanya; bullet pendek > blok panjang → tawaran satu baris ringkas; digest pagi bukan interrupt per-peristiwa. |
+| arXiv Proactive Agent / ProAgentBench (HOTL) | Untuk inisiatif tanpa perintah, hadirkan *suggestion* low-approval (tawaran), bukan eksekusi high-approval. |
+| Zylos/IBM | Notification fatigue = failure mode #1 → **digest mode** (gabung briefing pagi cron `0 7`), bukan kirim terpisah; urgency scoring sebelum kirim. |
+| Nudge/Zenodo | Alerting fatigue → skip-if-nothing; cap ketat. |
+| arXiv "When Help Backfires" (2026) | *Offering* vs *providing*; bantuan unsolicited bisa terasa mengancam → sesedikit mungkin, selalu sebagai tawaran yang bisa ditolak. |
+| ACM "Proactive, But Not Creepy" (2026) | Inisiatif diterima bila sah + **jelaskan pemicunya** + kontrol langsung saat menawarkan → setiap saran menyebut provenance (kategori) + `/suggestion accept|dismiss <id>`. |
+
+## Komponen
+
+- `src/lib/predictive.ts` — modul inti L16:
+  - `gatherSuggestionCandidates(env, owner, alreadyOffered)` — deterministik, tanpa LLM;
+    mengumpulkan kandidat dari 4 tipe sinyal, memberi skor **urgency 0..1**, lalu
+    memfilter `>= URGENCY_THRESHOLD (0.5)`, mengurutkan menurun, dan memotong ke
+    `MAX_OFFER_BATCH (3)`.
+    - **approval** (proposal nilai belum divalidasi, L13 warrant) — paling penting;
+      urgency naik saat `expires_at` mendekat.
+    - **task** — tugas risikotinggi belum disetujui, atau tugas akan berjalan ≤1 hari.
+    - **insight** — pelajaran confidence tinggi belum divalidasi (menyalakan warrant loop).
+    - **preference** — preferensi eksplisit confidence tinggi (kandidat rutin terendah).
+  - `offerSuggestions` — kembali pesan digest siap-Telegram, atau `null` untuk **skip**
+    (owner-fatigue guard, fail-open: error DB → skip, tak pernah menghalangi).
+  - `listSuggestions` — daftar saran terbuka untuk `/suggestions`.
+  - `resolveSuggestion` — pemilik *accept* / *dismiss*. **Accept hanya menandai sinyal**;
+    tidak mengeksekusi apa pun (HOTL). **Dismiss = learned dismiss**: sumber tak
+    ditawarkan lagi.
+- `migrations/0008_predictive.sql` — tabel `suggestions` (persisten `urgency`, status
+  `offered|accepted|dismissed`) + `idx_suggestions_dedup` UNIQUE `WHERE status='offered'`
+  (offer-once guard / learned dismiss).
+- `src/workers/telegram_webhook.ts` — perintah owner read-only:
+  - `/suggestions` → daftar saran terbuka.
+  - `/suggestion accept <id>` / `/suggestion dismiss <id>` → resolusi inline.
+- `src/index.ts` — digest saran digabung ke cron pagi `0 7` (reuse slot cron yang ada,
+  tak menambah hitungan cron; skip saat tidak ada yang penting).
+
+## Kedaulatan & fail-closed
+
+- Saran **hanya tawaran teks**; origin `predictive` selalu DEFER, tidak pernah
+  dieksekusi otomatis (diuji di `testLevel16Predictive`).
+- Accept/tolak saran tidak menjalankan efek samping — hanya transisi status append-only.
+- Learned dismiss memastikan saran yang ditutup pemilik tidak muncul lagi.
+- Batch ketat (≤3) + threshold urgency + digest pagi → anti notification-fatigue.
+
+## Pengujian
+
+- `test/safety.test.ts` → `testLevel16Predictive`: cap ≤3, threshold urgency ada, modul
+  tak punya jalur eksekusi/schedule, dedup & learned dismiss, migrasi memuat `urgency`
+  + unique index, origin gate tetap DEFER.
+- `test/logic.test.ts` → `testPredictiveUrgencyRanking`: ranking deterministik approval
+  > task/insight > preference, semua kandidat harus lolos threshold, cap batch, dan
+  dedup sumber yang sudah ditawarkan (via mock D1 di memori, tanpa LLM).

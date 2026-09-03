@@ -27,6 +27,7 @@ import {
   listInsights, setPreference, disablePreference, getActivePreferences,
   auditPhantomRules, reflectOnTurn, getBehaviorContext,
 } from "../lib/evolution";
+import { listSuggestions, resolveSuggestion } from "../lib/predictive";
 
 const RATE_LIMIT_MS = 1000;
 
@@ -361,6 +362,36 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // "/set-preference" but malformed (no "=").
   if (trimmed.startsWith("/set-preference")) {
     await fire(sendMessage(env, r, "Gunakan: /set-preference <kunci> = <nilai>. Contoh: /set-preference format = markdown singkat"));
+    return new Response("ok", { status: 200 });
+  }
+
+  // ------------------------------------------------------------------
+  // Predictive Steward (L16) — /suggestions + /suggestion accept|dismiss <id>.
+  // Read-only owner commands: listing offers and resolving them never executes
+  // anything; the offer->act path stays under the owner's explicit next step.
+  // `r` is already OWNER_OK (single-owner), so no extra auth needed here.
+  // ------------------------------------------------------------------
+  if (trimmed === "/suggestions") {
+    const list = await listSuggestions(env, r);
+    if (list.length === 0) {
+      await fire(sendMessage(env, r, "💡 Tidak ada saran terbuka. Saran baru muncul di briefing pagi bila ada yang penting."));
+    } else {
+      const lines = list.map((s) =>
+        `• (${s.id}) [${s.category}] ${s.text} — \`/${s.status === "offered" ? "offered" : s.status}\``).join("\n");
+      await fire(sendMessage(env, r,
+        `💡 *Saran terbuka*\n${lines}\n\nAksi: /suggestion accept <id> · /suggestion dismiss <id>`));
+    }
+    return new Response("ok", { status: 200 });
+  }
+  const sugCmd = trimmed.match(/^\/suggestion\s+(accept|dismiss)\s+(\d+)$/);
+  if (sugCmd) {
+    const action = sugCmd[1] as "accept" | "dismiss";
+    const id = Number(sugCmd[2]);
+    await fire(sendMessage(env, r, await resolveSuggestion(env, r, id, action)));
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed.startsWith("/suggestion")) {
+    await fire(sendMessage(env, r, "Gunakan: /suggestion accept <id> atau /suggestion dismiss <id>. Lihat /suggestions."));
     return new Response("ok", { status: 200 });
   }
 
