@@ -18,6 +18,7 @@ import {
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus, recordTaskCounters, appendMemory, rememberMemory, recentContext } from "../lib/db";
 import { searchAndSynthesize, extractTopic, parseTranslate, translateText } from "../lib/ai";
+import { normalizeInput, isEmptyInput } from "../lib/normalize";
 import { covenantStatusText, signClause } from "../lib/covenant_core";
 import { identityStatusText } from "../lib/identity_anchor";
 import { getPlans, getScheduledTasks } from "../lib/maestro";
@@ -124,7 +125,12 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   const msg = update.message;
   if (!msg) return new Response("noop", { status: 200 });
   const from = msg.from?.id ?? 0;
-  const text = msg.text ?? "";
+  // Normalize real-world owner input (slang/typo/whitespace/emoji) so greetings,
+  // search topics, translate requests and commands aren't mis-routed to the
+  // fail-closed "Aksi ditangguhkan." path. Empty payloads (sticker/photo/gif or
+  // emoji-only) are answered helpfully instead of falling through to "Ok.".
+  const rawText = msg.text ?? "";
+  const text = normalizeInput(rawText);
 
   // Only the owner may drive the mission-critical switch.
   if (!OWNER_OK(env, from)) {
@@ -134,6 +140,14 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   if (await rateLimited(env, from)) return new Response("ok", { status: 200 });
 
   await touchActivity(env, from, "telegram");
+
+  // Non-text payloads (sticker/photo/gif/voice) or text with no meaningful
+  // content (pure emoji/punctuation) get a helpful nudge, never a dead "Ok.".
+  if (isEmptyInput(text)) {
+    await fire(sendMessage(env, from,
+      "Kirim teks, atau gunakan /cari <topik> untuk mencari, /status untuk kondisi."));
+    return new Response("ok", { status: 200 });
+  }
 
   // Diagnostic endpoints.
   const trimmed = text.trim().toLowerCase();
@@ -203,7 +217,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   }
   // Persist explicit 'never/stop' rule (mark_explicit_stop parity).
   if (trimmed.startsWith("/mark_stop") || trimmed.startsWith("/never ")) {
-    const phrase = text.replace(/^\/(mark_stop|never)\s+/i, "").trim();
+    const phrase = rawText.replace(/^\/(mark_stop|never)\s+/i, "").trim();
     if (phrase) {
       await markExplicitStop(env, r, phrase, true);
       await fire(sendMessage(env, r, `🛑 Aturan "never" disimpan: \`${phrase.slice(0, 120)}\`\nAutonomous akan memblokir aksi serupa.`));
@@ -240,7 +254,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/covenant_sign") {
-    const clause = text.replace(/^\/covenant_sign\s+/i, "").trim();
+    const clause = rawText.replace(/^\/covenant_sign\s+/i, "").trim();
     if (!clause) {
       await fire(sendMessage(env, r,
         "Gunakan: /covenant_sign <klausa>\nKlausa ditandatangani immutable (INSERT-only, tak bisa diubah)."));
@@ -311,7 +325,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
   if (trimmed.startsWith("/disable-insight")) {
-    const id = Number(text.replace(/^\/disable-insight\s*/i, "").trim());
+    const id = Number(rawText.replace(/^\/disable-insight\s*/i, "").trim());
     if (!id) { await fire(sendMessage(env, r, "Gunakan: /disable-insight <id>")); return new Response("ok", { status: 200 }); }
     try {
       const rr = await env.DB.prepare(`UPDATE insights SET disabled=1 WHERE id=? AND disabled=0`).bind(id).run();
@@ -340,7 +354,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
   if (trimmed.startsWith("/disable-preference")) {
-    const key = text.replace(/^\/disable-preference\s*/i, "").trim();
+    const key = rawText.replace(/^\/disable-preference\s*/i, "").trim();
     await fire(sendMessage(env, r, await disablePreference(env, key)));
     return new Response("ok", { status: 200 });
   }
@@ -357,7 +371,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // flipping the guard from fail-closed whitelist to the owner-ratified rules.
   // ------------------------------------------------------------------
   if (trimmed === "/ratify") {
-    const principle = text.replace(/^\/ratify\s+/i, "").trim();
+    const principle = rawText.replace(/^\/ratify\s+/i, "").trim();
     if (!principle) {
       await fire(sendMessage(env, r,
         "Gunakan: /ratify <prinsip>\nContoh: /ratify jangan hapus data tanpa persetujuan\n" +
