@@ -564,8 +564,15 @@ async function testLevel14Subagents() {
   assert.ok(MAX_TOTAL_LLM_CALLS <= 4, "must not exceed 4 LLM calls per orchestration");
   assert.ok(MAX_ANGLES <= 3, "research must cap at 3 angles");
   assert.ok(MAX_FINDINGS_PER_ANGLE >= 1, "must keep >=1 finding per angle");
-  assert.ok(MAX_PAGES_TO_READ >= 1 && MAX_PAGES_TO_READ <= 5,
-    "Evidence Extractor must bound page fetches per reply (50-subrequest budget)");
+  // Richer references: findings per angle > fetch budget — DDG snippets are
+  // cheap mult-result rows (one subrequest per angle) so we harvest MANY
+  // references without burning the scarce page-fetch budget.
+  assert.ok(MAX_FINDINGS_PER_ANGLE > 2,
+    "must harvest more references per angle (rich DDG snippets, cheap subrequests)");
+  assert.ok(MAX_FINDINGS_PER_ANGLE <= 8,
+    "not too many; keeps per-angle prompt within LLM context");
+  assert.ok(MAX_PAGES_TO_READ <= 3,
+    "fetch budget stays tight even as snippet references grow (deepen via relevance, not more fetches)");
 
   // Evidence Extractor (Agentic RAG / quarantined dual-LLM): a NEW role that
   // fetches pages, strips HTML, and extracts structured citable facts the
