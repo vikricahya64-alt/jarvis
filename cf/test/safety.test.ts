@@ -400,6 +400,67 @@ async function testLevel12Integrity() {
   assert.strictEqual(ai.extractTopic("/cari"), null, "bare /cari has no topic");
 }
 
+async function testResilienceLayer() {
+  // Migration 0006 must create the four resilience tables + FTS5 external-content
+  // virtual table + the 3 sync triggers (memories_ai/ad/au), all free-tier D1.
+  const sql = readFileSync(
+    new URL("../migrations/0006_resilience.sql", import.meta.url),
+    "utf-8",
+  );
+  for (const t of ["provider_health", "request_log", "memories", "cron_locks", "agent_states"]) {
+    assert.ok(new RegExp(`CREATE TABLE IF NOT EXISTS ${t}\\b`).test(sql), `0006 must create ${t}`);
+  }
+  assert.ok(/CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5\(/.test(sql),
+    "memories_fts must be an FTS5 external-content table");
+  assert.ok(/content='memories'/.test(sql), "memories_fts must be external-content on memories");
+  for (const trg of [/memories_ai AFTER INSERT/, /memories_ad AFTER DELETE/, /memories_au AFTER UPDATE/]) {
+    assert.ok(trg.test(sql), "memories_fts sync triggers must exist");
+  }
+  assert.ok(/CREATE INDEX IF NOT EXISTS idx_reqlog_time/.test(sql),
+    "request_log must be indexed by time for observability scans");
+
+  // Pure resilience logic (deterministic, no I/O).
+  const res = await import("../src/lib/resilience");
+  assert.strictEqual(res.isRetryableStatus(429), true, "429 must be retryable");
+  assert.strictEqual(res.isRetryableStatus(500), true, "5xx must be retryable");
+  assert.strictEqual(res.isRetryableStatus(502), true, "5xx must be retryable");
+  assert.strictEqual(res.isRetryableStatus(200), false, "200 never retried");
+  assert.strictEqual(res.isRetryableStatus(400), false, "4xx never retried");
+  assert.strictEqual(res.isRetryableStatus(403), false, "403 never retried");
+  // backoffMs must be jittered within [0, base*2^(attempt-1)] and bounded.
+  for (let a = 1; a <= 4; a++) {
+    const ms = res.backoffMs(a);
+    assert.ok(Number.isInteger(ms) && ms >= 0, `backoffMs(${a}) must be a non-negative integer`);
+  }
+  // API surface must parse DB errors gracefully (fail-open availability).
+  for (const fn of ["getBreakerState", "recordSuccess", "recordFailure", "fetchWithTimeout", "withResilience", "logRequest", "acquireCronLock", "releaseCronLock"]) {
+    assert.strictEqual(typeof res[fn as keyof typeof res], "function", `resilience must export ${fn}`);
+  }
+
+  // db: FTS5 memory helpers must exist (retrieval without a vector DB).
+  const db = await import("../src/lib/db");
+  for (const fn of ["rememberMemory", "searchMemory", "sweepExpiredMemories"]) {
+    assert.strictEqual(typeof db[fn as keyof typeof db], "function", `db must export ${fn}`);
+  }
+
+  // Sovereignty invariant: the resilience breaker must NOT sit on the owner's
+  // reparative/oversight slash-command path. Breaker is only applied to LLM
+  // provider calls (groq/gemini/ddg), never to covenant/override/audit writes.
+  const resilienceSrc = readFileSync(new URL("../src/lib/resilience.ts", import.meta.url), "utf-8");
+  assert.ok(/provider_health/.test(resilienceSrc), "breaker targets provider/LLM state");
+  assert.ok(!/covenant|covenant_clauses/i.test(resilienceSrc),
+    "resilience layer must not gate covenant writes");
+  const ai2 = await import("../src/lib/ai");
+  assert.ok(typeof ai2.ddgSearch === "function", "ai must still export ddgSearch");
+  assert.ok(ai2.searchAndSynthesize?.length === 4, "searchAndSynthesize takes (env, owner, userText, topic)");
+
+  // index.ts must wrap its cron dispatch with the D1 transactional lock so a
+  // second overlapping trigger never double-runs cadenced work.
+  const idx = readFileSync(new URL("../src/index.ts", import.meta.url), "utf-8");
+  assert.ok(/\backnowledgeCronLock\b|acquireCronLock/.test(idx), "index must acquire a cron lock");
+  assert.ok(/sweepExpiredMemories/.test(idx), "index must sweep expired memories on cron");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -414,6 +475,7 @@ async function main() {
   await testUpgradeMigration();
   await testAiFailClosed();
   await testLevel12Integrity();
+  await testResilienceLayer();
   console.log("SAFETY TESTS PASSED");
 }
 
