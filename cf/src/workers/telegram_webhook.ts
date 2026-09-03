@@ -13,6 +13,7 @@ import { Env, touchActivity, logConsent, getConsentRequestTs, getDmsConfig, writ
 import { sendMessage, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, InlineButton } from "../lib/telegram";
 import {
   routeCommand, markExplicitStop, setAutonomyPaused, isAutonomyPaused, redact,
+  setPrivacyMode, isPrivacyMode,
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus, recordTaskCounters, appendMemory } from "../lib/db";
@@ -166,6 +167,34 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   if (trimmed === "/resume" || trimmed === "/resume_autonomy") {
     await setAutonomyPaused(env, r, false);
     await fire(sendMessage(env, r, "▶️ Otonomi di-resume."));
+    return new Response("ok", { status: 200 });
+  }
+  // Privacy mode under the owner's direct control: /privacy reports state,
+  // /privacy on|off toggles strict privacy (stops persisting conversation
+  // memory/history). Runs as an explicit owner command — never "ditangguhkan".
+  if (trimmed === "/privacy on") {
+    await setPrivacyMode(env, r, true);
+    await fire(sendMessage(env, r,
+      "🔒 Mode privasi KETAT AKTIF.\n" +
+      "Ingatan percakapan baru tidak akan disimpan. Anda tinggal /privacy off untuk kembali normal."));
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed === "/privacy off") {
+    await setPrivacyMode(env, r, false);
+    await fire(sendMessage(env, r,
+      "🔓 Mode privasi NONAKTIF.\nIngatan percakapan kembali disimpan."));
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed === "/privacy") {
+    const on = await isPrivacyMode(env, r);
+    await fire(sendMessage(env, r,
+      "🔐 *Status Privasi*\n" +
+      `Mode: ${on ? "✅ KETAT (ingatan off)" : "⚪ Normal (ingatan on)"}\n` +
+      "Gunakan: `/privacy on` untuk hentikan penyimpanan, `/privacy off` untuk lanjut."));
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed.startsWith("/privacy") && !/^\/privacy( on| off)?$/.test(trimmed)) {
+    await fire(sendMessage(env, r, "Gunakan: /privacy (on|off)."));
     return new Response("ok", { status: 200 });
   }
   // Persist explicit 'never/stop' rule (mark_explicit_stop parity).

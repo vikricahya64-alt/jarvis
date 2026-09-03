@@ -87,6 +87,20 @@ async function testOriginPriority() {
   assert.strictEqual(pref.source, "prefix");
 }
 
+async function testSlashOwnership() {
+  // Ownership principle: a "/"-prefixed owner command must be honoured as an
+  // explicit command, NOT demoted to DEFER/"Aksi ditangguhkan" by a low-clarity
+  // heuristic/Groq fallback. (No language-triggering content → deterministic.)
+  const unknownCmd = await routeCommand(FAKE_ENV, 1, "/privacy");
+  assert.strictEqual(
+    unknownCmd.decision.action, "EXECUTE",
+    `owner "/" command must execute, not defer (got ${unknownCmd.decision.action})`,
+  );
+  // Non-user origin is still NEVER auto-run (origin rule, not confidence).
+  const pred = await routeCommand(FAKE_ENV, 1, "/privacy", { origin: "predictive" });
+  assert.strictEqual(pred.decision.action, "DEFER", "predictive /-cmd still defers by origin");
+}
+
 async function testDmsReset() {
   // The state-machine reset contract: any interaction flips executed back to idle.
   const rewrite = /UPDATE dms_state\s+SET stage='idle'/;
@@ -392,6 +406,7 @@ async function main() {
   await testCommandRules();
   await testNoConstitutionFailClosed();
   await testOriginPriority();
+  await testSlashOwnership();
   await testMigrationIntegrity();
   await testValueAlignmentShape();
   await testAppendOnlyIntegrity();
