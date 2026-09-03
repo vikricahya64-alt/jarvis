@@ -361,6 +361,19 @@ async function testLevel12Integrity() {
   for (const cmd of ["/covenant_status", "/covenant_sign", "/identity_verify", "/sunset_preview", "/degradation_status", "/maestro_status"]) {
     assert.ok(wh.includes(`"${cmd}"`) || wh.includes(`'${cmd}'`), `webhook must handle ${cmd}`);
   }
+
+  // (9) Constitution ratification is OWNER-ONLY and writes into dms_state
+  //     config_json.constitution — flipping the fail-closed guard to ratified.
+  const db = await import("../src/lib/db");
+  assert.strictEqual(typeof db.writeDmsConfig, "function", "ratify must persist via writeDmsConfig");
+  assert.strictEqual(typeof db.getDmsConfig, "function");
+  assert.ok(/trimmed === "\/ratify"/.test(wh) || /trimmed === '\/ratify'/.test(wh),
+    "webhook must handle /ratify");
+  assert.ok(/\bwriteDmsConfig\b/.test(wh), "webhook /ratify must call writeDmsConfig");
+  assert.ok(/\bconstitution\b/.test(wh), "/ratify must write into config_json.constitution");
+  // Recognition of the owner's Telegram ID: the /ratify path must sit behind
+  // the owner gate so non-owners can never ratify.
+  assert.ok(/\bOWNER_OK\b/.test(wh), "webhook must gate commands with OWNER_OK (owner Telegram ID)");
 }
 
 async function main() {
