@@ -8,7 +8,7 @@
 // the queue consumer, both bounded. All GOTCHA-free, no external SDK.
 //=====================================================================
 
-import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary } from "./lib/db";
+import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories } from "./lib/db";
 import { handleUpdate } from "./workers/telegram_webhook";
 import { setWebhook, sendMessage } from "./lib/telegram";
 import { runDms } from "./daemons/dead_mans_switch";
@@ -18,6 +18,7 @@ import { covenantStatusText, validateActionAgainstCovenant, signClause, isCovena
 import { identityStatusText, createEpoch, verifyContinuity, markEpochVerified } from "./lib/identity_anchor";
 import { refreshQuotaSnapshot as monitorRefresh } from "./lib/monitor";
 import { ddgSearch } from "./lib/ai";
+import { acquireCronLock, releaseCronLock } from "./lib/resilience";
 
 const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
 
@@ -177,7 +178,7 @@ export default {
       const tokenOk = t !== null && (t === env.TELEGRAM_SECRET || t === env.TELEGRAM_TOKEN);
       if (!certOr(request, tokenOk)) return new Response("unauthorized", { status: 401 });
       const key = env.GROQ_API_KEY ?? "";
-      const ddgProbe = await ddgSearch("sejarah komputer").then((r) => (r ? r.slice(0, 60) : null)).catch(() => null);
+      const ddgProbe = await ddgSearch(env, "sejarah komputer").then((r) => (r ? r.slice(0, 60) : null)).catch(() => null);
       let groqModels = "unset";
       if (key) {
         try {
@@ -221,6 +222,16 @@ export default {
     const owner = OWNER(env);
     const start = Date.now();
 
+    // D1 transactional cron-lock: guarantee a single in-flight run per trigger
+    // even if Cloudflare fires a trigger late/stale or retries it. Fits the
+    // ≤5-slot free cron budget without adding a slot.
+    const lockName = `cron:${cron}`;
+    const haveLock = await acquireCronLock(env, lockName);
+    if (!haveLock) {
+      console.log(`[cron:${cron}] skipped (lock held by another trigger) (${Date.now() - start}ms)`);
+      return;
+    }
+
     try {
       if (cron === "0 */6 * * *") {
         const msg = await runDms(env, owner);
@@ -229,6 +240,8 @@ export default {
         // on the same 6-hour cadence (stays within the 5-cron free budget).
         await finalizeIdentityEpoch(env);
         await monitorRefresh(env, owner);
+        const swept = await sweepExpiredMemories(env);
+        if (swept > 0) console.log(`[cron] memory_sweep: ${swept} expired removed`);
       } else if (cron === "0 3 * * *") {
         // Value alignment: expire stale unconfirmed proposals (TTL 7 days).
         const expired = await sweepExpiredProposals(env);
@@ -248,6 +261,9 @@ export default {
     } catch (e) {
       console.error(`[cron:${cron}] failed`, (e as Error).message);
       // Never swallow: the DMS cadence is resilient to single failures.
+    } finally {
+      await new Promise((r) => setTimeout(r, 0)); // let D1 write settle
+      await releaseCronLock(env, lockName);
     }
   },
 
