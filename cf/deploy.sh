@@ -24,7 +24,7 @@ setup() {
   echo "## Creating resources (paste emitted IDs into wrangler.toml)."
   w d1 create jarvis | tee /tmp/jarvis_d1.txt
   w kv namespace create jarvis-config | tee /tmp/jarvis_kv.txt
-  w r2 bucket create jarvis-vault || true
+  # No R2: vault payload stays INLINE in D1 (needs no bucket + no card).
   w queues create jarvis-tasks || true
   w queues create jarvis-tasks-dlq || true
   echo "## Copy the <ID> values above into cf/wrangler.toml placeholders, then run: bash deploy.sh migrate && bash deploy.sh secrets && bash deploy.sh deploy"

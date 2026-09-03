@@ -8,7 +8,7 @@
 #   * Workers: 100k requests/day, 10ms CPU/req, 128MB, 50 subrequests.
 #   * Cron: max 5 triggers/account; request-driven, NOT a resident daemon.
 #   * D1: 5GB, 100k reads/day, 1M rows/table.
-#   * R2: 10GB free, 1M Class A (writes) + 10M Class B (reads)/month, 0 egress.
+#   * R2 (NOT USED — needs a card to activate; payload stays INLINE in D1).
 #   * Queues: 1M messages/month, consumer shares worker limits.
 #   * KV: 1GB, 100k reads + 1k writes/day (config/certs, NOT audit log).
 #   * Groq: ~14.4k req/day free (models vary).

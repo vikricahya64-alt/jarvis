@@ -24,7 +24,7 @@ curl -fsS https://<worker>.workers.dev/healthz || echo "DOWN"
 |--------|--------------|
 | Workers request/hari (100k) | ≥ 80k/24h |
 | D1 read/hari (100k) | ≥ 80k/24h |
-| R2 Class A (1M/bln) / Class B (10M/bln) | ≥ +80% |
+| ~~R2~~ Class A/B (1M/10M bln) | **tidak dipakai** (butuh kartu; payload inline D1) |
 | Queues msg (1M/bln) | ≥ 800k |
 | KV read/hari (100k) | ≥ 80k |
 
