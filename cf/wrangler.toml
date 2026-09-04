@@ -34,6 +34,9 @@ database_id = "21da51ad-244e-46dc-9b5f-60e79ac60b25"
 binding = "CONFIG_KV"
 id = "c6476e44ee25411c88ba81aee3012e9c"
 
+[[ai]]
+binding = "AI"
+
 # -----------------------------------------------------------------------------
 # Queue bindings TEMPORARILY DISABLED: Cloudflare token lacks Queues:Edit
 # permission, so `wrangler deploy` fails to attach the consumer (auth error

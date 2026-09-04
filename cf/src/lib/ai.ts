@@ -15,6 +15,9 @@ import { Env, recentContext, appendMemory, searchMemory } from "./db";
 import { withResilience, fetchWithTimeout, logRequest } from "./resilience";
 import { getAnswerBehaviorContext, reflectOnTurn } from "./evolution";
 import { isResearchClass, orchestrateResearch } from "./subagents";
+import { buildConversationMessages, detectLanguage } from "./conversation";
+import { buildFinalReply } from "./response_formatter";
+import { detectEmotion as detectEmotionSig } from "./emotion";
 
 const GROQ_MODEL = "llama-3.3-70b-versatile";
 // Google Gemini as a resilience fallback when Groq is rate-limited/down.
@@ -158,21 +161,23 @@ export async function groqRespond(
   const key = env.GROQ_API_KEY;
   if (!key) return null;
   const context = opts.context ?? [];
-  const topicHint = opts.topic ? `\nTopik yang dicari: ${opts.topic}` : "";
-  const messages = [
-    {
-      role: "system" as const,
-      content:
-        "Kamu J.A.R.V.I.S., asisten AI kedaulatan yang membantu pemiliknya " +
-        "secara singkat dan membantu. Jawab dalam Bahasa Indonesia ringkas. " +
-        "Jika diminta mencari/mengumpulkan informasi, rangkum secara jelas dan " +
-        "nyatakan sumber/method-nya. Jangan bohongi atau membuat data palsu. " +
-        "Jika tidak bisa menjawab, akui saja.",
-    },
-    ...context.map((c) => ({ role: c.role, content: c.content })),
-    { role: "user" as const, content: userText + topicHint },
-  ];
-  // Resilient call: retry on 429/5xx, breaker-aware, time-budgeted, logged.
+
+  // Build natural conversation messages using the personality engine
+  const messages = await buildConversationMessages(
+    env,
+    Number(env.OWNER_TELEGRAM_ID),
+    userText,
+    { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
+  ).catch(() => {
+    const sys = "Kamu J.A.R.V.I.S., asisten AI yang cerdas dan natural. " +
+      "Jawab dalam Bahasa Indonesia sehari-hari. Singkat, jelas, membantu.";
+    return [
+      { role: "system" as const, content: sys },
+      ...context.map((c) => ({ role: c.role as "user" | "assistant", content: c.content })),
+      { role: "user" as const, content: userText },
+    ];
+  });
+
   let reply: string | null = null;
   const ok = await withResilience(env, "groq", 0, async (timeoutMs) => {
     const res = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
@@ -183,9 +188,9 @@ export async function groqRespond(
       },
       body: JSON.stringify({
         model: GROQ_MODEL,
-        temperature: 0.4,
+        temperature: 0.6,
         messages,
-        max_tokens: 500,
+        max_tokens: 600,
       }),
     }, timeoutMs);
     if (!res.ok) return { ok: false, status: res.status };
@@ -209,20 +214,31 @@ export async function geminiRespond(
   );
   if (keys.length === 0) return null;
   const context = opts.context ?? [];
-  const topicHint = opts.topic ? `\nTopik yang dicari: ${opts.topic}` : "";
-  const system = "Kamu J.A.R.V.I.S., asisten AI kedaulatan yang membantu pemiliknya " +
-    "secara singkat dan membantu. Jawab dalam Bahasa Indonesia ringkas. " +
-    "Jika diminta mencari/mengumpulkan informasi, rangkum secara jelas dan " +
-    "nyatakan sumber/method-nya. Jangan bohongi atau membuat data palsu. " +
-    "Jika tidak bisa menjawab, akui saja.";
-  const prompt =
-    system +
-    "\n\n[Konteks percakapan]\n" +
-    (context.map((c) => `${c.role}: ${c.content}`).join("\n") || "(tidak ada)") +
-    "\n\n[Perintah user]\n" +
-    userText +
-    topicHint +
-    "\n\nBalas dalam Bahasa Indonesia ringkas.";
+
+  // Build natural conversation messages using the personality engine
+  const messages = await buildConversationMessages(
+    env,
+    Number(env.OWNER_TELEGRAM_ID),
+    userText,
+    { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
+  ).catch(() => {
+    const sys = "Kamu J.A.R.V.I.S., asisten AI yang cerdas dan natural. " +
+      "Jawab dalam Bahasa Indonesia sehari-hari. Singkat, jelas, membantu.";
+    return [
+      { role: "system" as const, content: sys },
+      ...context.map((c) => ({ role: c.role as "user" | "assistant", content: c.content })),
+      { role: "user" as const, content: userText },
+    ];
+  });
+
+  // Convert messages array to Gemini's single-prompt format
+  const systemMsg = messages.find((m) => m.role === "system")?.content ?? "";
+  const conversationParts = messages
+    .filter((m) => m.role !== "system")
+    .map((m) => `${m.role}: ${m.content}`)
+    .join("\n\n");
+  const prompt = systemMsg + "\n\n" + conversationParts;
+
   for (const apiKey of keys) {
     const model = env.GEMINI_MODEL || GEMINI_FREE_MODEL;
     let reply: string | null = null;
@@ -234,7 +250,7 @@ export async function geminiRespond(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.4, maxOutputTokens: 600 },
+            generationConfig: { temperature: 0.6, maxOutputTokens: 600 },
           }),
         },
         timeoutMs,
@@ -249,16 +265,70 @@ export async function geminiRespond(
   return null;
 }
 
-/** Generative LLM dispatch with Groq → Gemini resilience ordering. Returns the
- *  first provider that answers, or null if both are unavailable/failed. Source
- *  tells the caller which provider carried the response. */
+/** Cloudflare Workers AI — free edge inference, no API key needed.
+ *  Uses the AI binding (env.AI) from wrangler.toml. OpenAI-compatible
+ *  via env.AI.run() or direct fetch to the CF AI endpoint.
+ *  Returns null on any failure so the chain stays fail-closed. */
+export async function workersAiRespond(
+  env: Env,
+  userText: string,
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string } = {},
+): Promise<string | null> {
+  if (!env.AI) return null;
+  const context = opts.context ?? [];
+  const topicHint = opts.topic ? `\nTopik: ${opts.topic}` : "";
+
+  // Build natural conversation messages using the personality engine
+  const messages = await buildConversationMessages(
+    env,
+    Number(env.OWNER_TELEGRAM_ID),
+    userText,
+    { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
+  ).catch(() => {
+    // Fallback to simple prompt if conversation builder fails
+    const sys = "Kamu J.A.R.V.I.S., asisten AI yang cerdas dan natural. " +
+      "Jawab dalam Bahasa Indonesia sehari-hari. Singkat, jelas, membantu. " +
+      "Jangan mengarang data. Jika tidak tahu, bilang tidak tahu.";
+    return [
+      { role: "system" as const, content: sys },
+      ...context.map((c) => ({ role: c.role as "user" | "assistant", content: c.content })),
+      { role: "user" as const, content: userText + topicHint },
+    ];
+  });
+
+  // Workers AI model — use a good conversational model
+  const model = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+
+  try {
+    const res = await env.AI.run(model, {
+      messages,
+      max_tokens: 600,
+      temperature: 0.6,
+    }) as { response?: string };
+
+    const reply = res.response?.trim();
+    if (reply) return reply;
+  } catch {
+    // Fail-closed: return null on any error
+  }
+  return null;
+}
+
+/** Generative LLM dispatch with Workers AI → Groq → Gemini resilience ordering.
+ *  Returns the first provider that answers, or null if all fail. Source tells
+ *  the caller which provider carried the response. */
 export async function llmRespond(
   env: Env,
   userText: string,
   opts: { context?: Array<{ role: string; content: string }>; topic?: string } = {},
-): Promise<{ reply: string | null; source: "groq" | "gemini" | null }> {
+): Promise<{ reply: string | null; source: "workers_ai" | "groq" | "gemini" | null }> {
+  // 1) Workers AI (free, no key, on CF edge — fastest path)
+  const wai = await workersAiRespond(env, userText, opts);
+  if (wai) return { reply: wai, source: "workers_ai" };
+  // 2) Groq (free tier, fast)
   const groq = await groqRespond(env, userText, opts);
   if (groq) return { reply: groq, source: "groq" };
+  // 3) Gemini (free tier, last resort)
   const gemini = await geminiRespond(env, userText, opts);
   if (gemini) return { reply: gemini, source: "gemini" };
   return { reply: null, source: null };
@@ -473,14 +543,15 @@ export async function searchAndSynthesize(
   }
   const g = await llmRespond(env, userText, { context, topic });
   if (g.reply) {
+    // Format reply for natural conversation
+    const emotion = detectEmotionSig(userText);
+    const formatted = buildFinalReply(g.reply, "research", emotion.sentiment);
     await appendMemory(env, owner, "user", userText, topic);
-    await appendMemory(env, owner, "assistant", g.reply, topic);
-    // L13 bounded reflection (max 1 round): fire-and-forget so it never delays
-    // the reply or triggers a Telegram retry storm. Fail-open by design.
-    if (g.reply.length > 120) {
-      void reflectOnTurn(env, userText, g.reply, []).catch(() => {});
+    await appendMemory(env, owner, "assistant", formatted, topic);
+    if (formatted.length > 120) {
+      void reflectOnTurn(env, userText, formatted, []).catch(() => {});
     }
-    return { reply: g.reply, source: `${g.source}+ddg` };
+    return { reply: formatted, source: `${g.source}+ddg` };
   }
   if (searchResult) {
     const fallback = `Berikut hasil pencarian tentang *${topic}*:\n\n${searchResult}\n\n(J.A.R.V.I.S. edge — tanpa LLM generatif, tampilkan hasil mentah.)`;
