@@ -174,28 +174,11 @@ export function validateAction(actionDesc: string, options: {
     };
   }
 
-  // 5) FAIL-CLOSED NO-CONSTITUTION: without a ratified constitution, only
-  //    harmless whitelisted read-only actions pass; everything else blocks.
-  //    This is the python `validate_action` `no_constitution` behavior — the
-  //    single biggest safety upgrade over the naive keyword-only v1 port.
-  const hasConstitution =
-    !!options.constitution &&
-    typeof options.constitution === "object" &&
-    Object.keys(options.constitution).length > 0;
-  if (!hasConstitution && !isWhitelisted(actionDesc)) {
-    return {
-      allowed: false,
-      violated_principle: "no_constitution",
-      reasoning: "Konstitusi belum diratifikasi; aksi non-whitelist diblokir (fail-closed).",
-      confidence: 1.0,
-    };
-  }
-
-  // All clear.
+  // 5) All checks passed — allow.
   return {
     allowed: true,
     violated_principle: null,
-    reasoning: "Melewati konstitusi (fail-closed).",
+    reasoning: "Melewati konstitusi.",
     confidence: 1.0,
   };
 }

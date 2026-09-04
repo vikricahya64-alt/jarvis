@@ -111,9 +111,30 @@ function testCommandWhitespace() {
 function testRawCommandArgsPreserved() {
   // Normalization must NOT mangle the slash command prefix.
   assert.ok(normalizeInput("/mark_stop jangan kirim berita").startsWith("/mark_stop"),
-    "slash command prefix preserved verbatim");
+    "slash command prefix preserved");
   assert.ok(normalizeInput("/ratify jangan hapus data").startsWith("/ratify"),
     "/ratify prefix preserved");
+}
+
+function testGroupPrefixStripping() {
+  // Telegram group bots often prepend "Username:" to messages. This prefix must
+  // be stripped so slash commands and search topics route correctly instead of
+  // falling to "Aksi ditangguhkan." (DEFER).
+  assert.strictEqual(normalizeInput("Vsco Bayu:/hapus"), "/hapus",
+    "group prefix stripped, slash command preserved");
+  assert.strictEqual(normalizeInput("Vsco Bayu:Reset todo"), "reset todo",
+    "group prefix stripped, plain text passes");
+  assert.strictEqual(normalizeInput("  John:/cari bisnis kopi"), "/cari bisnis kopi",
+    "leading whitespace + group prefix stripped");
+  assert.strictEqual(normalizeInput("/cari topik"), "/cari topik",
+    "no prefix → normal processing");
+  assert.strictEqual(normalizeInput("cari bisnis"), "cari bisnis",
+    "no prefix → normal processing");
+  // Multi-line: "Vsco Bayu:\nMalang" — prefix on separate line from content
+  assert.strictEqual(normalizeInput("Vsco Bayu:\nMalang"), "malang",
+    "multi-line group prefix stripped");
+  assert.strictEqual(normalizeInput("Vsco Bayu:\nreset todo"), "reset todo",
+    "multi-line group prefix stripped, plain text passes");
 }
 
 function testEmptyInput() {
@@ -334,6 +355,7 @@ async function main() {
   testTypoTolerance();
   testCommandWhitespace();
   testRawCommandArgsPreserved();
+  testGroupPrefixStripping();
   testEmptyInput();
   testNonSlangPassThrough();
   testExpandedSlang();

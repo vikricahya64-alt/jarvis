@@ -9,6 +9,7 @@ export interface Env {
   CONFIG_KV: KVNamespace;
   TASKS: Queue<unknown>;
   TASKS_DEAD: Queue<unknown>;
+  AI: Ai;
   OWNER_TELEGRAM_ID: string;
   APP_ENV?: string;
   TELEGRAM_SECRET?: string;

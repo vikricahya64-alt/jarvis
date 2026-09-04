@@ -78,6 +78,7 @@ function collapseRepeats(s: string): string {
 
 /**
  * Normalize free-text owner input before routing/classification.
+ *   - strips "Username:" prefix that Telegram group bots prepend to messages
  *   - trims + collapses whitespace runs
  *   - lowercases (everything downstream matches case-insensitively)
  *   - collapses repeated letters ("halooo"->"halo")
@@ -91,6 +92,10 @@ export function normalizeInput(raw: string): string {
   return raw
     .replace(/\s+/g, " ")
     .trim()
+    // Strip "Username:" prefix Telegram group bots prepend before routing.
+    // Handles both same-line ("Vsco Bayu:/hapus") and multi-line
+    // ("Vsco Bayu:\nMalang") formats. Matches up to the first colon + any whitespace/newline.
+    .replace(/^[^:]+:\s*\n?\s*/i, "")
     .split(" ")
     .map(detectAndNormalize)
     .join(" ");

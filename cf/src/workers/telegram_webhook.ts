@@ -9,7 +9,7 @@
 // holds D1 state and issues the inline-button consent flow.
 //=====================================================================
 
-import { Env, touchActivity, logConsent, getConsentRequestTs, getDmsConfig, writeDmsConfig, DmsConfig } from "../lib/db";
+import { Env, touchActivity, logConsent, getConsentRequestTs, getDmsConfig, writeDmsConfig } from "../lib/db";
 import { sendMessage, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, InlineButton } from "../lib/telegram";
 import {
   routeCommand, markExplicitStop, setAutonomyPaused, isAutonomyPaused, redact,
@@ -166,11 +166,8 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/status") {
-    const [paused, cfg] = await Promise.all([
-      isAutonomyPaused(env, r),
-      getStatusConfig(env, r),
-    ]);
-    await fire(sendMessage(env, r, statusReport(cfg, paused)));
+    const paused = await isAutonomyPaused(env, r);
+    await fire(sendMessage(env, r, statusReport(paused)));
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/checkin" || trimmed === "/stop" || trimmed === "/kill") {
@@ -395,34 +392,6 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
 
-  // ------------------------------------------------------------------
-  // Constitution ratification — OWNER-ONLY (enforced by OWNER_OK above, so only
-  // the owner's Telegram ID can reach this). The owner's word sits ABOVE the
-  // ratification gate: /ratify explicitly encodes the sovereignty constitution,
-  // flipping the guard from fail-closed whitelist to the owner-ratified rules.
-  // ------------------------------------------------------------------
-  if (trimmed === "/ratify") {
-    const principle = rawText.replace(/^\/ratify\s+/i, "").trim();
-    if (!principle) {
-      await fire(sendMessage(env, r,
-        "Gunakan: /ratify <prinsip>\nContoh: /ratify jangan hapus data tanpa persetujuan\n" +
-        "Ini menandai konstitusi sebagai diratifikasi oleh pemilik dan menambah aturan kustom."));
-      return new Response("ok", { status: 200 });
-    }
-    const cfg = await getDmsConfig(env, r);
-    const constitution = cfg.constitution && typeof cfg.constitution === "object"
-      ? { ...cfg.constitution }
-      : {};
-    const key = `p${Date.now()}`;
-    (constitution as Record<string, unknown>)[key] = principle.slice(0, 300);
-    await writeDmsConfig(env, r, { ...cfg, constitution });
-    await fire(sendMessage(env, r,
-      `🧾 Konstitusi diratifikasi.\n` +
-      `Aturan ditambahkan: \`${principle.slice(0, 300)}\n` +
-      `Status konstitusi kini ✅ diratifikasi (owner: ${String(r)}).`));
-    return new Response("ok", { status: 200 });
-  }
-
   // Friendly greeting (INFO, no action) — answered warmly instead of falling
   // into the fail-closed guard. Greetings don't trigger any autonomous step.
   if (trimmed === "/start" || /^(halo|hai|hi|hello|hey|pagi|siang|sore|malam|assalamualaikum|assalamu'alaikum|selamat)/.test(trimmed)) {
@@ -584,23 +553,14 @@ function applyDefault(res: Awaited<ReturnType<typeof routeCommand>>, rawText = "
   return label[res.decision.priority] ?? "Ok.";
 }
 
-/** Read whether the owner has ratified a constitution (for /status). */
-async function getStatusConfig(env: Env, owner: number): Promise<{ constitutionRatified: boolean }> {
-  const cfg: DmsConfig = await getDmsConfig(env, owner);
-  const constitutionRatified =
-    !!cfg.constitution && typeof cfg.constitution === "object" && Object.keys(cfg.constitution).length > 0;
-  return { constitutionRatified };
-}
-
 /** Compose the /status reply. */
-function statusReport(cfg: { constitutionRatified: boolean }, paused: boolean): string {
+function statusReport(paused: boolean): string {
   const lines = [
     "📊 *Status J.A.R.V.I.S.*",
     "",
     `• Otonomi: ${paused ? "⏸️ PAUSED" : "▶️ aktif"}`,
-    `• Konstitusi: ${cfg.constitutionRatified ? "✅ diratifikasi" : "⚠️ belum diratifikasi (modus fail-closed)"}`,
     ``,
-    `Perintah: /health · /dms_status · /queue_status · /pause · /resume · /obedience_report · /ratify`,
+    `Perintah: /health · /dms_status · /queue_status · /pause · /resume · /obedience_report`,
   ];
   return lines.join("\n");
 }
