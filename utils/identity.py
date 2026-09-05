@@ -19,7 +19,7 @@ SELF_REF_RE = re.compile(
     r"(?:"
     r"siapa (?:kamu|kamu ini|anda)|"
     r"kamu (?:siapa|adalah|bisa apa|bisa ngapain|bisa buat apa)|"
-    r"apa yang bisa kamu (?:lakukan|bantu|buat)|"
+    r"apa\s+(?:ya\s+|sih\s+|nih\s+|dong\s+|lho\s+|deh\s+|kok\s+|kan\s+|toh\s+)?yang bisa kamu (?:lakukan|bantu|buat)|"
     r"apa uang bisa kamu (?:lakukan|bantu|buat)|"
     r"apa kemampuanmu|"
     r"apa fungsi kamu|"
