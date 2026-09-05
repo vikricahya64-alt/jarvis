@@ -15,19 +15,19 @@ import re
 NAME = "J.A.R.V.I.S."
 
 SELF_REF_RE = re.compile(
-    r"^(?:"
-    r"(?:sekarang|tolong|coba|bisa)\s+)?"
+    r"(?:^|\b)"
     r"(?:"
-    r"siapa (kamu|kamu ini|anda)|"
-    r"kamu (siapa|adalah|bisa apa|bisa ngapain|bisa buat apa)|"
-    r"apa yang bisa kamu (lakukan|bantu|buat)|"
-    r"apa uang bisa kamu (lakukan|bantu|buat)|"
+    r"siapa (?:kamu|kamu ini|anda)|"
+    r"kamu (?:siapa|adalah|bisa apa|bisa ngapain|bisa buat apa)|"
+    r"apa yang bisa kamu (?:lakukan|bantu|buat)|"
+    r"apa uang bisa kamu (?:lakukan|bantu|buat)|"
     r"apa kemampuanmu|"
     r"apa fungsi kamu|"
-    r"what can you (do|help)|"
+    r"what can you (?:do|help)|"
     r"who are you|"
     r"what are you"
-    r")",
+    r")"
+    r"(?:\b|$)",
     re.IGNORECASE,
 )
 
