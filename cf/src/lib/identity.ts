@@ -63,12 +63,12 @@ export const JARVIS_IDENTITY = {
  * Self-referential intent regex — single source of truth, shared by every
  * module (webhook handler, intelligence brain, ai{llmRespond,searchAndSynthesize}).
  *
- * Covers the canonical forms PLUS the well-known typo "uang" → "yang"
- * ("apa uang bisa kamu lakukan" is the user INTENDING "apa yang bisa kamu
- * lakukan" — the word "uang" (money) is a 1-key mis-type of "yang" and the
- * phrase is ungrammatical as a genuine money question, which would be phrased
- * "uang bisa apa" / "apa yang bisa dilakukan uang"). Without this, the typo
- * slips past interception and the LLM hallucinates an answer about money.
+ * Covers the canonical forms PLUS:
+ * - The well-known typo "uang" → "yang" ("apa uang bisa kamu lakukan")
+ * - Common Indonesian prefixes: "Sekarang", "Tolong", "Coba", "Bisa"
+ *   (e.g. "Sekarang apa yang bisa kamu lakukan" is still a self-ref question)
+ *
+ * Without this, the prefix slips past interception and the LLM hallucinates.
  */
 export const SELF_REF_RE =
-  /^(?:siapa (kamu|kamu ini|anda)|kamu (siapa|adalah|bisa apa|bisa ngapain|bisa buat apa)|apa yang bisa kamu (lakukan|bantu|buat)|apa uang bisa kamu (lakukan|bantu|buat)|apa kemampuanmu|apa fungsi kamu|what can you (do|help)|who are you|what are you)/i;
+  /^(?:(?:sekarang|tolong|coba|bisa)\s+)?(?:siapa (kamu|kamu ini|anda)|kamu (siapa|adalah|bisa apa|bisa ngapain|bisa buat apa)|apa yang bisa kamu (lakukan|bantu|buat)|apa uang bisa kamu (lakukan|bantu|buat)|apa kemampuanmu|apa fungsi kamu|what can you (do|help)|who are you|what are you)/i;
