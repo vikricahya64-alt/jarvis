@@ -14,16 +14,37 @@
 import { Env, recentContext, appendMemory, searchMemory } from "./db";
 import { withResilience, fetchWithTimeout, logRequest } from "./resilience";
 import { getAnswerBehaviorContext, reflectOnTurn } from "./evolution";
-import { isResearchClass, orchestrateResearch } from "./subagents";
+import { isResearchClass, orchestrateResearch, isDesignIntent, orchestrateDesign } from "./subagents";
 import { buildConversationMessages, detectLanguage } from "./conversation";
 import { buildFinalReply } from "./response_formatter";
 import { detectEmotion as detectEmotionSig } from "./emotion";
+import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
 
-const GROQ_MODEL = "llama-3.3-70b-versatile";
+const GROQ_MODEL = "qwen/qwen3.6-27b";
+// OpenRouter free-tier fallback. ":free" models rotate; pinned to a widely
+// available free model by default, overridable via OPENROUTER_MODEL env.
+const OPENROUTER_MODEL = "qwen/qwen3.6-27b";
 // Google Gemini as a resilience fallback when Groq is rate-limited/down.
 // Uses the free-tier model (gemma-4-31b-it) by default; can rotate to backup.
 const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models/";
 const GEMINI_FREE_MODEL = "gemma-4-31b-it";
+
+// Shared fallback system prompt when buildConversationMessages fails (used by all providers).
+// Uses the single source of truth from identity.ts.
+const FALLBACK_SYS = JARVIS_IDENTITY.fallbackPrompt;
+
+/** Build fallback messages array when the personality engine fails. */
+function buildFallbackMessages(
+  context: Array<{ role: string; content: string }>,
+  userText: string,
+  topicHint = "",
+): Array<{ role: "system" | "user" | "assistant"; content: string }> {
+  return [
+    { role: "system" as const, content: FALLBACK_SYS },
+    ...context.map((c) => ({ role: c.role as "user" | "assistant", content: c.content })),
+    { role: "user" as const, content: userText + topicHint },
+  ];
+}
 
 // ---- Level 15 follow-up resolution --------------------------------------
 // A follow-up query continues a PRIOR research answer in the same session even
@@ -68,14 +89,18 @@ export function resolveFollowUpAnchor(
 export function extractTopic(text: string): string | null {
   const low = text.trim().toLowerCase();
   const m = low.match(
-    /\b(?:cari|carii|cr|search|tentang|tenteng|tentan|tntg|ringkas|rangkum|summarize|artikel|topik|info|infp|informasi|analis\w*|laporan|laporn|report|review|riviu|perbandingan|bandingkan|perkembangan|ulasan|ulsn|kajian|menurut|menurutmu|bagaimana|gmn|bgmn)\b\s*[:\-]?\s*(.+)$/,
+    /\b(?:cari|carii|cr|search|tentang|tenteng|tentan|tntg|ringkas|rangkum|summarize|artikel|topik|info|infp|informasi|analis\w*|laporan|laporn|report|review|riviu|perbandingan|bandingkan|perkembangan|ulasan|ulsn|kajian|menurut|menurutmu|bagaimana|gmn|bgmn|apa|apakah|siapa|kenapa|mengapa|kapan|berapa|dimana|di mana)\b(?:\s+(?:itu|apa|yang|kah|adalah|dengan|tentang|mengenai))?\s*[:\-]?\s*(.+)$/,
   );
   if (!m) return null;
   let topic = m[1]
-    .replace(/^(bantu|tolong|buatkan|please|let me|lagi|dong|sudah|untuk|tentang|mengenai)\s*/i, "")
+    .replace(/^(bantu|tolong|buatkan|please|let me|lagi|dong|sudah|untuk|itu|apa|yang|kah|adalah|tentang|mengenai)\s+/i, "")
     .replace(/[?.!,;:]+$/g, "")
     .trim();
   if (!topic) return null;
+  // Guard: a bare "apa/apakah" introducing a pure greeting/social phrase
+  // ("apa kabar", "apa yang bisa kamu lakukan") is NOT a research topic, so
+  // the generic single-pass engine (not a web-search topic) should handle it.
+  if (/^(kabar|khabar|kabar baik|kabar gembira|halo|hai|naik|hoax|yang bisa[a-z ]*)$/i.test(topic)) return null;
   return topic.length >= 3 ? topic.slice(0, 120) : null;
 }
 
@@ -156,27 +181,20 @@ export async function translateText(
 export async function groqRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string } = {},
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
 ): Promise<string | null> {
   const key = env.GROQ_API_KEY;
   if (!key) return null;
   const context = opts.context ?? [];
 
-  // Build natural conversation messages using the personality engine
-  const messages = await buildConversationMessages(
+  const messages = opts.prebuiltMessages ?? await buildConversationMessages(
     env,
     Number(env.OWNER_TELEGRAM_ID),
     userText,
-    { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
-  ).catch(() => {
-    const sys = "Kamu J.A.R.V.I.S., asisten AI yang cerdas dan natural. " +
-      "Jawab dalam Bahasa Indonesia sehari-hari. Singkat, jelas, membantu.";
-    return [
-      { role: "system" as const, content: sys },
-      ...context.map((c) => ({ role: c.role as "user" | "assistant", content: c.content })),
-      { role: "user" as const, content: userText },
-    ];
-  });
+    opts.contextIsEnriched && context.length > 0
+      ? { topic: opts.topic, enrichedContext: context }
+      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
+  ).catch(() => buildFallbackMessages(context, userText));
 
   let reply: string | null = null;
   const ok = await withResilience(env, "groq", 0, async (timeoutMs) => {
@@ -201,13 +219,62 @@ export async function groqRespond(
   return ok ? reply : null;
 }
 
+/** OpenRouter generative response (free/provided models) — resilience fallback
+ *  once Groq is unavailable, adding breadth cheaply under a single key. Mirrors
+ *  groqRespond's OpenAI-compatible shape; null on any failure so the chain stays
+ *  fail-closed. Fail-open: returns null (never throws) when key/model missing or
+ *  the provider errors, so it can never block the other providers. */
+export async function openrouterRespond(
+  env: Env,
+  userText: string,
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
+): Promise<string | null> {
+  const key = env.OPENROUTER_API_KEY;
+  if (!key) return null; // fail-open: not configured
+  const context = opts.context ?? [];
+
+  const messages = opts.prebuiltMessages ?? await buildConversationMessages(
+    env,
+    Number(env.OWNER_TELEGRAM_ID),
+    userText,
+    opts.contextIsEnriched && context.length > 0
+      ? { topic: opts.topic, enrichedContext: context }
+      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
+  ).catch(() => buildFallbackMessages(context, userText));
+
+  const model = env.OPENROUTER_MODEL || OPENROUTER_MODEL;
+  let reply: string | null = null;
+  const ok = await withResilience(env, "openrouter", 0, async (timeoutMs) => {
+    const res = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+        "HTTP-Referer": "https://jarvis-sovereign.vikricahya64.workers.dev",
+        "X-Title": "JARVIS-Sovereign",
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.6,
+        messages,
+        max_tokens: 600,
+      }),
+    }, timeoutMs);
+    if (!res.ok) return { ok: false, status: res.status };
+    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    reply = data.choices?.[0]?.message?.content?.trim() ?? "";
+    return { ok: Boolean(reply), status: res.status };
+  });
+  return ok ? reply : null;
+}
+
 /** Google Gemini generative response (free-tier gemma) — resilience fallback
  *  to Groq. Mirrors groqRespond's shape; returns null on any failure so the
  *  chain stays fail-closed. Supports a primary + backup API key rotation. */
 export async function geminiRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string } = {},
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
 ): Promise<string | null> {
   const keys = [env.GEMINI_API_KEY, env.GEMINI_API_KEY_BACKUP, env.GEMINI_API_KEY_SECONDARY].filter(
     (k): k is string => Boolean(k),
@@ -215,21 +282,14 @@ export async function geminiRespond(
   if (keys.length === 0) return null;
   const context = opts.context ?? [];
 
-  // Build natural conversation messages using the personality engine
-  const messages = await buildConversationMessages(
+  const messages = opts.prebuiltMessages ?? await buildConversationMessages(
     env,
     Number(env.OWNER_TELEGRAM_ID),
     userText,
-    { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
-  ).catch(() => {
-    const sys = "Kamu J.A.R.V.I.S., asisten AI yang cerdas dan natural. " +
-      "Jawab dalam Bahasa Indonesia sehari-hari. Singkat, jelas, membantu.";
-    return [
-      { role: "system" as const, content: sys },
-      ...context.map((c) => ({ role: c.role as "user" | "assistant", content: c.content })),
-      { role: "user" as const, content: userText },
-    ];
-  });
+    opts.contextIsEnriched && context.length > 0
+      ? { topic: opts.topic, enrichedContext: context }
+      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
+  ).catch(() => buildFallbackMessages(context, userText));
 
   // Convert messages array to Gemini's single-prompt format
   const systemMsg = messages.find((m) => m.role === "system")?.content ?? "";
@@ -272,29 +332,19 @@ export async function geminiRespond(
 export async function workersAiRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string } = {},
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
 ): Promise<string | null> {
   if (!env.AI) return null;
   const context = opts.context ?? [];
-  const topicHint = opts.topic ? `\nTopik: ${opts.topic}` : "";
 
-  // Build natural conversation messages using the personality engine
-  const messages = await buildConversationMessages(
+  const messages = opts.prebuiltMessages ?? await buildConversationMessages(
     env,
     Number(env.OWNER_TELEGRAM_ID),
     userText,
-    { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
-  ).catch(() => {
-    // Fallback to simple prompt if conversation builder fails
-    const sys = "Kamu J.A.R.V.I.S., asisten AI yang cerdas dan natural. " +
-      "Jawab dalam Bahasa Indonesia sehari-hari. Singkat, jelas, membantu. " +
-      "Jangan mengarang data. Jika tidak tahu, bilang tidak tahu.";
-    return [
-      { role: "system" as const, content: sys },
-      ...context.map((c) => ({ role: c.role as "user" | "assistant", content: c.content })),
-      { role: "user" as const, content: userText + topicHint },
-    ];
-  });
+    opts.contextIsEnriched && context.length > 0
+      ? { topic: opts.topic, enrichedContext: context }
+      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
+  ).catch(() => buildFallbackMessages(context, userText));
 
   // Workers AI model — use a good conversational model
   const model = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
@@ -316,20 +366,49 @@ export async function workersAiRespond(
 
 /** Generative LLM dispatch with Workers AI → Groq → Gemini resilience ordering.
  *  Returns the first provider that answers, or null if all fail. Source tells
- *  the caller which provider carried the response. */
+ *  the caller which provider carried the response.
+ *  Builds conversation messages ONCE and shares across all providers (4x → 1x). */
 export async function llmRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string } = {},
-): Promise<{ reply: string | null; source: "workers_ai" | "groq" | "gemini" | null }> {
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean } = {},
+): Promise<{ reply: string | null; source: "workers_ai" | "groq" | "openrouter" | "gemini" | "self_ref" | null }> {
+  // SELF-REFERENTIAL INTERCEPT — the brain's first and most important guard.
+  // If the input asks "who are you" or "what can you do", answer directly from
+  // the identity's single source of truth. NEVER call an external LLM for this,
+  // because a generic LLM will hallucinate (e.g. answer about "uang" — money).
+  // This guard runs at the COGNITION level so it works no matter which path
+  // reached the LLM (webhook, searchAndSynthesize, subagents, queue, etc.).
+  const selfRefText = (userText || "").trim().toLowerCase();
+  if (SELF_REF_RE.test(selfRefText)) {
+    return { reply: JARVIS_IDENTITY.selfRefReply, source: "self_ref" };
+  }
+
+  const context = opts.context ?? [];
+
+  // Build messages ONCE — shared across all providers (avoids 4x redundant buildConversationMessages calls)
+  const prebuiltMessages = await buildConversationMessages(
+    env,
+    Number(env.OWNER_TELEGRAM_ID),
+    userText,
+    opts.contextIsEnriched && context.length > 0
+      ? { topic: opts.topic, enrichedContext: context }
+      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
+  ).catch(() => buildFallbackMessages(context, userText));
+
+  const sharedOpts = { ...opts, prebuiltMessages };
+
   // 1) Workers AI (free, no key, on CF edge — fastest path)
-  const wai = await workersAiRespond(env, userText, opts);
+  const wai = await workersAiRespond(env, userText, sharedOpts);
   if (wai) return { reply: wai, source: "workers_ai" };
   // 2) Groq (free tier, fast)
-  const groq = await groqRespond(env, userText, opts);
+  const groq = await groqRespond(env, userText, sharedOpts);
   if (groq) return { reply: groq, source: "groq" };
+  // 2b) OpenRouter (free/provided models, breadth under one key)
+  const openrouter = await openrouterRespond(env, userText, sharedOpts);
+  if (openrouter) return { reply: openrouter, source: "openrouter" };
   // 3) Gemini (free tier, last resort)
-  const gemini = await geminiRespond(env, userText, opts);
+  const gemini = await geminiRespond(env, userText, sharedOpts);
   if (gemini) return { reply: gemini, source: "gemini" };
   return { reply: null, source: null };
 }
@@ -493,6 +572,13 @@ export async function searchAndSynthesize(
   userText: string,
   topic: string,
 ): Promise<{ reply: string; source: string }> {
+  // SELF-REFERENTIAL GUARD — if a self-referential question somehow reaches the
+  // search path, answer directly from identity instead of searching/hallucinating.
+  const selfRefText = (userText || "").trim().toLowerCase();
+  if (SELF_REF_RE.test(selfRefText)) {
+    return { reply: JARVIS_IDENTITY.selfRefReply, source: "self_ref" };
+  }
+
   // L14: for COMPLEX, multi-facet research queries, escalate through the
   // bounded orchestrator-worker sub-agent pipeline (researcher -> per-angle
   // searcher -> writer [-verified]), which yields a structured, evidence-
@@ -510,7 +596,14 @@ export async function searchAndSynthesize(
     if (anchor) followupAnchor = anchor.prior;
   }
   if (isResearchClass(topic, userText)) {
-    const sub = await orchestrateResearch(env, owner, userText, topic, followupAnchor);
+    // Iron Man JARVIS: when the user explicitly asks for design/spec/analysis,
+    // run the full engineering pipeline (research + design + risk) instead of
+    // research alone. Fail-closed: on orchestrateDesign failure, falls through
+    // to single-pass (never burns budget twice).
+    const useDesign = isDesignIntent(userText);
+    const sub = useDesign
+      ? await orchestrateDesign(env, owner, userText, topic, followupAnchor)
+      : await orchestrateResearch(env, owner, userText, topic, followupAnchor);
     if (sub) {
       await appendMemory(env, owner, "user", userText, topic);
       await appendMemory(env, owner, "assistant", sub, topic);
@@ -518,14 +611,18 @@ export async function searchAndSynthesize(
       return { reply: sub, source: "subagents" };
     }
   }
-  const searchResult = await ddgSearch(env, topic);
-  const context = await recentContext(env, owner, 4);
-  // FTS5 retrieval: pull relevant persisted memories so the generative reply
-  // can draw on what JARVIS already knows about this topic (free-tier memory).
-  const mems = await searchMemory(env, topic, 4);
+  // Run all independent pre-LLM I/O in parallel: web search + conversation
+  // history + memory retrieval + answer-behavior context (each is a separate
+  // D1 read / network call, so serializing them wastes latency on every query).
+  const [searchResult, context, mems, behaviorContext] = await Promise.all([
+    ddgSearch(env, topic),
+    recentContext(env, owner, 4),
+    searchMemory(env, topic, 4).catch(() => []),
+    getAnswerBehaviorContext(env, topic).catch(() => null),
+  ]);
   if (mems.length > 0) {
     context.push({
-      role: "assistant",
+      role: "system",
       content: "Kenang-kenangan relevan: " + mems.map((m) => m.content).join(" | ").slice(0, 1200),
     });
   }
@@ -537,9 +634,8 @@ export async function searchAndSynthesize(
   // it suppresses insight categories the reflection loop keeps correcting
   // (fail-closed dampening), tuning how JARVIS answers without rewriting any
   // framework logic or prompt.
-  const behaviorContext = await getAnswerBehaviorContext(env, topic);
   if (behaviorContext) {
-    context.push({ role: "user", content: behaviorContext });
+    context.push({ role: "system", content: behaviorContext });
   }
   const g = await llmRespond(env, userText, { context, topic });
   if (g.reply) {
