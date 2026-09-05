@@ -97,10 +97,10 @@ export function extractTopic(text: string): string | null {
     .replace(/[?.!,;:]+$/g, "")
     .trim();
   if (!topic) return null;
-  // Guard: a bare "apa/apakah" introducing a pure greeting/social phrase
-  // ("apa kabar", "apa yang bisa kamu lakukan") is NOT a research topic, so
-  // the generic single-pass engine (not a web-search topic) should handle it.
-  if (/^(kabar|khabar|kabar baik|kabar gembira|halo|hai|naik|hoax|yang bisa[a-z ]*)$/i.test(topic)) return null;
+  // Guard: phrases that look like research topics but are actually self-ref
+  // ("apa kabar", "apa yang bisa kamu lakukan", "bisa kamu lakukan") — these
+  // are NOT research topics, so the generic single-pass engine should handle them.
+  if (/^(kabar|khabar|kabar baik|kabar gembira|halo|hai|naik|hoax|yang bisa|bisa kamu|kamu bisa|kamu lakukan|apa yang bisa|apa uang bisa)/i.test(topic)) return null;
   return topic.length >= 3 ? topic.slice(0, 120) : null;
 }
 
