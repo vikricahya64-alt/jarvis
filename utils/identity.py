@@ -16,6 +16,8 @@ NAME = "J.A.R.V.I.S."
 
 SELF_REF_RE = re.compile(
     r"^(?:"
+    r"(?:sekarang|tolong|coba|bisa)\s+)?"
+    r"(?:"
     r"siapa (kamu|kamu ini|anda)|"
     r"kamu (siapa|adalah|bisa apa|bisa ngapain|bisa buat apa)|"
     r"apa yang bisa kamu (lakukan|bantu|buat)|"
