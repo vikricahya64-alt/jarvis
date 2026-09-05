@@ -65,10 +65,12 @@ export const JARVIS_IDENTITY = {
  *
  * Design: NO ^ anchor — matches the core self-ref pattern ANYWHERE in the
  * string, but only at a word boundary (\b). This handles ANY prefix:
- * "Sekarang apa...", "Tolong jelaskan apa...", "Coba info apa...",
- * "Bisa tolong apa...", "Eh apa...", "Halo apa...", etc.
+ * "Sekarang apa...", "Tolong jelaskan apa...", "Coba info apa...", etc.
+ *
+ * Also allows optional filler words between "apa" and "yang":
+ * "apa ya yang...", "apa sih yang...", "apa nih yang...", etc.
  *
  * Without this, prefixes slip past interception and the LLM hallucinates.
  */
 export const SELF_REF_RE =
-  /(?:^|\b)(?:siapa (?:kamu|kamu ini|anda)|kamu (?:siapa|adalah|bisa apa|bisa ngapain|bisa buat apa)|apa yang bisa kamu (?:lakukan|bantu|buat)|apa uang bisa kamu (?:lakukan|bantu|buat)|apa kemampuanmu|apa fungsi kamu|what can you (?:do|help)|who are you|what are you)(?:\b|$)/i;
+  /(?:^|\b)(?:siapa (?:kamu|kamu ini|anda)|kamu (?:siapa|adalah|bisa apa|bisa ngapain|bisa buat apa)|apa\s+(?:ya\s+|sih\s+|nih\s+|dong\s+|lho\s+|deh\s+|kok\s+|kan\s+|toh\s+)?yang bisa kamu (?:lakukan|bantu|buat)|apa uang bisa kamu (?:lakukan|bantu|buat)|apa kemampuanmu|apa fungsi kamu|what can you (?:do|help)|who are you|what are you)(?:\b|$)/i;
