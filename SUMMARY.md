@@ -15,8 +15,17 @@ Perbaiki jawaban self-referential JARVIS ("apa yang bisa kamu lakukan") yang mas
 
 ### Done
 - **Guard self-ref cognition-level di CF** (`cf/src/lib/ai.ts`): intercept di `llmRespond()` paling atas (sebelum provider) + guard `searchAndSynthesize()`; return `JARVIS_IDENTITY.selfRefReply` tanpa panggil LLM eksternal. Source type diperluas jadi include `"self_ref"`.
-- **Deploy CF `f53eae2c`** (14:50:25Z) — live 100%, typecheck `tsc --noEmit` clean, healthz OK.
-- **Identifikasi platform asli**: `getWebhookInfo` → url `https://jarvis-sovereign.vikricahya64.workers.dev/webhook` (CF), BUKAN Vercel/Fly.
+- **Deploy CF `9b11d1f8`** — live 100%, typecheck `tsc --noEmit` clean (exit 0), healthz OK.
+- **Supreme Orchestrator** (`cf/src/core/supreme_orchestrator.ts`): single entry point for ALL Telegram webhook requests. Intent extraction → Covenant validation → Module selection → Context sanitization → Response assembly. NO business logic inside orchestrator.
+- **DI Container** (`cf/src/core/di_container.ts`): single point for DB/KV/Groq instantiation. Adapters: DatabaseAdapter, KVAdapter, GroqClient. Modules receive dependencies via constructor.
+- **Module Contract** (`cf/src/interfaces/module_contract.ts`): standardized JarvisModule interface with CleanContext. Every module MUST implement execute(), healthCheck(), getCapabilities().
+- **Context Sanitizer** (`cf/src/lib/context_sanitizer.ts`): strips technical metadata before AI calls. CleanContext explicitly excludes systemMetrics, errorLogs, rawKVConfig, fullChatHistory.
+- **CovenantCore class** (`cf/src/lib/covenant_core.ts`): implements JarvisModule contract with DI adapters. Backward compatible - original standalone functions unchanged.
+- **ErrorMonitor class** (`cf/src/lib/error_monitor.ts`): implements JarvisModule contract with DI adapters. Backward compatible - original standalone functions unchanged.
+- **/debug_bypass command** (`cf/src/workers/telegram_webhook.ts`): admin-only, 5min TTL, bypasses orchestrator for verification.
+- **SELF_REF_RE centralized** (`cf/src/lib/identity.ts`): single source of truth with "uang" typo variant. Imported by intelligence.ts, ai.ts, telegram_webhook.ts.
+- **Prefix strip** (`cf/src/workers/telegram_webhook.ts`): strips Telegram group "Username:" prefix before SELF_REF_RE test for ^ anchor.
+- **Python identity.py**: "uang" variant added for Vercel parity.
 - **Fix Python/Vercel paralel**:
   - `utils/identity.py` (baru): `SELF_REF_RE`, `SELF_REF_REPLY`, `SYSTEM_PROMPT_IDENTITY_BLOCK`, `is_self_referential()`.
   - `api/orchestrator.py`: intercept self-ref di awal `_run_pipeline()` (mark DONE + `_notify_user` + return sebelum LLM).
@@ -52,19 +61,21 @@ Perbaiki jawaban self-referential JARVIS ("apa yang bisa kamu lakukan") yang mas
 4. **Monitoring**: aktifkan `getWebhookInfo` periodic check untuk `last_error_date` dan `pending_update_count`.
 
 ## Critical Context
-- `getWebhookInfo`: url = CF worker, `pending_update_count: 0`, `last_error_date: 1788499507` (05:25:07Z) = "Read timeout expired" (versi lama, sebelum fix).
-- Deploy CF terbaru: `f53eae2c` 14:50:25Z (100%). Deployments list diurut oldest-first; index 9 = latest.
-- D1 `memories` schema: id, type, content, tags, importance, source, created_at, expires_at, last_retrieved, access_count. Memori self-ref terekam 13:25, 14:31, 14:44, 14:52 dengan topic "uang bisa kamu lakukan" — membuktikan jalur search masih dieksekusi pasca-fix (sebelum guard berlapis di semua jalur).
-- D1 `conversation_log` schema: id, owner_id, ts, role, content, search_used.
-- `request_log` hanya mencatat provider/DDG (bukan webhook); masih memory "penurunan mata uang rupiah", "bisnis uang besar", "uang" di context sebelumnya — kemungkinan konteks mencemari extractTopic.
-- Semua 4 kali ulang user (13:25, 14:31, 14:44, 14:52) ketik "apa uang bisa kamu lakukan" — typo "uang" untuk "yang", konsisten menjebak LLM ke answer uang.
-- Simulasi POST ke CF worker tanpa secret → `unauthorized` (benar, `TELEGRAM_SECRET` active).
-- Vercel production live: `jarvis-sigma-navy.vercel.app`; script test direct ke deployment URL kena `vercel_auth_enabled` (401 protected).
+- Deploy CF terbaru: `9b11d1f8` — live 100%, typecheck clean (exit 0).
+- Supreme Orchestrator ready for integration (not yet wired to webhook handler).
+- DI Container registers CovenantCore and ErrorMonitor with adapters.
+- All original standalone functions remain unchanged for backward compatibility.
+- /debug_bypass command available for admin verification (5min TTL).
 
 ## Relevant Files (updated)
-- `/workspace/jarvis/cf/src/lib/identity.ts`: `SELF_REF_RE` export + `selfRefReply` + `systemPromptBlock` (single source of truth, termodsifikasi untuk include `"self_ref"`)
-- `/workspace/jarvis/cf/src/lib/intelligence.ts`: import `SELF_REF_RE` dari identity; hapus definisi lokal; gunakan di `perceive` phase (`baris 193`)
-- `/workspace/jarvis/cf/src/lib/ai.ts`: import `SELF_REF_RE` dari identity; replace 2x definisi regex lokal di `llmRespond` (383) dan `searchAndSynthesize` (578)
-- `/workspace/jarvis/cf/src/workers/telegram_webhook.ts`: import `SELF_REF_RE` dari identity; replace regex lokal baris 476; tambah `const cleaned = trimmed.replace(/^[^:]+:\s*\n?\s*/i, "").trim()` baris 479 untuk strip prefix grup Telegram sebelum test `^` anchor
-- `/workspace/jarvis/utils/identity.py` (Python): tambah `r"apa uang bisa kamu (lakukan|bantu|buat)"` ke `SELF_REF_RE` (baris 22); `SYSTEM_PROMPT_IDENTITY_BLOCK` tetap memasukkan identitas ke system prompt LLM
-- `/workspace/jarvis/cf/src/workers/telegram_webhook.ts:473-479`: self-ref handler menggunakan `SELF_REF_RE.test(cleaned)` setelah strip prefix — both private chat (`"Apa uang bisa kamu lakukan"`) dan group chat (`"Vsco Bayu:Apa uang bisa kamu lakukan"`) work.
+- `/workspace/jarvis/cf/src/core/supreme_orchestrator.ts`: Supreme Orchestrator - single entry point for ALL Telegram webhook requests
+- `/workspace/jarvis/cf/src/core/di_container.ts`: DI Container - single point for DB/KV/Groq instantiation with adapters
+- `/workspace/jarvis/cf/src/interfaces/module_contract.ts`: Module Contract - standardized JarvisModule interface with CleanContext
+- `/workspace/jarvis/cf/src/lib/context_sanitizer.ts`: Context Sanitizer - strips technical metadata before AI calls
+- `/workspace/jarvis/cf/src/lib/identity.ts`: `SELF_REF_RE` export + `selfRefReply` + `systemPromptBlock` (single source of truth)
+- `/workspace/jarvis/cf/src/lib/intelligence.ts`: import `SELF_REF_RE` dari identity; hapus definisi lokal
+- `/workspace/jarvis/cf/src/lib/ai.ts`: import `SELF_REF_RE` dari identity; replace 2x definisi regex lokal
+- `/workspace/jarvis/cf/src/workers/telegram_webhook.ts`: import `SELF_REF_RE` + prefix strip + /debug_bypass command
+- `/workspace/jarvis/cf/src/lib/covenant_core.ts`: CovenantCore class implementing JarvisModule contract (backward compatible)
+- `/workspace/jarvis/cf/src/lib/error_monitor.ts`: ErrorMonitor class implementing JarvisModule contract (backward compatible)
+- `/workspace/jarvis/utils/identity.py`: Python "uang" variant for Vercel parity
