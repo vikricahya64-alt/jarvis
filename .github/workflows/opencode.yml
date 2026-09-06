@@ -52,6 +52,10 @@ jobs:
       # `opencode run` (see anomalyco/opencode#28407 / #13221).
       OPENCODE_SERVER_PASSWORD: ""
       OPENCODE_SERVER_USERNAME: ""
+      # Pass the user prompt through an env var instead of shell interpolation:
+      # ${{ inputs.prompt }} is inlined as literal text and breaks on quotes/
+      # backticks, while the runtime expansion "$OC_PROMPT" is never re-parsed.
+      OC_PROMPT: ${{ inputs.prompt }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -92,16 +96,16 @@ jobs:
             RESULT=$(opencode run \
               --model "${{ steps.model.outputs.model }}" \
               --dangerously-skip-permissions \
-              "${{ inputs.prompt }}" 2>&1)
+              "$OC_PROMPT" 2>&1)
           elif [ "$MODE" = "analyze" ]; then
             RESULT=$(opencode run \
               --model "${{ steps.model.outputs.model }}" \
               --agent plan \
-              "${{ inputs.prompt }}" 2>&1)
+              "$OC_PROMPT" 2>&1)
           else
             RESULT=$(opencode run \
               --model "${{ steps.model.outputs.model }}" \
-              "${{ inputs.prompt }}" 2>&1)
+              "$OC_PROMPT" 2>&1)
           fi
           CODE=$?
           set -e
@@ -128,9 +132,16 @@ jobs:
           if [ $CHANGED -ne 0 ]; then
             git config user.name "JARVIS opencode bot"
             git config user.email "jarvis-opencode@users.noreply.github.com"
-            git commit -m "feat(oc): auto-change dari Telegram — $(echo "${{ inputs.prompt }}" | head -c 80)"
+            python3 - <<'PY'
+            import os
+            p = os.environ["OC_PROMPT"]
+            open("/tmp/oc_commit.txt", "w").write(("feat(oc): " + p)[:200])
+            open("/tmp/oc_title.txt", "w").write(("oc: " + p)[:60])
+            open("/tmp/oc_body.md", "w").write("Dari Telegram oleh opencode.\n```" + p + "```\n")
+            PY
+            git commit -F /tmp/oc_commit.txt
             git push -u origin "${{ steps.workbranch.outputs.branch }}"
-            PR_URL=$(gh pr create --title "oc: $(echo "${{ inputs.prompt }}" | head -c 60)" --body "Dari Telegram oleh opencode.\n\`\`\`${{ inputs.prompt }}\`\`\`" | tail -1)
+            PR_URL=$(gh pr create --title "$(cat /tmp/oc_title.txt)" --body-file /tmp/oc_body.md | tail -1)
             echo "$PR_URL" >> /tmp/oc_result.txt
             echo "  (review & merge manual sebelum deploy)" >> /tmp/oc_result.txt
           else
