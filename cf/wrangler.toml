@@ -23,19 +23,19 @@ compatibility_date = "2026-06-01"
 compatibility_flags = ["nodejs_compat"]
 
 #------------------------------------------------------------------------------
-# Bindings: D1 (SQLite edge), Queue, KV
+# Bindings: D1 (SQLite edge), AI, KV
 #------------------------------------------------------------------------------
 [[d1_databases]]
 binding = "DB"
 database_name = "jarvis"
 database_id = "21da51ad-244e-46dc-9b5f-60e79ac60b25"
 
+[ai]
+binding = "AI"
+
 [[kv_namespaces]]
 binding = "CONFIG_KV"
 id = "c6476e44ee25411c88ba81aee3012e9c"
-
-[[ai]]
-binding = "AI"
 
 # -----------------------------------------------------------------------------
 # Queue bindings TEMPORARILY DISABLED: Cloudflare token lacks Queues:Edit
@@ -71,12 +71,16 @@ DMS_GRACE_DAYS = "30"
 DMS_STAGE1_HOURS = "24"
 DMS_STAGE2_HOURS = "48"
 QUEUE_RETRY_BACKOFF_MS = "1000"
+# OpenRouter (free models) — breadth fallback + research deepening.
+#   * OPENROUTER_API_KEY is a SECRET: set via `wrangler secret put OPENROUTER_API_KEY`
+#   * OPENROUTER_MODEL optional; defaults inside code to qwen/qwen3.6-27b.
+OPENROUTER_MODEL = "qwen/qwen3.6-27b"
 
 #------------------------------------------------------------------------------
 # Cron Triggers (≤5 allowed on free; request-driven daemons, not resident)
 #   - DMS: every 6 hours   ("0 */6 * * *")
 #   - Value alignment: daily 03:00 UTC   ("0 3 * * *")
-#   - Obedience weekly report: Sunday 08:00 UTC   ("0 8 * * 0")
+#   - Obedience report: daily 08:00 UTC   ("0 8 * * *")
 # The single Worker dispatches by scheduled cron name (see src/index.ts).
 #------------------------------------------------------------------------------
 [triggers]

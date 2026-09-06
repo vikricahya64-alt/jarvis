@@ -31,6 +31,7 @@ _HELP = (
     "/status — status bot & statistik\n"
     "/waktu [zona] — jam sekarang\n"
     "/cuaca <kota> — cuaca saat ini\n"
+    "/setkota <kota> — simpan kota untuk cuaca & briefing harian\n"
     "/ip [alamat] — info lokasi IP\n"
     "/kurs <dari> <ke> — konversi mata uang\n"
     "/kripto <simbol> — harga koin (contoh: /kripto BTC)\n"
@@ -93,6 +94,8 @@ def handle_command(chat_id: int, text: str, telegram_id: int) -> bool:
         "/status": _cmd_status,
         "/waktu": _cmd_waktu,
         "/cuaca": _cmd_cuaca,
+        "/setkota": _cmd_setkota,
+        "/kota": _cmd_kota,
         "/ip": _cmd_ip,
         "/kurs": _cmd_kurs,
         "/kripto": _cmd_kripto,
@@ -154,7 +157,7 @@ def handle_command(chat_id: int, text: str, telegram_id: int) -> bool:
         "/region_status": _cmd_region_status,
         "/worker_queue": _cmd_worker_queue,
         "/data_residency_audit": _cmd_data_residency_audit,
-        # opencode bridge
+        # opencode bridge (free-tier deep models via GitHub Actions)
         "/opencode": _cmd_opencode,
         "/opencode_edit": _cmd_opencode_edit,
         "/opencode_analyze": _cmd_opencode_analyze,
@@ -341,6 +344,45 @@ def _cmd_cuaca(chat_id, tid, args):
             f"Hujan: {r['rain_probability']}")
     else:
         telegram.send_message(chat_id, f"❌ {res.get('error')}")
+
+
+def _cmd_setkota(chat_id, tid, args):
+    if not args:
+        return telegram.send_message(chat_id, "Tulis nama kota: /setkota malang")
+    from utils import prefs
+    w = get_weather(args.strip())
+    if not w.get("success"):
+        return telegram.send_message(
+            chat_id, f"❌ {w.get('error', 'Lokasi tidak ditemukan.')} Coba nama lain.")
+    res = prefs.set_city(tid, args.strip())
+    if not res.get("success"):
+        return telegram.send_message(chat_id, f"❌ {res.get('error', 'Gagal')}")
+    r = w
+    telegram.send_message(chat_id,
+        f"✅ Kota disimpan: {r['place']}\n"
+        f"🌤 {r['place']}: {r['description']}, {r['temperature_celsius']}°C "
+        f"(min {r['today_min_celsius']}°C, max {r['today_max_celsius']}°C, "
+        f"hujan {r['rain_probability']}%)")
+
+
+def _cmd_kota(chat_id, tid, args):
+    from utils import prefs
+    if args:
+        city = args.strip()
+    else:
+        city = prefs.get_city(tid)
+        if not city:
+            return telegram.send_message(
+                chat_id, "Belum ada kota tersimpan. Set dengan: "
+                         "/setkota jakarta, atau ketik /kota <nama>.")
+    w = get_weather(city)
+    if not w.get("success"):
+        return telegram.send_message(chat_id, f"❌ {w.get('error', 'Lokasi tidak ditemukan.')}")
+    r = w
+    telegram.send_message(chat_id,
+        f"🌤 {r['place']}: {r['description']}, {r['temperature_celsius']}°C "
+        f"(min {r['today_min_celsius']}°C, max {r['today_max_celsius']}°C, "
+        f"hujan {r['rain_probability']}%)")
 
 
 def _cmd_ip(chat_id, tid, args):
@@ -1348,12 +1390,45 @@ def _cmd_data_residency_audit(chat_id, tid, args):
 
 
 # ---------------------------------------------------------------------------
-# opencode bridge — /opencode <prompt>
-# Dispatch GitHub Actions workflow, result sent to Telegram by the runner.
+# opencode bridge — /opencode <prompt> (/opencode_edit, /opencode_analyze).
+# Dispatches the "opencode" GitHub Actions workflow so a strong :free model
+# handles the task; the workflow delivers the result to Telegram.
+# Env GITHUB_PAT must be set (repo PAT with workflow + contents:write).
 # ---------------------------------------------------------------------------
 _GITHUB_PAT = os.getenv("GITHUB_PAT", "")
 _GITHUB_REPO = "vikricahya64-alt/jarvis"
 _GITHUB_WORKFLOW = "opencode.yml"
+
+
+def dispatch_opencode(chat_id, prompt, mode="chat", model=""):
+    """Dispatch the opencode workflow. Returns True on success (HTTP 2xx),
+    False otherwise. Never raises — callers may rely on it for the default
+    pipeline fallback path."""
+    if not _GITHUB_PAT:
+        return False
+    try:
+        resp = httpx.post(
+            f"https://api.github.com/repos/{_GITHUB_REPO}"
+            f"/actions/workflows/{_GITHUB_WORKFLOW}/dispatches",
+            headers={
+                "Authorization": f"Bearer {_GITHUB_PAT}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            json={
+                "ref": "main",
+                "inputs": {
+                    "prompt": prompt,
+                    "chat_id": str(chat_id),
+                    "mode": mode,
+                    "model": model,
+                },
+            },
+            timeout=15,
+        )
+        return resp.status_code in (200, 204)
+    except Exception:
+        return False
 
 
 def _cmd_opencode_edit(chat_id, tid, args):
@@ -1374,34 +1449,12 @@ def _cmd_opencode(chat_id, tid, args, mode="chat"):
     if not _GITHUB_PAT:
         telegram.send_message(chat_id, "⚠️ GITHUB_PAT belum dikonfigurasi.")
         return
-    try:
-        resp = httpx.post(
-            f"https://api.github.com/repos/{_GITHUB_REPO}"
-            f"/actions/workflows/{_GITHUB_WORKFLOW}/dispatches",
-            headers={
-                "Authorization": f"Bearer {_GITHUB_PAT}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            json={
-                "ref": "main",
-                "inputs": {
-                    "prompt": args,
-                    "chat_id": str(chat_id),
-                    "mode": mode,
-                },
-            },
-            timeout=15,
-        )
-        if resp.status_code in (200, 204):
-            telegram.send_message(chat_id, "🧠 Mengirim ke opencode…")
-        else:
-            telegram.send_message(
-                chat_id,
-                f"⚠️ Gagal dispatch (HTTP {resp.status_code}). "
-                "Coba lagi nanti.")
-    except Exception as exc:
-        telegram.send_message(chat_id, f"⚠️ Error: {exc}")
+    if dispatch_opencode(chat_id, args, mode=mode):
+        telegram.send_message(chat_id, "🧠 Mengirim ke opencode…")
+    else:
+        telegram.send_message(
+            chat_id,
+            "⚠️ Gagal dispatch opencode. Coba lagi nanti.")
 
 
 def _trim(text, n):

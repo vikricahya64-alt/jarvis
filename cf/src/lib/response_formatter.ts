@@ -7,11 +7,16 @@
 // - Bullet points for lists
 // - Length adaptation based on query complexity
 // - Emoji-free zones (formal/sensitive topics)
+// - Citation formatting for research results
+// - Progress indicators for long operations
+// - Adaptive verbosity based on user preferences
 //
 // Design references:
 // - Grice Maxims (1975): quantity, quality, manner, relevance
 // - Nielsen Norman Group (2020): readability on mobile screens
 // - Telegram MarkdownV2 spec for formatting
+// - Mem0 (2025): context compression for cost reduction
+// - Observational Memory (VentureBeat 2025): dated structured notes
 //=====================================================================
 
 /** Format configuration based on query type. */
@@ -21,6 +26,10 @@ export interface FormatConfig {
   useBold: boolean;
   useBullets: boolean;
   lineBreaks: "single" | "double";
+  /** Max words for chat responses */
+  maxWordsChat: number;
+  /** Whether to include source citations */
+  includeCitations: boolean;
 }
 
 /** Default format configs by conversation mode. */
@@ -31,6 +40,8 @@ const FORMAT_PRESETS: Record<string, FormatConfig> = {
     useBold: false,
     useBullets: false,
     lineBreaks: "single",
+    maxWordsChat: 30,
+    includeCitations: false,
   },
   research: {
     useEmoji: false,
@@ -38,6 +49,8 @@ const FORMAT_PRESETS: Record<string, FormatConfig> = {
     useBold: true,
     useBullets: true,
     lineBreaks: "double",
+    maxWordsChat: 300,
+    includeCitations: true,
   },
   command: {
     useEmoji: true,
@@ -45,6 +58,8 @@ const FORMAT_PRESETS: Record<string, FormatConfig> = {
     useBold: true,
     useBullets: false,
     lineBreaks: "single",
+    maxWordsChat: 20,
+    includeCitations: false,
   },
   translation: {
     useEmoji: false,
@@ -52,6 +67,8 @@ const FORMAT_PRESETS: Record<string, FormatConfig> = {
     useBold: false,
     useBullets: false,
     lineBreaks: "single",
+    maxWordsChat: 100,
+    includeCitations: false,
   },
   emergency: {
     useEmoji: true,
@@ -59,28 +76,38 @@ const FORMAT_PRESETS: Record<string, FormatConfig> = {
     useBold: true,
     useBullets: false,
     lineBreaks: "single",
+    maxWordsChat: 20,
+    includeCitations: false,
   },
 };
 
-/** Adapt response length based on query complexity. */
+/** Adapt response length based on query complexity and user preferences. */
 export function adaptLength(
   reply: string,
   queryType: string,
   userText: string,
+  preferredLength?: "short" | "normal" | "detailed",
 ): string {
   const words = reply.split(/\s+/);
   const queryLen = userText.split(/\s+/).length;
+  const config = FORMAT_PRESETS[queryType] ?? FORMAT_PRESETS.chat;
+
+  // Determine target length based on preferences and query
+  let targetWords = config.maxWordsChat;
+
+  if (preferredLength === "short") targetWords = Math.min(targetWords, 20);
+  if (preferredLength === "detailed") targetWords = Math.max(targetWords, 100);
+  if (queryLen > 5) targetWords = Math.max(targetWords, 50); // longer queries deserve longer answers
 
   // Simple query → short answer
   if (queryLen <= 3 && queryType === "chat") {
-    if (words.length > 30) {
-      return words.slice(0, 25).join(" ") + "...";
+    if (words.length > targetWords) {
+      return words.slice(0, targetWords - 5).join(" ") + "...";
     }
   }
 
   // Complex query → allow longer answer
   if (queryType === "research" && words.length < 30) {
-    // Too short for research — might need more detail
     return reply;
   }
 
@@ -102,16 +129,53 @@ export function cleanLLMArtifacts(text: string): string {
     .trim();
 }
 
+/** Format citations in research responses.
+ *  Converts bare URLs and source mentions into Markdown links. */
+function formatCitations(text: string): string {
+  // Convert "Source: <url>" or "Sumber: <url>" to Markdown links
+  text = text.replace(
+    /(?:Source|Sumber|Referensi|Link):\s*(https?:\/\/\S+)/gi,
+    "[$1]($1)",
+  );
+
+  // Convert inline URLs to clickable links
+  text = text.replace(
+    /\b(https?:\/\/[^\s,)]+)/g,
+    (url) => {
+      // Don't re-format already formatted links
+      if (text.includes(`[${url}]`)) return url;
+      return `[${url}](${url})`;
+    },
+  );
+
+  // Convert "Menurut X (tahun)" to bold
+  text = text.replace(
+    /(?:Menurut|According to|Per|Seperti dilaporkan)\s+([A-Z][^.]*?\(\d{4}\))/g,
+    "*$1*",
+  );
+
+  return text;
+}
+
 /** Format response for Telegram (MarkdownV2-safe). */
 export function formatForTelegram(
   reply: string,
   mode: string = "chat",
+  opts: {
+    preferredLength?: "short" | "normal" | "detailed";
+    userText?: string;
+  } = {},
 ): string {
   const config = FORMAT_PRESETS[mode] ?? FORMAT_PRESETS.chat;
   let text = cleanLLMArtifacts(reply);
 
   // Adapt length
-  text = adaptLength(text, mode, "");
+  text = adaptLength(text, mode, opts.userText ?? "", opts.preferredLength);
+
+  // Format citations for research mode
+  if (config.includeCitations) {
+    text = formatCitations(text);
+  }
 
   // Emoji filtering for formal contexts
   if (!config.useEmoji) {
@@ -153,13 +217,30 @@ export function generateAcknowledgment(
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
+/** Generate a progress indicator for long operations. */
+export function progressIndicator(stage: string): string {
+  const indicators: Record<string, string> = {
+    searching: "🔍 Mencari...",
+    analyzing: "🤔 Menganalisis...",
+    synthesizing: "📝 Menyusun...",
+    translating: "🌐 Menerjemahkan...",
+    reflecting: "💭 Merefleksi...",
+    default: "⏳ Memproses...",
+  };
+  return indicators[stage] ?? indicators.default;
+}
+
 /** Build the final reply by combining acknowledgment + formatted response. */
 export function buildFinalReply(
   rawReply: string,
   mode: string,
   sentiment: string,
+  opts: {
+    preferredLength?: "short" | "normal" | "detailed";
+    userText?: string;
+  } = {},
 ): string {
   const ack = generateAcknowledgment(mode, sentiment);
-  const formatted = formatForTelegram(rawReply, mode);
+  const formatted = formatForTelegram(rawReply, mode, opts);
   return ack ? `${ack}\n\n${formatted}` : formatted;
 }

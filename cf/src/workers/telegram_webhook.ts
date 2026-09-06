@@ -17,14 +17,16 @@ import {
   createOrder, listOrders, getOrder, updateOrderStatus, salesReport,
   type Product, type Order, type OrderInput,
 } from "../lib/db";
-import { sendMessage, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, InlineButton } from "../lib/telegram";
+import { sendMessage, sendPhoto, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, InlineButton } from "../lib/telegram";
 import {
   routeCommand, markExplicitStop, setAutonomyPaused, isAutonomyPaused, redact,
   setPrivacyMode, isPrivacyMode,
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus, recordTaskCounters, recentContext } from "../lib/db";
-import { searchAndSynthesize, extractTopic, parseTranslate, translateText, isFollowUpQuery, resolveFollowUpAnchor } from "../lib/ai";
+import { searchAndSynthesize, extractTopic, parseTranslate, translateText, isFollowUpQuery, resolveFollowUpAnchor, generateImagePrompt, generateImage, sniffImageMime } from "../lib/ai";
+import { getWeatherText } from "../lib/weather";
+
 import { normalizeInput, isEmptyInput } from "../lib/normalize";
 import { saveSessionToKV, loadSessionFromKV } from "../lib/context_manager";
 import { saveObservation } from "../lib/db";
@@ -480,6 +482,34 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
 
+  // City weather preference — explicit convenience command BEFORE the compliance
+  // pipeline so "/kota jakarta" swaps the saved city instantly (no clarify loop).
+  // "/kota" (bare) shows weather for the saved city; "/kota <nama>" saves + shows.
+  if (/^\/(?:kota|setkota|city)(?:\s|$)/i.test(trimmed)) {
+    const city = trimmed
+      .replace(/^\/(?:kota|setkota|city)\s*/i, "")
+      .replace(/^(?:jadi|ke|menjadi|adalah)\s+/i, "")
+      .trim();
+    if (!city) {
+      const saved = await env.CONFIG_KV.get(`kota:${r}`).catch(() => null);
+      if (saved) {
+        await fire(sendMessage(env, r, await getWeatherText(saved)));
+      } else {
+        await fire(sendMessage(env, r,
+          "Belum ada kota tersimpan. Set dengan: `/kota <nama>` (mis. `/kota Jakarta`)."));
+      }
+      return new Response("ok", { status: 200 });
+    }
+    const out = await getWeatherText(city);
+    if (out.startsWith("Lokasi") || out.startsWith("Cuaca untuk")) {
+      await fire(sendMessage(env, r, out));
+      return new Response("ok", { status: 200 });
+    }
+    await env.CONFIG_KV.put(`kota:${r}`, city).catch(() => {/* best-effort */});
+    await fire(sendMessage(env, r, `✅ Kota disimpan: *${city}*\n${out}`));
+    return new Response("ok", { status: 200 });
+  }
+
   // E-commerce / shop commands — explicit command BEFORE compliance pipeline.
   if (isShopCommand(trimmed, text)) {
     await handleShopCommand(env, r, text);
@@ -563,6 +593,84 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
         }
         // Nothing to translate: fall through to generic (will show "Ok.")
       }
+      // Gambar: generate image prompt, then ACTUALLY generate the image
+      if (/^\s*(?:gambar|desain_gambar|gambar_ai)/i.test(text)) {
+        const tr = text.trim().replace(/^\s*(?:gambar|desain_gambar|gambar_ai)\s*/i, "").trim();
+        if (tr) {
+          const prompt = await generateImagePrompt(env, tr);
+          // Try to deliver a real image first (Workers AI, free). If it fails,
+          // fall back to the text prompt so the user still gets a usable result.
+          const bytes = await generateImage(env, prompt).catch(() => null);
+          if (bytes && bytes.length > 0) {
+            await fire(sendPhoto(env, owner, bytes, "Gambar dibuat oleh J.A.R.V.I.S.", sniffImageMime(bytes)).catch(async () => {
+              // Degrade to text prompt if Telegram delivery fails.
+              await sendMessage(env, owner,
+                `🖼️ Prompt gambar:\n\n${prompt}\n\n*(Gunakan prompt ini dengan Midjourney/DALL-E/Stable Diffusion)*`);
+            }));
+          } else {
+            await fire(sendMessage(env, owner,
+              `🖼️ Prompt gambar:\n\n${prompt}\n\n*(Gunakan prompt ini dengan Midjourney/DALL-E/Stable Diffusion)*`));
+          }
+          await recordTaskCounters(env, "image_prompt", owner);
+          break;
+        }
+        await fire(sendMessage(env, owner,
+          "🖼️ Berikan deskripsi untuk gambar.\nContoh: `/gambar rumah minimalis putih di pagi hari`"));
+        await recordTaskCounters(env, "image_prompt", owner);
+        break;
+      }
+      // Free-text VISUAL request — deliberately broad. ANY request phrased as
+      // "make/show an image or video of X" must render a real flux image, even
+      // for subjects JARVIS has never seen. There is no separate video model on
+      // free tier, so video requests are merged into the image path (flux).
+      // Creation phrasing wins; only clearly non-creative phrasing (searching,
+      // describing, list-making, questions, statements, "video call/meeting",
+      // text-about-image) stays on the generic pipeline so version/naturalness
+      // are untouched.
+      const IMG_CMD = /^(?:gambar(?:kan)?|gambarin|foto|photo|image|lukis(?:an)?|sketsa|sketch|wallpaper|logo|poster|ilustras?i|visualisasi|render(?:ing)?|mockup|banner|thumbnail|video|film|clip|animasi|vlog|motion|trailer|teaser|opening)[\s,:–\-]+/i;
+      const IMG_OUT = /\b(?:gambar(?:kan)?|gambarin|foto|photo|image|lukis(?:an)?|sketsa|sketch|wallpaper|logo|poster|ilustras?i|visualisasi|visual|render(?:ing)?|mockup|banner|thumbnail|video|film|clip|animasi|vlog|motion|trailer|teaser|reels?|tiktok)\b/i;
+      const IMG_VERB = /\b(?:buat(?:lah)?|buatkan|bikin(?:lah)?|buatin|bkin|bikinin|generat\w*|hasilkan|pembuat|tolong\s+(?:buat|bikin|gambar(?:kan)?)|minta\s+(?:buat|dibuatkan|gambar(?:kan)?)|mohon\s+(?:buat|bikin)|bisa\s+buat|boleh\s+buat|ingin\s+buat|pengen\s+buat|mau\s+buat|(?:mau|ingin|pengen)\s+(?:gambar|foto|image|video|film|animasi|clip))\b/i;
+      const IMG_TEXTISH = /(?:puisi|cerita|artikel|deskripsi|teks|tulisan|naskah|paragraf|analisis|penjelasan|caption|jelaskan|sebutkan|ceritakan|tentang|mengenai|seputar|soal|cari|lihat|cek|tonton|baca|find|daftar|list|call|conference|meeting|panggilan|vc)/i;
+      const VID_COMM = /\bvideo\s*(?:call|conference|meeting|chat|panggilan|vc)\b/i;
+      const imgCmd = text.trim().match(IMG_CMD);
+      let imgDesc = "";
+      let makeImage = false;
+      if (!VID_COMM.test(text)) {
+        if (imgCmd) {
+          imgDesc = text.trim().slice(imgCmd[0].length).trim();
+          makeImage = !!imgDesc &&
+            !/^(?:gambar|video|youtube|yang|itu|ini|tersebut|apa|siapa|berapa|kapan|kenapa|mengapa|apakah|bagaimana)\b/i.test(imgDesc) &&
+            !/\b(?:apa|siapa|berapa|kapan|kenapa|mengapa|apakah|bagaimana)\b/i.test(imgDesc.slice(0, 30));
+        } else {
+          const out = text.match(IMG_OUT);
+          if (out && typeof out.index === "number") {
+            const head = text.slice(0, out.index);
+            imgDesc = text.slice(out.index + out[0].length).trim();
+            makeImage =
+              IMG_VERB.test(text) &&
+              !/^(?:yang|itu|ini|tersebut|apa|siapa|berapa|kapan|kenapa|mengapa|apakah|bagaimana)\b/i.test(imgDesc) &&
+              !/(gambar|foto|poster|logo|wallpaper|image|film|video)-\1/i.test(text) &&
+              !IMG_TEXTISH.test(head);
+          }
+        }
+      }
+      if (makeImage) {
+        // Keep the subject description; fall back to the full request if the
+        // subject ends up empty so unknown/oddly-phrased asks still render.
+        const desc = (imgDesc || text.trim()).replace(/^(?:yang\s+)?(?:sebuah\s+)?(?:gambar|image|foto|photo|lukisan|sketsa|poster|logo|wallpaper|ilustrasi|video|film|clip|animasi)?\s+/i, "").trim() || text.trim();
+        const prompt = await generateImagePrompt(env, desc);
+        const bytes = await generateImage(env, prompt).catch(() => null);
+        if (bytes && bytes.length > 0) {
+          await fire(sendPhoto(env, owner, bytes, "Gambar dibuat oleh J.A.R.V.I.S.", sniffImageMime(bytes)).catch(async () => {
+            await sendMessage(env, owner, `🖼️ Prompt gambar:\n\n${prompt}`);
+          }));
+        } else {
+          await fire(sendMessage(env, owner,
+            `🖼️ Prompt gambar untuk "${desc}":\n\n${prompt}\n\n*(Gunakan prompt ini dengan Midjourney/DALL-E/Stable Diffusion)*`));
+        }
+        await recordTaskCounters(env, "image_prompt", owner);
+        break;
+      }
       const topic = extractTopic(text);
       if (topic) {
         // Friendly info/query EXECUTE → real search + synthesis (searchAndSynthesize
@@ -618,6 +726,11 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
     case "BLOCK":
     case "DEFER":
     default:
+      if (isBareTodoVerb(text)) {
+        await recordTaskCounters(env, "todo_help", owner);
+        await fire(sendMessage(env, owner, TODO_USAGE));
+        break;
+      }
       await fire(sendMessage(env, owner, "Aksi ini saya tunda dulu. Kalau perlu sekarang, coba perjelas permintaannya."));
   }
   // Simpan sesi ke KV untuk persistensi across cold starts (fire-and-forget)
@@ -649,6 +762,7 @@ async function applyDefault(
     50: "Status dimuat.",
     30: "Siap.",
   };
+  
   if (extractTopic(rawText)) {
     return SEARCH.searching(rawText);
   }
@@ -662,6 +776,13 @@ async function applyDefault(
       const ctx: MessageContext = { owner, text: rawText, source: "telegram" };
       const jarvisRes = await processMessage(env, ctx);
       if (jarvisRes.text && jarvisRes.text.length > 5) {
+        // Best-effort: deliver the flux image produced by the design/outline
+        // path alongside its text reply. Fail-closed to text only.
+        if (jarvisRes.image && jarvisRes.image.bytes.length > 0) {
+          fire(sendPhoto(env, owner, jarvisRes.image.bytes, "🎨 Visual hasil desain (flux)", jarvisRes.image.mime).catch(async () => {
+            await fire(sendMessage(env, owner, "🖼️ Gambar gagal dikirim, berikut deskripsi desainnya di atas."));
+          }));
+        }
         return jarvisRes.text;
       }
     } catch { /* fall back to label below */ }
@@ -678,7 +799,7 @@ function statusReport(paused: boolean): string {
     ``,
     `${STATUS.systemOk}`,
     ``,
-    `Perintah: /health · /dms_status · /queue_status · /pause · /resume · /obedience_report · /todo`,
+    `Perintah: /health · /dms_status · /queue_status · /pause · /resume · /obedience_report · /todo · /kota`,
   ];
   return lines.join("\n");
 }
@@ -698,6 +819,22 @@ function isTodoCommand(trimmed: string, raw: string): boolean {
   // Bare "todo" listing.
   if (/^todo\b/i.test(lower) || lower === "list todo" || lower === "todo list") return true;
   return false;
+}
+
+const TODO_USAGE =
+  "🗂️ *Todo J.A.R.V.I.S.*\n\n" +
+  "`/todo` — daftar todo\n" +
+  "`/todo add beli telur` / `tambah todo beli telur` — tambah\n" +
+  "`/todo del <id>` / `hapus todo <teks>` — hapus\n" +
+  "`done todo <id>` — tandai selesai";
+
+/** True when the message is a bare todo/delete verb with NO target. These are
+ *  currently deferred by the compliance pipeline; instead of the generic "tunda"
+ *  reply, nudge the owner with todo usage so the intent isn't silently parked. */
+export function isBareTodoVerb(text: string): boolean {
+  return /^(?:\/?hapus|hapuskan|\/?del|\/?delete|remove|\/?todo\s+(?:del|delete|remove|hapus))[\s!.,;:]*$/i.test(
+    text.trim(),
+  );
 }
 
 /** Execute a parsed todo command and reply to the owner. Fail-closed: a D1

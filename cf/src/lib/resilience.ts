@@ -19,9 +19,13 @@
 import { Env } from "./db";
 
 // Bucket sizes (free-tier friendly; tuned for a personal assistant).
+// Each timer must stay well under the ~30s Worker execution budget, and the
+// chain is Groq-first (fast) → Gemini last-resort (slow). Gemini is kept tight
+// with a single attempt so a last-resort slow path can never blow the budget.
 const TIMEOUT_MS = {
   groq: 15000,
-  gemini: 20000,
+  openrouter: 8000,
+  gemini: 8000,
   web: 10000,
 } as const;
 
@@ -32,10 +36,20 @@ const BREAKER = {
 } as const;
 
 const RETRY = {
-  maxAttempts: 2, // 1 initial + 2 retries = 3 total
+  // Attempt count per provider attempt sequence. Groq is fast so one retry is
+  // cheap; Gemini and web are single-attempt (a slow/hanging network path must
+  // never eat the whole worker budget twice in a row).
+  maxAttempts: 2, // 1 initial + 1 retry (total 2)
+  maxAttemptsSlow: 1, // single-attempt for slow providers (gemini/web)
+
   baseMs: 400,
   capMs: 8000,
 } as const;
+
+/** True for providers that only ever get a single attempt (slow/hanging paths). */
+function isSingleAttemptProvider(provider: string): boolean {
+  return provider === "gemini" || provider === "openrouter" || provider === "web";
+}
 
 /** Classify an HTTP status into retryable (true) vs hard-fail (false). */
 export function isRetryableStatus(status: number): boolean {
@@ -197,8 +211,9 @@ export async function withResilience(
     return false;
   }
   const timeoutMs = TIMEOUT_MS[provider as keyof typeof TIMEOUT_MS] ?? TIMEOUT_MS.web;
+  const maxAttempts = isSingleAttemptProvider(provider) ? RETRY.maxAttemptsSlow : RETRY.maxAttempts;
   let lastStatus = 0;
-  for (let attempt = 1; attempt <= RETRY.maxAttempts; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const attemptStart = Date.now();
     let ok = false;
     try {
@@ -215,7 +230,7 @@ export async function withResilience(
       await logRequest(env, provider, "ok", latency, step);
       return true;
     }
-    if (attempt < RETRY.maxAttempts && isRetryableStatus(lastStatus)) {
+    if (attempt < maxAttempts && isRetryableStatus(lastStatus)) {
       await logRequest(env, provider, "fail", latency, step, `retry:${attempt} status=${lastStatus}`);
       // Back off before next attempt.
       await new Promise((resolve) => setTimeout(resolve, backoffMs(attempt)));

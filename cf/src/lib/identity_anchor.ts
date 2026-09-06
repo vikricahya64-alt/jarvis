@@ -65,6 +65,7 @@ async function getIdentitySnapshot(env: Env): Promise<Record<string, unknown>> {
     "TELEGRAM_SECRET",
     "TELEGRAM_TOKEN",
     "GROQ_API_KEY",
+    "OPENROUTER_API_KEY",
     "CLARITY_GATE",
     "RISK_CONSENT_THRESHOLD",
     "CONSENT_TIMEOUT_S",

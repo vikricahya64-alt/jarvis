@@ -89,6 +89,29 @@ export async function answerCallbackQuery(
   return call(env, "answerCallbackQuery", body);
 }
 
+/** Send a photo from raw image bytes (multipart/form-data). Used to deliver
+ *  locally-generated images (e.g. Workers AI imagegen) to the owner. */
+export async function sendPhoto(
+  env: { TELEGRAM_TOKEN?: string },
+  chatId: number,
+  imageBytes: Uint8Array | ArrayBuffer,
+  caption: string,
+  mime = "image/png",
+): Promise<unknown> {
+  const form = new FormData();
+  const buf = imageBytes instanceof Uint8Array ? imageBytes : new Uint8Array(imageBytes);
+  form.append("chat_id", String(chatId));
+  const ext = mime === "image/jpeg" ? "jpg" : "png";
+  form.append("photo", new Blob([buf as unknown as Blob], { type: mime }), `jarvis_image.${ext}`);
+  form.append("caption", truncate(caption));
+  const res = await fetch(`${API}/bot${token(env)}/sendPhoto`, { method: "POST", body: form });
+  const data = (await res.json()) as { ok: boolean; result?: unknown; description?: string };
+  if (!res.ok || !data.ok) {
+    throw new Error(`Telegram sendPhoto: ${data.description ?? res.status}`);
+  }
+  return data.result;
+}
+
 export async function editMessageReplyMarkup(
   env: { TELEGRAM_TOKEN?: string },
   chatId: number,
@@ -110,4 +133,16 @@ export async function setWebhook(
   const body: Record<string, unknown> = { url };
   if (secret) body.secret_token = secret;
   return call(env, "setWebhook", body);
+}
+
+export async function getWebhookInfo(
+  env: { TELEGRAM_TOKEN?: string },
+): Promise<{ url: string; has_custom_certificate: boolean; pending_update_count: number; last_error_date?: number; last_error_message?: string }> {
+  return call(env, "getWebhookInfo", {}) as Promise<any>;
+}
+
+export async function getMe(
+  env: { TELEGRAM_TOKEN?: string },
+): Promise<{ id: number; is_bot: boolean; first_name: string; username?: string }> {
+  return call(env, "getMe", {}) as Promise<any>;
 }

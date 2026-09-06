@@ -64,7 +64,7 @@ export async function decomposeGoal(
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
     body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
+      model: "qwen/qwen3.6-27b",
       temperature: 0.2,
       max_tokens: 1000,
       messages: [

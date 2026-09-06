@@ -161,10 +161,13 @@ export async function gatherSuggestionCandidates(
 
   // 3) Insight signals — a high-confidence, never-validated lesson is worth the
   //    owner confirming (lights up the L13 warrant loop). Only moderately urgent.
+  const BUG_PATTERNS = /uang bisa kamu|uang dapat digunakan|apa uang bisa/i;
   const insights = await listInsights(env, false).catch(() => []);
   for (const ins of insights) {
     const key = `insight:${ins.id}`;
     if (alreadyOffered.has(key)) continue;
+    // Skip insights based on old bug patterns
+    if (BUG_PATTERNS.test(ins.ruleText)) continue;
     if (ins.confidence >= 0.6) {
       pool.push({
         category: "insight",
@@ -243,6 +246,7 @@ export async function offerSuggestions(env: Env, owner: number): Promise<string 
     // One concise bullet per suggestion, each naming its trigger provenance
     // (per "Proactive, But Not Creepy": explain what triggered it, with an
     // immediate actionable control). Id prefix lets the owner act inline.
+    // Penjelasan "kenapa saya melihat ini" membantu owner memahami konteks.
     const lines = [
       "💡 *Saran J.A.R.V.I.S.* — hanya tawaran, tak ada yang dieksekusi otomatis.",
       "",
@@ -252,7 +256,11 @@ export async function offerSuggestions(env: Env, owner: number): Promise<string 
           r.category === "approval" ? "persetujuan" :
           r.category === "task" ? "tugas" :
           r.category === "insight" ? "pelajaran" : "preferensi";
-        return `• (${id}) [${kind}] ${r.text}`;
+        const why =
+          r.category === "approval" ? " (menunggu persetujuanmu)" :
+          r.category === "task" ? " (jadwal terdekat)" :
+          r.category === "insight" ? " (dari analisis pola percakapan)" : " (preferensi eksplisitmu)";
+        return `• (${id}) [${kind}] ${r.text}${why}`;
       }),
       "",
       "Aksi: \`/suggestion accept <id>\` · \`/suggestion dismiss <id>\` · abaikan bila tak relevan.",
