@@ -156,6 +156,8 @@ def handle_command(chat_id: int, text: str, telegram_id: int) -> bool:
         "/data_residency_audit": _cmd_data_residency_audit,
         # opencode bridge
         "/opencode": _cmd_opencode,
+        "/opencode_edit": _cmd_opencode_edit,
+        "/opencode_analyze": _cmd_opencode_analyze,
     }
     handler = TABLE.get(cmd)
     if not handler:
@@ -1354,7 +1356,15 @@ _GITHUB_REPO = "vikricahya64-alt/jarvis"
 _GITHUB_WORKFLOW = "opencode.yml"
 
 
-def _cmd_opencode(chat_id, tid, args):
+def _cmd_opencode_edit(chat_id, tid, args):
+    _cmd_opencode(chat_id, tid, args, mode="edit")
+
+
+def _cmd_opencode_analyze(chat_id, tid, args):
+    _cmd_opencode(chat_id, tid, args, mode="analyze")
+
+
+def _cmd_opencode(chat_id, tid, args, mode="chat"):
     if not args:
         telegram.send_message(
             chat_id,
@@ -1378,6 +1388,7 @@ def _cmd_opencode(chat_id, tid, args):
                 "inputs": {
                     "prompt": args,
                     "chat_id": str(chat_id),
+                    "mode": mode,
                 },
             },
             timeout=15,

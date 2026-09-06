@@ -24,16 +24,29 @@ on:
         description: "Telegram chat ID to deliver the result"
         required: true
         type: string
+      mode:
+        description: "chat (reply only) | analyze (read-only analysis) | edit (modify repo + open PR)"
+        required: false
+        default: chat
+        type: choice
+        options:
+          - chat
+          - analyze
+          - edit
 
 concurrency:
   group: opencode
   cancel-in-progress: true
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   run:
     name: Run opencode
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       # Clear server-auth vars that cause "Session not found" bugs in headless
       # `opencode run` (see anomalyco/opencode#28407 / #13221).
@@ -42,6 +55,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Create working branch (edit mode only)
+        id: workbranch
+        if: inputs.mode == 'edit'
+        run: |
+          BRANCH="oc/auto-$(date +%s)"
+          git checkout -b "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -64,22 +87,58 @@ jobs:
         run: |
           : > /tmp/oc_result.txt
           set +e
-          RESULT=$(opencode run \
-            --model "${{ steps.model.outputs.model }}" \
-            "${{ inputs.prompt }}" 2>&1)
+          MODE="${{ inputs.mode }}"
+          if [ "$MODE" = "edit" ]; then
+            RESULT=$(opencode run \
+              --model "${{ steps.model.outputs.model }}" \
+              --dangerously-skip-permissions \
+              "${{ inputs.prompt }}" 2>&1)
+          elif [ "$MODE" = "analyze" ]; then
+            RESULT=$(opencode run \
+              --model "${{ steps.model.outputs.model }}" \
+              --agent plan \
+              "${{ inputs.prompt }}" 2>&1)
+          else
+            RESULT=$(opencode run \
+              --model "${{ steps.model.outputs.model }}" \
+              "${{ inputs.prompt }}" 2>&1)
+          fi
           CODE=$?
           set -e
           if [ $CODE -ne 0 ]; then
             RESULT="(opencode keluar dengan kode $CODE — cek API key/model)\n${RESULT}"
           fi
-          # Truncate to Telegram's 4096-char limit, guard character.
-          if [ ${#RESULT} -gt 4000 ]; then
-            RESULT="${RESULT:0:4000}… (dipotong)"
+          # Truncate to Telegram's 4096-char limit.
+          if [ ${#RESULT} -gt 3500 ]; then
+            RESULT="${RESULT:0:3500}… (dipotong)"
           fi
           printf '%s' "$RESULT" > /tmp/oc_result.txt
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+
+      - name: Commit & open PR (edit mode only)
+        if: inputs.mode == 'edit'
+        run: |
+          set +e
+          git add -A
+          git diff --cached --quiet
+          CHANGED=$?
+          set -e
+          if [ $CHANGED -ne 0 ]; then
+            git config user.name "JARVIS opencode bot"
+            git config user.email "jarvis-opencode@users.noreply.github.com"
+            git commit -m "feat(oc): auto-change dari Telegram — $(echo "${{ inputs.prompt }}" | head -c 80)"
+            git push -u origin "${{ steps.workbranch.outputs.branch }}"
+            PR_URL=$(gh pr create --title "oc: $(echo "${{ inputs.prompt }}" | head -c 60)" --body "Dari Telegram oleh opencode.\n\`\`\`${{ inputs.prompt }}\`\`\`" | tail -1)
+            echo "$PR_URL" >> /tmp/oc_result.txt
+            echo "  (review & merge manual sebelum deploy)" >> /tmp/oc_result.txt
+          else
+            echo "  (tidak ada perubahan file — hanya balasan teks di atas)" >> /tmp/oc_result.txt
+          fi
+          cat /tmp/oc_result.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Send result to Telegram
         run: |
