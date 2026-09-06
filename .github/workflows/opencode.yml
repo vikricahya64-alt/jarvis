@@ -7,8 +7,8 @@
 #                      opencode reads GROQ_API_KEY natively for the Groq provider.
 # Optional secrets/vars:
 #   OPENCODE_MODEL   — model id in "provider/model" form (default:
-#                      groq/llama-3.3-70b-versatile, the same model JARVIS uses,
-#                      so numerality/identity is unchanged).
+#                      groq/openai/gpt-oss-120b, a free-tier Groq model
+#                      available on the shared GROQ_API_KEY).
 
 name: opencode
 
@@ -54,7 +54,7 @@ jobs:
         id: model
         run: |
           MODEL="${{ vars.OPENCODE_MODEL }}"
-          if [ -z "$MODEL" ]; then MODEL="groq/llama-3.3-70b-versatile"; fi
+          if [ -z "$MODEL" ]; then MODEL="groq/openai/gpt-oss-120b"; fi
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
           echo "Anggota model: $MODEL"
 
