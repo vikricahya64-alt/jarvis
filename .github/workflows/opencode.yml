@@ -151,7 +151,6 @@ jobs:
         env:
           # GITHUB_TOKEN cannot create PRs; use a PAT (OC_PAT) which can.
           GH_TOKEN: ${{ secrets.OC_PAT }}
-          PB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Send result to Telegram
         run: |
