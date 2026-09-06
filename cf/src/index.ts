@@ -8,7 +8,7 @@
 // the queue consumer, both bounded. All GOTCHA-free, no external SDK.
 //=====================================================================
 
-import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders } from "./lib/db";
+import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders, getAgentTask, finishAgentTask, listAgentTasks } from "./lib/db";
 import { handleUpdate } from "./workers/telegram_webhook";
 import { setWebhook, sendMessage, getWebhookInfo, getMe, setMyCommands } from "./lib/telegram";
 import { runDms } from "./daemons/dead_mans_switch";
@@ -154,7 +154,7 @@ export default {
         ok: true,
         ts: Date.now(),
         env: env.APP_ENV ?? "unknown",
-        version: "9f4c2d8a",
+        version: "a9c1e07f",
       }));
     }
 
@@ -257,7 +257,7 @@ export default {
         return respond(Response.json({
           ok: true,
           ts: Date.now(),
-          version: "9f4c2d8a",
+          version: "a9c1e07f",
           systems: {
             d1: d1Ok ? "✅" : "❌",
             kv: kvOk ? "✅" : "❌",
@@ -333,6 +333,77 @@ export default {
       if (!authed) return respond(new Response("unauthorized", { status: 401 }));
       const summary = await auditIntegrity(env);
       return respond(Response.json({ ok: true, ts: Date.now(), ...summary }));
+    }
+
+    //------------------------------------------------------------------
+    // AGENT executor callbacks (GitHub Actions ↔ worker bridge)
+    // These let JARVIS "borrow" real-world execution from a FREE cloud VM
+    // (opencode headless on a GitHub runner). Auth = AGENT_TOKEN (a shared
+    // secret also stored as a GitHub Actions secret + worker secret).
+    //------------------------------------------------------------------
+
+    // /agent/env?key=<ALLOWED> — the workflow fetches the LLM key it needs to
+    // run opencode, so the provider key lives ONLY in the worker env (already
+    // there) and never needs to be duplicated into GitHub.
+    if (path === "/agent/env") {
+      const tok = url.searchParams.get("token");
+      if (!env.AGENT_TOKEN || tok !== env.AGENT_TOKEN) {
+        return respond(new Response("unauthorized", { status: 401 }));
+      }
+      const key = url.searchParams.get("key") ?? "";
+      const ALLOWED = new Set([
+        "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "GROQ_API_KEY",
+        "GEMINI_API_KEY", "GEMINI_API_KEY_BACKUP", "GEMINI_API_KEY_SECONDARY", "GEMINI_MODEL",
+      ]);
+      if (!ALLOWED.has(key)) return respond(new Response("forbidden", { status: 403 }));
+      const value = (env as unknown as Record<string, string | undefined>)[key] ?? "";
+      return respond(Response.json({ ok: Boolean(value), key, value }));
+    }
+
+    // /agent/done — the executor reports the task outcome. Verified by
+    // AGENT_TOKEN; updates D1 and DMs the owner (best-effort).
+    if (path === "/agent/done") {
+      const tok = url.searchParams.get("token");
+      if (!env.AGENT_TOKEN || tok !== env.AGENT_TOKEN) {
+        return respond(new Response("unauthorized", { status: 401 }));
+      }
+      if (method !== "POST") return respond(new Response("POST only", { status: 405 }));
+      let body: { task_id?: number; status?: string; result?: string; error?: string };
+      try {
+        body = (await request.json()) as typeof body;
+      } catch {
+        return respond(new Response("bad json", { status: 400 }));
+      }
+      const tid = Number(body?.task_id);
+      const st = body?.status;
+      if (!Number.isFinite(tid) || tid <= 0) return respond(new Response("bad task_id", { status: 400 }));
+      const task = await getAgentTask(env, tid);
+      if (!task) return respond(new Response("no such task", { status: 404 }));
+      if (st !== "done" && st !== "failed") return respond(new Response("bad status", { status: 400 }));
+      await finishAgentTask(env, tid, st === "done" ? "done" : "failed", body?.result ?? "", body?.error ?? "");
+      const text = st === "done"
+        ? `✅ Tugas *#${tid}* selesai (eksekutor cloud):\n\n${(body?.result ?? "(tanpa output)").slice(0, 3000)}`
+        : `❌ Tugas *#${tid}* gagal di eksekutor cloud: ${((body?.error ?? body?.result ?? "unknown")).slice(0, 300).replace(/\s+/g, " ")}`;
+      await sendMessage(env, task.owner_id, text).catch(() => {});
+      return respond(Response.json({ ok: true }));
+    }
+
+    // /agent/list?token=... — task statuses (used by /tugas list + manual ops).
+    if (path === "/agent/list") {
+      const tok = url.searchParams.get("token");
+      const allowed = (env.AGENT_TOKEN && tok === env.AGENT_TOKEN) || tok === env.TELEGRAM_SECRET || tok === env.TELEGRAM_TOKEN;
+      if (!allowed) return respond(new Response("unauthorized", { status: 401 }));
+      const limitParam = Number(url.searchParams.get("limit") ?? "15");
+      const limit = Number.isFinite(limitParam) ? Math.min(100, Math.max(1, limitParam)) : 15;
+      const tasks = await listAgentTasks(env, OWNER(env), limit);
+      return respond(Response.json({
+        ok: true,
+        tasks: tasks.map((x) => ({
+          id: x.id, status: x.status, task: x.task.slice(0, 200),
+          created_at: x.created_at, started_at: x.started_at, finished_at: x.finished_at,
+          run_id: x.run_id,
+        })),
+      }));
     }
 
     //------------------------------------------------------------------

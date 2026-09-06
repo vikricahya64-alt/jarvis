@@ -183,6 +183,7 @@ export async function setWebhook(
 export async function setMyCommands(env: { TELEGRAM_TOKEN?: string }): Promise<boolean> {
   const commands = [
     { command: "help", description: "Bantuan & daftar perintah" },
+    { command: "tugas", description: "Delegasi kerja berat ke eksekutor cloud (/tugas <pekerjaan>)" },
     { command: "reminder", description: "Set pengingat (contoh: /reminder X in 5 menit)" },
     { command: "baca", description: "Baca + ringkas halaman web (/baca <url>)" },
     { command: "suara", description: "Ubah teks jadi pesan suara (/suara <teks>)" },

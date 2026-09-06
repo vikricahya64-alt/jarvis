@@ -10,7 +10,7 @@
 //=====================================================================
 
 import { Env, touchActivity, logConsent, getConsentRequestTs, getDmsConfig, writeDmsConfig } from "../lib/db";
-import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById } from "../lib/db";
+import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById, addAgentTask, listAgentTasks, markAgentTaskRunning } from "../lib/db";
 import {
   addProduct, listProducts, getProduct, updateProduct, deleteProduct, adjustStock, lowStockProducts,
   addCustomer, listCustomers, searchCustomer,
@@ -38,6 +38,7 @@ import { covenantStatusText, signClause } from "../lib/covenant_core";
 import { identityStatusText } from "../lib/identity_anchor";
 import { getPlans, getScheduledTasks } from "../lib/maestro";
 import { getDegradationStatus } from "../lib/degradation";
+import { delegateToGithub } from "../lib/agent_executor";
 import {
   listInsights, setPreference, disablePreference, getActivePreferences,
   auditPhantomRules, reflectOnTurn,
@@ -508,6 +509,16 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   //   /reminder hapus <id>                      → cancel one
   if (isReminderCommand(trimmed, text)) {
     await handleReminderCommand(env, r, text);
+    return new Response("ok", { status: 200 });
+  }
+
+  // Serverless delegation — explicit owner command BEFORE the compliance
+  // pipeline.  /tugas <pekerjaan>  |  "delegasikan <pekerjaan>"  |
+  // "kerjakan <x> pakai opencode" — heavy digital work queued to a FREE
+  // cloud executor (GitHub Actions + opencode headless). Fail-closed:
+  // config/dispatch errors return a graceful status, never a dead "Ok.".
+  if (isAgentCommand(trimmed, text)) {
+    await handleAgentCommand(env, r, text);
     return new Response("ok", { status: 200 });
   }
 
@@ -1250,6 +1261,83 @@ async function handleReminderCommand(env: Env, owner: number, raw: string): Prom
   } else {
     await fire(sendMessage(env, owner, "Gagal menyimpan pengingat (error D1). Coba lagi sebentar."));
   }
+}
+
+// ---------------------------------------------------------------------
+// /tugas — serverless delegation to a FREE cloud executor (GitHub Actions +
+// opencode headless). Heavy digital-world work that the CF free sandbox can't
+// do (arbitrary files, long scripts, browsing, multi-step builds) is queued
+// to an ephemeral VM owned by GitHub; the result comes back via /agent/done
+// and is DMed to the owner. The webhook is owner-gated by construction.
+// Fail-closed: dispatch problems surface a graceful status and the task row
+// stays pending — nothing is silently lost.
+// ---------------------------------------------------------------------
+
+/** True when the message is a delegation command (slash or natural language). */
+function isAgentCommand(trimmed: string, raw: string): boolean {
+  if (/^\/(?:tugas|delegasi|delegate)\b/i.test(trimmed)) return true;
+  if (/^delegasikan\b/i.test(raw)) return true;
+  return /^(?:kerjakan|jalankan)\b.*\bopencode\b/i.test(raw);
+}
+
+/** Execute /tugas: store task → dispatch to GitHub → acknowledge. */
+async function handleAgentCommand(env: Env, from: number, raw: string): Promise<void> {
+  const trimmed = raw.trim();
+
+  // --- List: "/tugas", "/tugas list|daftar|status" ---
+  if (trimmed === "/tugas" || /^\/(?:tugas|delegasi)\s+(?:daftar|list|status)\b/i.test(trimmed)) {
+    const items = await listAgentTasks(env, from, 15);
+    if (!items.length) {
+      await fire(sendMessage(env, from,
+        "📦 *Tugas serverless*\n\nBelum ada tugas. Kirim: `/tugas <pekerjaan>` (mis. `/tugas riset kompetitor AI 2026 jadi laporan markdown`).\n\n💡 Eksekutor cloud (GitHub Actions + opencode) untuk *kemampuan berat* yang tak bisa kubuh sendiri — eksekusi nyata (shell/file/browser/riset). Untuk tanya-jawab biasa, cukup chat langsung."));
+      return;
+    }
+    const lines = items.map((t) => {
+      const st =
+        t.status === "running" ? "🔄"
+        : t.status === "done" ? "✅"
+        : t.status === "failed" ? "❌"
+        : "⏳";
+      const when = new Date(t.created_at + 7 * 3600 * 1000).toISOString().slice(11, 16);
+      return `${st} #${t.id} [${t.status}] ${t.task.slice(0, 70)} (${when} WIB)`;
+    });
+    await fire(sendMessage(env, from, `📦 *Tugas serverless (terbaru)*\n\n${lines.slice(0, 10).join("\n")}`));
+    return;
+  }
+
+  // --- Add ---
+  const task = trimmed
+    .replace(/^\/(?:tugas|delegasi|delegate)\s*/i, "")
+    .replace(/^delegasikan\s*/i, "")
+    .replace(/^(?:kerjakan|jalankan)\b.*\bopencode\b\s*/i, "")
+    .replace(/^ke\s+opencode\s*/i, "")
+    .trim();
+  if (task.length < 10 || task.length > 4000) {
+    await fire(sendMessage(env, from,
+      "📦 `/tugas <pekerjaan>` (contoh: `/tugas riset kompetitor AI dan simpan laporan markdown`). Minimal 10 karakter."));
+    return;
+  }
+  if (!env.AGENT_TOKEN || !env.GITHUB_TOKEN || !env.GITHUB_REPO) {
+    await fire(sendMessage(env, from,
+      "⚙️ Eksekutor cloud belum dikonfigurasi (AGENT_TOKEN, GITHUB_TOKEN, GITHUB_REPO). Set dahulu, lalu ulangi."));
+    return;
+  }
+  const id = await addAgentTask(env, from, task);
+  if (!id) {
+    await fire(sendMessage(env, from, "Gagal menyimpan tugas (error D1). Coba lagi."));
+    return;
+  }
+  await fire(sendMessage(env, from,
+    `📦 Tugas #${id} diterima — dispatch ke eksekutor cloud…\n_${task.slice(0, 200)}_`));
+  const sent = await delegateToGithub(env, id, task);
+  if (sent.error) {
+    await fire(sendMessage(env, from,
+      `⚠️ Tugas #${id} tersimpan tapi *gagal dispatch* (${sent.error}). Status tetap ⏳. Cek /tugas list.`));
+    return;
+  }
+  if (sent.runId) await markAgentTaskRunning(env, id, sent.runId);
+  await fire(sendMessage(env, from,
+    "🧠 Dikirim ke eksekutor cloud. Hasil kubalas di sini (biasanya 1–5 menit). `/tugas list` untuk status."));
 }
 
 // ---------------------------------------------------------------------
