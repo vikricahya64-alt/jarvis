@@ -130,22 +130,22 @@ jobs:
           CHANGED=$?
           set -e
           if [ $CHANGED -ne 0 ]; then
-            git config user.name "JARVIS opencode bot"
-            git config user.email "jarvis-opencode@users.noreply.github.com"
-            python3 - <<'PY'
-            import os
-            p = os.environ["OC_PROMPT"]
-            open("/tmp/oc_commit.txt", "w").write(("feat(oc): " + p)[:200])
-            open("/tmp/oc_title.txt", "w").write(("oc: " + p)[:60])
-            open("/tmp/oc_body.md", "w").write("Dari Telegram oleh opencode.\n```" + p + "```\n")
-            PY
-            git commit -F /tmp/oc_commit.txt
-            git push -u origin "${{ steps.workbranch.outputs.branch }}"
-            PR_URL=$(gh pr create --title "$(cat /tmp/oc_title.txt)" --body-file /tmp/oc_body.md | tail -1)
-            echo "$PR_URL" >> /tmp/oc_result.txt
-            echo "  (review & merge manual sebelum deploy)" >> /tmp/oc_result.txt
+          git config user.name "JARVIS opencode bot"
+          git config user.email "jarvis-opencode@users.noreply.github.com"
+          python3 - <<'PY'
+          import os
+          p = os.environ["OC_PROMPT"]
+          open("/tmp/oc_commit.txt", "w").write(("feat(oc): " + p)[:200])
+          open("/tmp/oc_title.txt", "w").write(("oc: " + p)[:60])
+          open("/tmp/oc_body.md", "w").write("Dari Telegram oleh opencode.\n```" + p + "```\n")
+          PY
+          git commit -F /tmp/oc_commit.txt
+          git push -u origin "${{ steps.workbranch.outputs.branch }}"
+          PR_URL=$(gh pr create --title "$(cat /tmp/oc_title.txt)" --body-file /tmp/oc_body.md | tail -1)
+          echo "$PR_URL" >> /tmp/oc_result.txt
+          echo "  (review & merge manual sebelum deploy)" >> /tmp/oc_result.txt
           else
-            echo "  (tidak ada perubahan file — hanya balasan teks di atas)" >> /tmp/oc_result.txt
+          echo "  (tidak ada perubahan file — hanya balasan teks di atas)" >> /tmp/oc_result.txt
           fi
           cat /tmp/oc_result.txt
         env:
