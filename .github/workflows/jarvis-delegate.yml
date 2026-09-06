@@ -67,9 +67,12 @@ jobs:
           if [ "$PROVIDER" != "unset" ]; then
             # Transient upstream rate-limits possible on shared runner IPs →
             # retry with backoff before giving up. Groq (per-key) is primary.
+            # opencode headless mem-BLOKIR tool-call tanpa persetujuan interaktif.
+            # --dangerously-skip-permissions: input task CUMAN dari owner
+            # (owner_id dicek worker), VM ephemeral & dibuang tiap run → aman.
             code=1
             for attempt in 1 2 3; do
-              opencode run --model "$PROVIDER/$MODEL" "$(cat /tmp/task.txt)" > /tmp/jarvis-out.txt 2>&1
+              opencode run --dangerously-skip-permissions --model "$PROVIDER/$MODEL" "$(cat /tmp/task.txt)" > /tmp/jarvis-out.txt 2>&1
               code=$?
               if [ "$code" = "0" ]; then break; fi
               echo "attempt $attempt: $PROVIDER/$MODEL exit=$code -> retry" >&2
