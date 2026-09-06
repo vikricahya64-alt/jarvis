@@ -27,6 +27,8 @@ jobs:
   execute:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -82,20 +84,35 @@ jobs:
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
 
+      - name: Archive artifact (commit to repo, public = free)
+        id: archive
+        env:
+          TASK_ID: ${{ github.event.client_payload.task_id }}
+        run: |
+          # Clean ANSI so the stored deliverable is readable plain text.
+          sed -e $'s/\\033\[[0-9;]*[A-Za-z]//g' /tmp/jarvis-out.txt > /tmp/jarvis-artifact.md
+          mkdir -p artifacts
+          cp /tmp/jarvis-artifact.md "artifacts/task_${TASK_ID}.md"
+          git add "artifacts/task_${TASK_ID}.md"
+          git -c user.name="${{ github.actor }}" -c user.email="${{ github.actor }}@users.noreply.github.com" commit -q -m "artifact(task_$TASK_ID): opencode execution output" || true
+          git push -q || true
+          echo "artifact_url=https://github.com/${{ github.repository }}/blob/main/artifacts/task_${TASK_ID}.md" >> "$GITHUB_OUTPUT"
+
       - name: Report result back to JARVIS
         env:
           AGENT_TOKEN: ${{ secrets.AGENT_TOKEN }}
           WORKER: "https://jarvis-sovereign.vikricahya64.workers.dev"
           TASK_ID: ${{ github.event.client_payload.task_id }}
+          ARTIFACT: ${{ steps.archive.outputs.artifact_url }}
         run: |
           EXIT_CODE="${{ steps.exec.outputs.exit_code }}"
           if [ -z "$EXIT_CODE" ]; then EXIT_CODE=1; fi
           if [ "$EXIT_CODE" = "0" ]; then
-            JSON="$(jq -nc --arg id "$TASK_ID" --arg r "$(head -c 60000 /tmp/jarvis-out.txt)" \
-              '{task_id:($id|tonumber), status:"done", result:$r}')"
+            JSON="$(jq -nc --arg id "$TASK_ID" --arg r "$(head -c 60000 /tmp/jarvis-out.txt)" --arg u "$ARTIFACT" \
+              '{task_id:($id|tonumber), status:"done", result:$r, artifact_url:$u}')"
           else
-            JSON="$(jq -nc --arg id "$TASK_ID" --arg e "$(head -c 3000 /tmp/jarvis-out.txt)" \
-              '{task_id:($id|tonumber), status:"failed", result:"", error:$e}')"
+            JSON="$(jq -nc --arg id "$TASK_ID" --arg e "$(head -c 3000 /tmp/jarvis-out.txt)" --arg u "$ARTIFACT" \
+              '{task_id:($id|tonumber), status:"failed", result:"", error:$e, artifact_url:$u}')"
           fi
           curl -fsS --max-time 30 -X POST "$WORKER/agent/done?token=$AGENT_TOKEN" \
             -H "Content-Type: application/json" \

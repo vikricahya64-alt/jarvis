@@ -2,8 +2,9 @@ name: autonomy
 
 on:
   schedule:
-    # Every 15 minutes. Vercel Hobby grants 2 crons/day, GitHub Actions
-    # gives us unlimited free scheduled triggers instead.
+    # Every 15 minutes. The Cloudflare worker keeps its 5 native cron slots
+    # for core loops; this extra cadence runs the autonomy/maintenance pulse
+    # (stale-executor guard + agent_tasks TTL) against the CURRENT worker.
     - cron: "*/15 * * * *"
   workflow_dispatch:
 
@@ -15,13 +16,13 @@ jobs:
   trigger:
     runs-on: ubuntu-latest
     steps:
-      - name: Hit autonomous scheduler
+      - name: Hit autonomous scheduler (Cloudflare worker)
         id: trigger
         run: |
           for i in 1 2 3; do
             status=$(curl -s -o /tmp/autonomy_body.json -w "%{http_code}" \
-              -X POST https://jarvis-sigma-navy.vercel.app/api/cron-trigger \
-              -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+              -X POST "https://jarvis-sovereign.vikricahya64.workers.dev/cron/trigger?mode=autonomy" \
+              -H "x-agent-token: ${{ secrets.AGENT_TOKEN }}" \
               -H "Content-Type: application/json" \
               -d '{}')
             if [ "$status" -eq 200 ]; then

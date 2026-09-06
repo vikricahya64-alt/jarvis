@@ -2,15 +2,11 @@ name: predictive-triggers
 
 on:
   schedule:
-    # Every 30 minutes — separate from the 15-min autonomy cron, per the
-    # Level 5 spec (predictive triggers run on their own cadence).
+    # Every 30 minutes — maintenance sweep (memory/proposal TTL + stale
+    # executor guard) against the CURRENT Cloudflare worker. Replaces the old
+    # trigger that woke a legacy Vercel analytics app JARVIS no longer uses.
     - cron: "*/30 * * * *"
   workflow_dispatch:
-    inputs:
-      mode:
-        description: "Sweep mode (predictive|synthesis|cleanup)"
-        required: false
-        default: "predictive"
 
 concurrency:
   group: predictive-triggers
@@ -20,30 +16,19 @@ jobs:
   trigger:
     runs-on: ubuntu-latest
     steps:
-      - name: Run predictive/synthesis sweep
+      - name: Run maintenance sweep (Cloudflare worker)
         id: predict
         run: |
-          mode="${INPUT_MODE:-predictive}"
           status=$(curl -s -o /tmp/predict_body.json -w "%{http_code}" \
-            -X POST https://jarvis-sigma-navy.vercel.app/api/analytics/sweep \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -X POST "https://jarvis-sovereign.vikricahya64.workers.dev/cron/trigger?mode=cleanup" \
+            -H "x-agent-token: ${{ secrets.AGENT_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"mode\":\"$mode\"}")
-          echo "sweep ($mode) HTTP $status: $(cat /tmp/predict_body.json)"
+            -d '{}')
+          echo "sweep HTTP $status: $(cat /tmp/predict_body.json)"
           if [ "$status" -ne 200 ]; then
-            echo "predictive sweep failed with HTTP $status" >&2
+            echo "maintenance sweep failed with HTTP $status" >&2
             exit 1
           fi
-
-      - name: TTL cleanup (once per run)
-        if: ${{ github.event_name == 'schedule' && github.event.inputs.mode == '' }}
-        run: |
-          status=$(curl -s -o /tmp/clean_body.json -w "%{http_code}" \
-            -X POST https://jarvis-sigma-navy.vercel.app/api/analytics/sweep \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            -H "Content-Type: application/json" \
-            -d '{"mode":"cleanup"}')
-          echo "cleanup HTTP $status: $(cat /tmp/clean_body.json)"
 
       - name: Notify on failure
         if: failure()
