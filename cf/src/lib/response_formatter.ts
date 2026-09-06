@@ -45,11 +45,11 @@ const FORMAT_PRESETS: Record<string, FormatConfig> = {
   },
   research: {
     useEmoji: false,
-    maxParagraphs: 4,
+    maxParagraphs: 6,
     useBold: true,
     useBullets: true,
     lineBreaks: "double",
-    maxWordsChat: 300,
+    maxWordsChat: 400,
     includeCitations: true,
   },
   command: {

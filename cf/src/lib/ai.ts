@@ -198,6 +198,23 @@ export async function translateText(
   return g.reply;
 }
 
+/** Deterministic repair when the token budget was exhausted: strip any dangling
+ *  trailing list marker / unclosed formatting so the listener never receives a
+ *  half-cut bullet, then append an honest continuation hint. Applies ONLY when
+ *  the API reported finish_reason === "length" (genuine truncation). Never throws. */
+export function repairTruncatedReply(reply: string): string {
+  let out = (reply ?? "").trim();
+  // 1) Drop a lone trailing list marker ("5.", "5)", "- ", "* ").
+  out = out.replace(/\s*(?:\n+\s*\d+\.|\n+\s*\d+\)|\n+\s*[-*])\s*$/u, "");
+  // 2) Drop an unclosed trailing markdown segment ("**...**" unterminated).
+  const openBolds = (out.match(/\*\*/g) ?? []).length;
+  if (openBolds % 2 === 1) out = out.replace(/\*\*[^*]*$/u, "");
+  // 3) Drop a trailing colon that only opens an item that never got written.
+  out = out.replace(/[:：]\s*$/u, "").trim();
+  if (!out) return out;
+  return `${out}\n\n📌 Jawaban saya terpotong oleh batas panjang — ketik \u201clanjut\u201d untuk bagian berikutnya.`;
+}
+
 /** Try to produce a generative assistant reply via Groq, using recent
  *  conversation context as memory. Returns null on any failure so the
  *  caller falls back to the canned reply (fail-closed). */
@@ -231,13 +248,15 @@ export async function groqRespond(
         model: GROQ_MODEL,
         temperature: 0.6,
         messages,
-        max_tokens: 600,
+        max_tokens: 1400,
       }),
     }, timeoutMs);
     if (!res.ok) return { ok: false, status: res.status };
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    reply = data.choices?.[0]?.message?.content?.trim() ?? "";
-    return { ok: Boolean(reply), status: res.status };
+    const data = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[] };
+    const content = data.choices?.[0]?.message?.content?.trim() ?? "";
+    if (!content) return { ok: false, status: res.status };
+    reply = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(content) : content;
+    return { ok: true, status: res.status };
   });
   return ok ? reply : null;
 }
@@ -280,13 +299,15 @@ export async function openrouterRespond(
         model,
         temperature: 0.6,
         messages,
-        max_tokens: 600,
+        max_tokens: 1400,
       }),
     }, timeoutMs);
     if (!res.ok) return { ok: false, status: res.status };
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    reply = data.choices?.[0]?.message?.content?.trim() ?? "";
-    return { ok: Boolean(reply), status: res.status };
+    const data = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[] };
+    const content = data.choices?.[0]?.message?.content?.trim() ?? "";
+    if (!content) return { ok: false, status: res.status };
+    reply = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(content) : content;
+    return { ok: true, status: res.status };
   });
   return ok ? reply : null;
 }
@@ -333,15 +354,17 @@ export async function geminiRespond(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.6, maxOutputTokens: 600 },
+            generationConfig: { temperature: 0.6, maxOutputTokens: 1200 },
           }),
         },
         timeoutMs,
       );
       if (!res.ok) return { ok: false, status: res.status };
-      const data = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-      reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
-      return { ok: Boolean(reply), status: res.status };
+      const data = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }> };
+      const content = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
+      if (!content) return { ok: false, status: res.status };
+      reply = data.candidates?.[0]?.finishReason === "MAX_TOKENS" ? repairTruncatedReply(content) : content;
+      return { ok: true, status: res.status };
     });
     if (ok && reply) return reply;
   }
@@ -381,7 +404,7 @@ export async function workersAiRespond(
     // AI.run() is not simple fetch; proxy it with a timeout guard.
     return await new Promise<{ ok: boolean; status: number }>((resolve) => {
       const timer = setTimeout(() => resolve({ ok: false, status: 0 }), timeoutMs);
-      env.AI.run(model, { messages, max_tokens: 600, temperature: 0.6 })
+      env.AI.run(model, { messages, max_tokens: 900, temperature: 0.6 })
         .then((res) => {
           clearTimeout(timer);
           const r = (res as { response?: string }).response?.trim();

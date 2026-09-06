@@ -380,11 +380,13 @@ export function buildSystemPrompt(opts: {
         parts.push(
           "For search/research: summarize findings clearly, mention sources if available.",
           "Don't fabricate data. If information is not found, just say so.",
+          "Avoid repeating the same phrasing across items; be concise and dense.",
         );
       } else {
         parts.push(
           "Untuk pencarian/riset: rangkum temuan dengan jelas, sebutkan sumber jika ada.",
           "Jangan mengarang data. Jika informasi tidak ditemukan, bilang saja.",
+          "Hindari mengulang frasa yang sama antar poin; tulis padat dan padat informasi.",
         );
       }
       break;
