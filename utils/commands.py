@@ -154,6 +154,8 @@ def handle_command(chat_id: int, text: str, telegram_id: int) -> bool:
         "/region_status": _cmd_region_status,
         "/worker_queue": _cmd_worker_queue,
         "/data_residency_audit": _cmd_data_residency_audit,
+        # opencode bridge
+        "/opencode": _cmd_opencode,
     }
     handler = TABLE.get(cmd)
     if not handler:
@@ -1341,6 +1343,54 @@ def _cmd_data_residency_audit(chat_id, tid, args):
     lines.append("\nSemua non-PII; enkripsi & RLS regional aktif "
                  "(app.current_region).")
     telegram.send_message(chat_id, "\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# opencode bridge — /opencode <prompt>
+# Dispatch GitHub Actions workflow, result sent to Telegram by the runner.
+# ---------------------------------------------------------------------------
+_GITHUB_PAT = os.getenv("GITHUB_PAT", "")
+_GITHUB_REPO = "vikricahya64-alt/jarvis"
+_GITHUB_WORKFLOW = "opencode.yml"
+
+
+def _cmd_opencode(chat_id, tid, args):
+    if not args:
+        telegram.send_message(
+            chat_id,
+            "Gunakan: /opencode <prompt>\n"
+            "Contoh: /opencode buat function Python untuk fibonacci")
+        return
+    if not _GITHUB_PAT:
+        telegram.send_message(chat_id, "⚠️ GITHUB_PAT belum dikonfigurasi.")
+        return
+    try:
+        resp = httpx.post(
+            f"https://api.github.com/repos/{_GITHUB_REPO}"
+            f"/actions/workflows/{_GITHUB_WORKFLOW}/dispatches",
+            headers={
+                "Authorization": f"Bearer {_GITHUB_PAT}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            json={
+                "ref": "main",
+                "inputs": {
+                    "prompt": args,
+                    "chat_id": str(chat_id),
+                },
+            },
+            timeout=15,
+        )
+        if resp.status_code in (200, 204):
+            telegram.send_message(chat_id, "🧠 Mengirim ke opencode…")
+        else:
+            telegram.send_message(
+                chat_id,
+                f"⚠️ Gagal dispatch (HTTP {resp.status_code}). "
+                "Coba lagi nanti.")
+    except Exception as exc:
+        telegram.send_message(chat_id, f"⚠️ Error: {exc}")
 
 
 def _trim(text, n):

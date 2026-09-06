@@ -1,0 +1,60 @@
+# Run opencode against a user prompt and deliver the result to Telegram.
+# Triggered via repository_dispatch from JARVIS /opencode command.
+# Secrets required:
+#   GITHUB_PAT     — Fine-grained token with Actions:Write (for workflow_dispatch)
+#   TELEGRAM_TOKEN — Bot token (same as JARVIS)
+
+name: opencode
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "The prompt to send to opencode"
+        required: true
+        type: string
+      chat_id:
+        description: "Telegram chat ID to deliver the result"
+        required: true
+        type: string
+
+concurrency:
+  group: opencode
+  cancel-in-progress: true
+
+jobs:
+  run:
+    name: Run opencode
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install opencode
+        run: npm install -g opencode
+
+      - name: Run opencode
+        id: oc
+        run: |
+          RESULT=$(opencode run "${{ inputs.prompt }}" 2>&1) || true
+          # Truncate to Telegram's 4096-char limit
+          if [ ${#RESULT} -gt 4000 ]; then
+            RESULT="${RESULT:0:4000}… (dipotong)"
+          fi
+          # Escape for shell
+          printf '%s' "$RESULT" > /tmp/oc_result.txt
+
+      - name: Send result to Telegram
+        run: |
+          TEXT=$(cat /tmp/oc_result.txt)
+          curl -s -X POST \
+            "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id="${{ inputs.chat_id }}" \
+            -d parse_mode="Markdown" \
+            --data-urlencode "text=🧠 *opencode*\n\`\`\`\n${TEXT}\n\`\`\`"
