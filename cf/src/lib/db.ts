@@ -19,6 +19,9 @@ export interface Env {
   GEMINI_MODEL?: string;
   OPENROUTER_API_KEY?: string;
   OPENROUTER_MODEL?: string;
+  AGENT_TOKEN?: string;
+  GITHUB_TOKEN?: string;
+  GITHUB_REPO?: string;
   CLARITY_GATE?: string;
   RISK_CONSENT_THRESHOLD?: string;
   CONSENT_TIMEOUT_S?: string;
@@ -960,6 +963,99 @@ export async function checkDueReminders(env: Env): Promise<Array<{ ownerId: numb
       }
     }
     return due.map((r) => ({ ownerId: r.owner_id, text: r.text, dueAt: r.due_at }));
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------
+// Serverless delegation ledger — agent_tasks (mig 0016).
+// Heavy digital-work tasks queued for a free cloud executor (GitHub
+// Actions + opencode). All helpers fail-closed: they return safe defaults
+// (0 / [] / null / false) instead of throwing, so the webhook always
+// answers gracefully. Statuses: pending → running → done|failed|rejected.
+// ---------------------------------------------------------------------
+
+export interface AgentTaskItem {
+  id: number;
+  owner_id: number;
+  task: string;
+  executor: string;
+  status: string;
+  run_id: string | null;
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+  result: string | null;
+  error: string | null;
+}
+
+/** Insert a delegation task. Returns its id, or 0 on failure/invalid input. */
+export async function addAgentTask(env: Env, owner: number, task: string): Promise<number> {
+  try {
+    const clean = task.trim();
+    if (!clean || clean.length < 3 || clean.length > 4000) return 0;
+    const res = await env.DB.prepare(
+      `INSERT INTO agent_tasks (owner_id, task, executor, status, created_at) VALUES (?, ?, 'github', 'pending', ?)`,
+    ).bind(owner, clean, Date.now()).run();
+    return Number(res.meta.last_row_id ?? res.meta.changes ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+/** Mark a task as dispatched (running) with an executor run id. */
+export async function markAgentTaskRunning(env: Env, id: number, runId: string): Promise<void> {
+  try {
+    await env.DB.prepare(
+      `UPDATE agent_tasks SET status = 'running', run_id = ?, started_at = ? WHERE id = ? AND status = 'pending'`,
+    ).bind(runId, Date.now(), id).run();
+  } catch { /* best-effort */ }
+}
+
+/** Finish a task with the executor's report (done or failed). */
+export async function finishAgentTask(
+  env: Env,
+  id: number,
+  status: "done" | "failed",
+  result: string,
+  error?: string,
+): Promise<void> {
+  try {
+    const now = Date.now();
+    if (status === "failed") {
+      await env.DB.prepare(
+        `UPDATE agent_tasks SET status = ?, error = ?, finished_at = ? WHERE id = ?`,
+      ).bind(status, (error ?? result).slice(0, 6000), now, id).run();
+    } else {
+      await env.DB.prepare(
+        `UPDATE agent_tasks SET status = ?, result = ?, finished_at = ? WHERE id = ?`,
+      ).bind(status, result.slice(0, 60000), now, id).run();
+    }
+  } catch { /* best-effort */ }
+}
+
+/** Fetch one task row, or null. */
+export async function getAgentTask(env: Env, id: number): Promise<AgentTaskItem | null> {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT id, owner_id, task, executor, status, run_id, created_at, started_at, finished_at, result, error
+       FROM agent_tasks WHERE id = ?`,
+    ).bind(id).first<AgentTaskItem>();
+    return row ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** List the owner's tasks, newest first (limited). */
+export async function listAgentTasks(env: Env, owner: number, limit = 20): Promise<AgentTaskItem[]> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, owner_id, task, executor, status, run_id, created_at, started_at, finished_at, result, error
+       FROM agent_tasks WHERE owner_id = ? ORDER BY id DESC LIMIT ?`,
+    ).bind(owner, Math.max(1, Math.min(100, limit))).all<AgentTaskItem>();
+    return results ?? [];
   } catch {
     return [];
   }
