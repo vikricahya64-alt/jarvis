@@ -988,6 +988,7 @@ export interface AgentTaskItem {
   finished_at: number | null;
   result: string | null;
   error: string | null;
+  artifact_url: string | null;
 }
 
 /** Insert a delegation task. Returns its id, or 0 on failure/invalid input. */
@@ -1020,26 +1021,71 @@ export async function finishAgentTask(
   status: "done" | "failed",
   result: string,
   error?: string,
+  artifactUrl = "",
 ): Promise<void> {
   try {
     const now = Date.now();
+    const artifact = artifactUrl.trim() ? artifactUrl.trim().slice(0, 400) : null;
     if (status === "failed") {
       await env.DB.prepare(
-        `UPDATE agent_tasks SET status = ?, error = ?, finished_at = ? WHERE id = ?`,
-      ).bind(status, (error ?? result).slice(0, 6000), now, id).run();
+        `UPDATE agent_tasks SET status = ?, error = ?, artifact_url = ?, finished_at = ? WHERE id = ?`,
+      ).bind(status, (error ?? result).slice(0, 6000), artifact, now, id).run();
     } else {
       await env.DB.prepare(
-        `UPDATE agent_tasks SET status = ?, result = ?, finished_at = ? WHERE id = ?`,
-      ).bind(status, result.slice(0, 60000), now, id).run();
+        `UPDATE agent_tasks SET status = ?, result = ?, artifact_url = ?, finished_at = ? WHERE id = ?`,
+      ).bind(status, result.slice(0, 60000), artifact, now, id).run();
     }
   } catch { /* best-effort */ }
+}
+
+/**
+ * Timeout guard for the GH runner: tasks stuck "running" longer than the
+ * executor window are failed with an explicit message (fail-closed; the owner
+ * is then told the result was never reported).
+ */
+export async function failStaleAgentTasks(env: Env, timeoutMs = 30 * 60 * 1000): Promise<number> {
+  try {
+    const cutoff = Date.now() - timeoutMs;
+    const { meta } = await env.DB.prepare(
+      `UPDATE agent_tasks SET status = 'failed',
+         error = ?, finished_at = ?
+       WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?`,
+    ).bind(
+      `executor timeout (no report within ${Math.round(timeoutMs / 60000)} menit)`,
+      Date.now(),
+      cutoff,
+    ).run();
+    return Number(meta.changes ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+/** TTL cleanup of terminal agent tasks (keeps D1 slim on the free tier). */
+export async function pruneOldAgentTasks(
+  env: Env,
+  ttlMs = 14 * 24 * 3600 * 1000,
+  limit = 50,
+): Promise<number> {
+  try {
+    const cutoff = Date.now() - ttlMs;
+    const { meta } = await env.DB.prepare(
+      `DELETE FROM agent_tasks
+       WHERE status IN ('done', 'failed', 'rejected')
+         AND finished_at IS NOT NULL AND finished_at < ?
+       LIMIT ?`,
+    ).bind(cutoff, Math.max(1, Math.min(200, limit))).run();
+    return Number(meta.changes ?? 0);
+  } catch {
+    return 0;
+  }
 }
 
 /** Fetch one task row, or null. */
 export async function getAgentTask(env: Env, id: number): Promise<AgentTaskItem | null> {
   try {
     const row = await env.DB.prepare(
-      `SELECT id, owner_id, task, executor, status, run_id, created_at, started_at, finished_at, result, error
+      `SELECT id, owner_id, task, executor, status, run_id, created_at, started_at, finished_at, result, error, artifact_url
        FROM agent_tasks WHERE id = ?`,
     ).bind(id).first<AgentTaskItem>();
     return row ?? null;
@@ -1052,7 +1098,7 @@ export async function getAgentTask(env: Env, id: number): Promise<AgentTaskItem 
 export async function listAgentTasks(env: Env, owner: number, limit = 20): Promise<AgentTaskItem[]> {
   try {
     const { results } = await env.DB.prepare(
-      `SELECT id, owner_id, task, executor, status, run_id, created_at, started_at, finished_at, result, error
+      `SELECT id, owner_id, task, executor, status, run_id, created_at, started_at, finished_at, result, error, artifact_url
        FROM agent_tasks WHERE owner_id = ? ORDER BY id DESC LIMIT ?`,
     ).bind(owner, Math.max(1, Math.min(100, limit))).all<AgentTaskItem>();
     return results ?? [];

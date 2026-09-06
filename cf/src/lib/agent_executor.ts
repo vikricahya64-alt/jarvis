@@ -63,3 +63,50 @@ export async function delegateToGithub(
     return { error: `dispatch_failed:${String(e).slice(0, 80)}` };
   }
 }
+
+// ---------------------------------------------------------------------
+// Report sanitizer (output rail for /agent/done).
+//
+// The runner sends whatever opencode produced. Before we persist + DM it,
+// we (1) strip ANSI/control clutter so the DM is clean and typed safely,
+// (2) scan for obvious prompt-injection / override patterns so a poisoned
+// task result can NEVER silently redirect JARVIS. We only WARN on flags —
+// the owner keeps full autonomy, but the warning makes the risk visible.
+// Both helpers are pure and fail-closed (never throw).
+// ---------------------------------------------------------------------
+
+const ANSI_RE = /\u001b\[[0-9;]*[A-Za-z]/g;
+
+/** Strip ANSI escape sequences + stray control chars from runner output. */
+export function sanitizeAgentReport(text: string): string {
+  try {
+    return (text ?? "")
+      .replace(ANSI_RE, "")
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+      .replace(/\r/g, "")
+      .replace(/\n{4,}/g, "\n\n\n")
+      .trim();
+  } catch {
+    return "";
+  }
+}
+
+const SUSPICIOUS_PATTERNS = [
+  /\bignore\s+(all\s+|the\s+|your\s+)?(previous|prior|earlier|above)\s+(instructions|prompts?|rules?|context|chat)?\b/i,
+  /\babaikan\s+(semua\s+)?(instruksi|perintah|aturan|konteks)(\s+sebelumnya)?\b/i,
+  /\bdisregard\s+previous\b/i,
+  /\bsaya\s+(telah|sudah)\s+(mengambil\s+alih|memegang\s+kendali)\b/i,
+  /\b(override|bypass)\s+(the\s+)?(constitutional|covenant|guardrail|owner)\b/i,
+];
+
+/**
+ * Lightweight prompt-injection / override flag on runner output. Pure scan —
+ * the caller decides (JARVIS warns the owner, never follows or drops it).
+ */
+export function flagAgentReport(text: string): boolean {
+  try {
+    return SUSPICIOUS_PATTERNS.some((re) => re.test(text ?? ""));
+  } catch {
+    return false;
+  }
+}
