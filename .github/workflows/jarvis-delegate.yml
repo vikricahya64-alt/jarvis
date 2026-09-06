@@ -9,7 +9,8 @@
 #
 # Triggered by the worker via GitHub repository_dispatch ("jarvis-task").
 # Auth: AGENT_TOKEN repo secret (same value as the worker's secret).
-# LLM key: OPENROUTER_API_KEY repo secret (already in use by JARVIS).
+# LLM key: GROQ_API_KEY repo secret (per-key free tier → reliable on shared
+# runner IPs), fallback OPENROUTER_API_KEY (already in use by JARVIS).
 # =====================================================================
 name: jarvis-delegate
 
@@ -48,22 +49,30 @@ jobs:
       - name: Run opencode agent
         id: exec
         env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ secrets.GROQ_MODEL || 'openai/gpt-oss-120b' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free' }}
         run: |
           set +e
-          if [ -z "$OPENROUTER_API_KEY" ]; then
-            echo "ERR: OPENROUTER_API_KEY repo secret kosong." > /tmp/jarvis-out.txt
-            code=1
+          if [ -n "$GROQ_API_KEY" ]; then
+            PROVIDER=groq; MODEL="$GROQ_MODEL"
+          elif [ -n "$OPENROUTER_API_KEY" ]; then
+            PROVIDER=openrouter; MODEL="$OPENROUTER_MODEL"
           else
-            # Free-tier models get transient upstream rate-limits on shared
-            # runner IPs → retry with backoff before giving up.
+            echo "ERR: tidak ada LLM key (GROQ/OpenRouter) di repo secrets." > /tmp/jarvis-out.txt
+            code=1
+            PROVIDER=groq; MODEL=unset
+          fi
+          if [ "$PROVIDER" != "unset" ]; then
+            # Transient upstream rate-limits possible on shared runner IPs →
+            # retry with backoff before giving up. Groq (per-key) is primary.
             code=1
             for attempt in 1 2 3; do
-              opencode run --model "openrouter/$OPENROUTER_MODEL" "$(cat /tmp/task.txt)" > /tmp/jarvis-out.txt 2>&1
+              opencode run --model "$PROVIDER/$MODEL" "$(cat /tmp/task.txt)" > /tmp/jarvis-out.txt 2>&1
               code=$?
               if [ "$code" = "0" ]; then break; fi
-              echo "attempt $attempt: opencode exit=$code -> retry" >&2
+              echo "attempt $attempt: $PROVIDER/$MODEL exit=$code -> retry" >&2
               sleep $((attempt * 25))
             done
           fi
