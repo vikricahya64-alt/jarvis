@@ -33,6 +33,11 @@ on:
           - chat
           - analyze
           - edit
+      model:
+        description: "Optional model id override (provider/model). Empty = use OPENCODE_MODEL var"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: opencode
@@ -81,7 +86,9 @@ jobs:
       - name: Resolve model
         id: model
         run: |
-          MODEL="${{ vars.OPENCODE_MODEL }}"
+          # inputs.model (per-run override) > vars.OPENCODE_MODEL > default.
+          MODEL="${{ inputs.model }}"
+          if [ -z "$MODEL" ]; then MODEL="${{ vars.OPENCODE_MODEL }}"; fi
           if [ -z "$MODEL" ]; then MODEL="openrouter/nvidia/nemotron-3-super-120b-a12b:free"; fi
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
           echo "Anggota model: $MODEL"
