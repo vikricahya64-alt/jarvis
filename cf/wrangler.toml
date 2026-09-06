@@ -81,7 +81,9 @@ OPENROUTER_MODEL = "qwen/qwen3.6-27b"
 #   - DMS: every 6 hours   ("0 */6 * * *")
 #   - Value alignment: daily 03:00 UTC   ("0 3 * * *")
 #   - Obedience report: daily 08:00 UTC   ("0 8 * * *")
+#   - Evolution + morning briefing: daily 07:00 UTC   ("0 7 * * *")
+#   - Reminders: every minute   ("* * * * *") — fires in-app reminders
 # The single Worker dispatches by scheduled cron name (see src/index.ts).
 #------------------------------------------------------------------------------
 [triggers]
-crons = ["0 */6 * * *", "0 3 * * *", "0 8 * * *", "0 7 * * *"]
+crons = ["0 */6 * * *", "0 3 * * *", "0 8 * * *", "0 7 * * *", "* * * * *"]

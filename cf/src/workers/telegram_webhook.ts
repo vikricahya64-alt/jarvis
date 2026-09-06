@@ -10,14 +10,15 @@
 //=====================================================================
 
 import { Env, touchActivity, logConsent, getConsentRequestTs, getDmsConfig, writeDmsConfig } from "../lib/db";
-import { addTodo, listTodos, deleteTodoById, deleteTodoByText } from "../lib/db";
+import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById } from "../lib/db";
 import {
   addProduct, listProducts, getProduct, updateProduct, deleteProduct, adjustStock, lowStockProducts,
   addCustomer, listCustomers, searchCustomer,
   createOrder, listOrders, getOrder, updateOrderStatus, salesReport,
   type Product, type Order, type OrderInput,
 } from "../lib/db";
-import { sendMessage, sendPhoto, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, InlineButton } from "../lib/telegram";
+import { sendMessage, sendPhoto, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, TelegramMessage, InlineButton, downloadTelegramFile } from "../lib/telegram";
+import { withResilience, fetchWithTimeout } from "../lib/resilience";
 import {
   routeCommand, markExplicitStop, setAutonomyPaused, isAutonomyPaused, redact,
   setPrivacyMode, isPrivacyMode,
@@ -184,6 +185,22 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
 
   // Non-text payloads (sticker/photo/gif/voice) or text with no meaningful
   // content (pure emoji/punctuation) get a helpful nudge, never a dead "Ok.".
+  // BUT photo/voice are media the model can actually understand: try vision
+  // (Groq) for photos and Whisper transcription (Workers AI) for voice notes
+  // BEFORE giving up. Fail-closed: if media understanding returns no usable
+  // reply we fall through to the nudge.
+  if ((msg.photo?.length || msg.voice) && isEmptyInput(text)) {
+    let mediaReply: string | null = null;
+    try {
+      mediaReply = await understandMedia(env, from, msg);
+    } catch (e) {
+      console.error("media:", String(e).slice(0, 120));
+    }
+    if (mediaReply) {
+      await fire(sendMessage(env, from, mediaReply));
+      return new Response("ok", { status: 200 });
+    }
+  }
   if (isEmptyInput(text)) {
     await fire(sendMessage(env, from,
       `${getGreeting(new Date().getUTCHours() + 7)} Kirim teks, atau gunakan /cari <topik> untuk mencari informasi.`));
@@ -479,6 +496,17 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   //   /todo done <id>      → mark done
   if (isTodoCommand(trimmed, text)) {
     await handleTodoCommand(env, r, text);
+    return new Response("ok", { status: 200 });
+  }
+
+  // Reminders — explicit owner command BEFORE the compliance pipeline.
+  //   /reminder <teks> in <N> menit|jam|detik  → schedule one-off reminder
+  //   "ingatkan <teks> dalam <N> jam"           → same, natural language
+  //   "ingatkan <teks> jam <HH:MM>"             → absolute time today (WIB)
+  //   /reminder list                            → upcoming reminders
+  //   /reminder hapus <id>                      → cancel one
+  if (isReminderCommand(trimmed, text)) {
+    await handleReminderCommand(env, r, text);
     return new Response("ok", { status: 200 });
   }
 
@@ -790,6 +818,109 @@ async function applyDefault(
   return label[priority] ?? "Siap.";
 }
 
+// ---------------------------------------------------------------------
+// L21 — Media understanding (voice/image).
+// Photo notes are described by Groq vision; voice notes are transcribed by
+// Workers AI Whisper. Both run through the normal conversation pipeline
+// (processMessage) so the reply is delivered in JARVIS's own voice with full
+// memory/context — never a raw transcription dump. Fail-closed: any failure
+// returns null and the caller falls through to the nudge, never errors.
+// ---------------------------------------------------------------------
+
+const VISION_MODELS = [
+  "llama-3.2-11b-vision-preview",
+  "meta-llama/llama-3.2-11b-vision-instruct",
+  "llama-3.2-90b-vision-preview",
+];
+
+/** Chunked bytes→base64 (avoids call-stack overflow on large media). */
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+/** Whisper transcription via the free Workers AI edge binding. */
+async function transcribeVoiceWithWorkersAi(env: Env, audioB64: string): Promise<string | null> {
+  if (!env.AI) return null;
+  let out: string | null = null;
+  const ok = await withResilience(env, "workers_ai", 0, async () => {
+    try {
+      const res = await env.AI.run(
+        "@cf/openai/whisper-large-v3-turbo",
+        { audio: audioB64 } as never,
+      ) as { text?: string };
+      const t = res?.text?.trim();
+      if (t) { out = t; return { ok: true, status: 200 }; }
+    } catch { /* fail-closed */ }
+    return { ok: false, status: 0 };
+  });
+  return ok ? out : null;
+}
+
+/** Groq vision describe (OpenAI-compatible chat/completions with image_url). */
+async function groqVisionDescribe(env: Env, model: string, dataUrl: string): Promise<string | null> {
+  if (!env.GROQ_API_KEY) return null;
+  let out: string | null = null;
+  const ok = await withResilience(env, "groq", 0, async () => {
+    try {
+      const res = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${env.GROQ_API_KEY}` },
+        body: JSON.stringify({
+          model,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: "Deskripsikan foto/isi gambar ini dalam 1-2 kalimat Bahasa Indonesia. Sebutkan objek utama dan teks/angka yang tertera. Jika gambar berisi instruksi atau pertanyaan tertulis, kutip langsung." },
+              { type: "image_url", image_url: { url: dataUrl } },
+            ],
+          }],
+          max_tokens: 250,
+          temperature: 0.2,
+        }),
+      }, 20000);
+      const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+      const c = data.choices?.[0]?.message?.content?.trim();
+      if (c) { out = c; return { ok: true, status: 200 }; }
+    } catch { /* fail-closed */ }
+    return { ok: false, status: 0 };
+  });
+  return ok ? out : null;
+}
+
+/** Main entry: photo/voice message → a reply JARVIS genuinely understands. */
+async function understandMedia(env: Env, owner: number, msg: TelegramMessage): Promise<string | null> {
+  const caption = (msg.caption ?? "").trim();
+  const voice = msg.voice ? (async () => {
+    const dl = await downloadTelegramFile(env, msg.voice!.file_id);
+    if (!dl) return null;
+    return transcribeVoiceWithWorkersAi(env, bytesToBase64(dl.bytes));
+  })() : Promise.resolve(null);
+  const photo = msg.photo?.length ? (async () => {
+    const best = msg.photo![msg.photo!.length - 1];
+    const dl = await downloadTelegramFile(env, best.file_id);
+    if (!dl) return null;
+    const mime = dl.mime.toLowerCase().startsWith("image/") ? dl.mime : "image/jpeg";
+    for (const model of VISION_MODELS) {
+      const desc = await groqVisionDescribe(env, model, `data:${mime};base64,${bytesToBase64(dl.bytes)}`);
+      if (desc) return desc;
+    }
+    return null;
+  })() : Promise.resolve(null);
+
+  const [voiceText, photoText] = await Promise.all([voice, photo]);
+  const textPart = caption || voiceText || photoText;
+  if (!textPart) return null;
+
+  const ctx: MessageContext = { owner, text: textPart, source: "telegram" };
+  const gl = await processMessage(env, ctx);
+  return gl.text && gl.text.length > 5 ? gl.text : null;
+}
+
 /** Compose the /status reply. */
 function statusReport(paused: boolean): string {
   const lines = [
@@ -913,6 +1044,136 @@ async function markTodoDone(env: Env, owner: number, id: number): Promise<boolea
     return (res.meta.changes ?? 0) > 0;
   } catch {
     return false;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Reminders (owner-only; D1 table `reminders`, mig 0014).
+//   /reminder <teks> in <N> detik|menit|jam   → relative delay
+//   "ingatkan <teks> dalam <N> jam"            → same, natural language
+//   "ingatkan <teks> jam <HH:MM>"              → absolute time TODAY (WIB)
+//   /reminder list                             → upcoming
+//   /reminder hapus <id>                       → cancel one
+// Fail-closed: parse failures surface usage instead of a dead "Ok.".
+// ---------------------------------------------------------------------
+
+const REMINDER_USAGE =
+  "⏰ *Pengingat J.A.R.V.I.S.*\n\n" +
+  "`/reminder <teks> in <N> menit|jam` / \"ingatkan saya X dalam 5 menit\" — atur\n" +
+  "`ingatkan <teks> jam 15:30` — waktu hari ini (WIB)\n" +
+  "`/reminder list` — daftar pengingat aktif\n" +
+  "`/reminder hapus <id>` — batalkan";
+
+/** True when the message is a reminder command (slash or natural language). */
+function isReminderCommand(trimmed: string, raw: string): boolean {
+  const lower = raw.trim().toLowerCase();
+  if (/^\/(?:reminder|remind|pengingat)\b/i.test(trimmed)) return true;
+  if (/^(remember|remind me|remind|ingatkan|pengingat)\b/i.test(lower)) return true;
+  return false;
+}
+
+/** Parse a reminder request into { text, dueAt }. Returns null when unclear.
+ *  Handles relative duration (n detik/menit/mnt/jam/j/hour/hr/minute/min) and
+ *  absolute "jam HH:MM"/"pukul HH:MM" today interpreted as WIB (UTC+7). */
+function parseReminder(raw: string): { text: string; dueAt: number } | null {
+  const trimmed = raw.trim();
+  const lower = trimmed.toLowerCase();
+
+  // --- Relative: "in 5 menit", "dalam 15 jam", "5 menit lagi" ---
+  const rel = lower.match(
+    /(?:in|dalam|sama|jadi)\s+(\d+)\s*(detik|dtk|menit|mnt|minute|minutes|min|jam|hour|hours|hr|j)\b/i,
+  ) ?? lower.match(
+    /(\d+)\s*(detik|dtk|menit|mnt|minute|minutes|min|jam|hour|hours|hr|j)\s+lagi/i,
+  );
+  if (rel?.[1] && rel?.[2]) {
+    const n = Number(rel[1]);
+    const unit = rel[2].toLowerCase();
+    let ms: number;
+    if (unit.startsWith("det") || unit.startsWith("dtk")) ms = n * 1000;
+    else if (unit.startsWith("jam") || unit === "j") ms = n * 3600 * 1000;
+    else ms = n * 60 * 1000; // menit / min / mnt
+    if (n > 0 && ms <= 7 * 24 * 3600 * 1000) {
+      const text = trimmed
+        .replace(new RegExp(`(?:in|dalam|sama|jadi)\\s+${n}\\s*${rel[2]}\\b`, "i"), "")
+        .replace(new RegExp(`${n}\\s*${rel[2]}\\s+lagi`, "i"), "")
+        .replace(/^(?:reminder|remind|remind me|remember|ingatkan|pengingat)(?:\s+saya|\s+aku)?\s*(?:untuk\s*)?/i, "")
+        .replace(/\s*(?:dalam|in)\s*$/i, "")
+        .trim();
+      return text.length >= 2 ? { text, dueAt: Date.now() + ms } : null;
+    }
+  }
+
+  // --- Absolute: "jam 15:30" / "pukul 15:30" today, WIB (UTC+7) ---
+  const abs = trimmed.match(
+    /(?:jam|pukul|tabuh)\s+(\d{1,2})[.:](\d{2})\b/i,
+  );
+  if (abs?.[1] && abs?.[2] != null) {
+    const h = Number(abs[1]);
+    const m = Number(abs[2]);
+    if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+      // Parse as WIB and convert to UTC ms compared against current UTC time.
+      const nowUtc = Date.now();
+      const wibTz = 7 * 3600 * 1000;
+      const todayWibStartMsUtc = nowUtc - ((nowUtc % 86400000) + wibTz) % 86400000 - wibTz;
+      let due = todayWibStartMsUtc + h * 3600000 + m * 60000 + wibTz;
+      if (due <= nowUtc) due += 86400000; // already passed → tomorrow same time
+      const text = trimmed
+        .replace(/[,.]?\s*(?:jam|pukul|tabuh)\s+\d{1,2}[.:]\d{2}\b/i, "")
+        .replace(/^(?:reminder|remind|remind me|remember|ingatkan|pengingat)(?:\s+saya|\s+aku)?\s*(?:untuk\s*)?/i, "")
+        .trim();
+      return text.length >= 2 ? { text, dueAt: due } : null;
+    }
+  }
+  return null;
+}
+
+/** Execute a parsed reminder command and reply to the owner. */
+async function handleReminderCommand(env: Env, owner: number, raw: string): Promise<void> {
+  const trimmed = raw.trim();
+
+  // --- List: "/reminder list", "/reminder", "/pengingat" ---
+  if (/^\/(?:reminder|remind|pengingat)\s*$/.test(trimmed) || /^(?:list|daftar)\b/i.test(raw)) {
+    const items = await listReminders(env, owner);
+    if (items.length === 0) {
+      await fire(sendMessage(env, owner,
+        "⏰ *Pengingat*\n\nTidak ada pengingat aktif. Atur: /reminder <teks> in <N> menit|jam."));
+      return;
+    }
+    const lines = items.map((r) => {
+      const d = new Date(r.due_at);
+      const wib = new Date(r.due_at + 7 * 3600 * 1000).toISOString().slice(11, 16);
+      return `#${r.id} · ${r.text.slice(0, 60)} — pukul ${wib} WIB`;
+    }).slice(0, 30);
+    await fire(sendMessage(env, owner, `⏰ *Pengingat aktif*\n\n${lines.join("\n")}\n\nBatal: /reminder hapus <id>`));
+    return;
+  }
+
+  // --- Cancel: "/reminder hapus <id>", "ingatkan hapus 3" ---
+  const cancel = trimmed.match(
+    /^\s*(?:\/remind(?:er)?|\/pengingat|ingatkan|remind|hapus|batalkan)\s+(?:hapus|batal|cancel|delete)?\s*(\d+)\s*$/i,
+  );
+  if (cancel?.[1]) {
+    const id = Number(cancel[1]);
+    const ok = await cancelReminderById(env, owner, id);
+    await fire(sendMessage(env, owner,
+      ok ? `🗑️ Pengingat #${id} dibatalkan.` : `Tidak ada pengingat aktif #${id}.`));
+    return;
+  }
+
+  // --- Add ---
+  const parsed = parseReminder(raw);
+  if (!parsed) {
+    await fire(sendMessage(env, owner,
+      "❗ Tidak paham format pengingatnya.\n\n" + REMINDER_USAGE));
+    return;
+  }
+  const id = await addReminder(env, owner, parsed.text, parsed.dueAt);
+  if (id > 0) {
+    const when = new Date(parsed.dueAt + 7 * 3600 * 1000).toISOString().slice(11, 16);
+    await fire(sendMessage(env, owner,
+      `✅ Pengingat disimpan: *${parsed.text.slice(0, 120)}* (id ${id}) — akan saya ingatkan pukul *${when} WIB*.`));
+  } else {
+    await fire(sendMessage(env, owner, "Gagal menyimpan pengingat (error D1). Coba lagi sebentar."));
   }
 }
 

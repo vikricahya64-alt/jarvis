@@ -26,6 +26,7 @@ const TIMEOUT_MS = {
   groq: 15000,
   openrouter: 8000,
   gemini: 8000,
+  workers_ai: 20000,
   web: 10000,
 } as const;
 

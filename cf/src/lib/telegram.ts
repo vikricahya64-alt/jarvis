@@ -4,14 +4,6 @@
 // All methods return parsed JSON; failures throw so callers can retry.
 //=====================================================================
 
-export interface TelegramMessage {
-  message_id: number;
-  chat: { id: number };
-  from?: { id: number; username?: string; first_name?: string };
-  text?: string;
-  date: number;
-}
-
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
@@ -21,6 +13,35 @@ export interface TelegramUpdate {
     message?: TelegramMessage;
     data?: string;
   };
+}
+
+/** Photo size variant (sendPhoto uploads come back as photo array). */
+export interface TelegramPhotoSize {
+  file_id: string;
+  file_unique_id: string;
+  width: number;
+  height: number;
+  file_size?: number;
+}
+
+/** Voice message (file to transcribe). */
+export interface TelegramVoice {
+  file_id: string;
+  file_unique_id: string;
+  duration: number;
+  mime_type?: string;
+  file_size?: number;
+}
+
+export interface TelegramMessage {
+  message_id: number;
+  chat: { id: number };
+  from?: { id: number; username?: string; first_name?: string };
+  text?: string;
+  date: number;
+  photo?: TelegramPhotoSize[];
+  voice?: TelegramVoice;
+  caption?: string;
 }
 
 export interface InlineButton {
@@ -145,4 +166,23 @@ export async function getMe(
   env: { TELEGRAM_TOKEN?: string },
 ): Promise<{ id: number; is_bot: boolean; first_name: string; username?: string }> {
   return call(env, "getMe", {}) as Promise<any>;
+}
+
+/** Resolve the downstream file (photo/voice) URL and download its bytes.
+ *  Telegram serves media on api.telegram.org/file/bot<token>/<file_path>. */
+export async function downloadTelegramFile(
+  env: { TELEGRAM_TOKEN?: string },
+  fileId: string,
+): Promise<{ bytes: Uint8Array; mime: string } | null> {
+  try {
+    const info = (await call(env, "getFile", { file_id: fileId })) as { file_path?: string; file_size?: number };
+    if (!info.file_path) return null;
+    // Cap download at ~20 MB (Telegram voice/photos are small; generous headroom).
+    const res = await fetch(`${API}/file/bot${token(env)}/${info.file_path}`);
+    if (!res.ok) return null;
+    const mime = res.headers.get("Content-Type") ?? "application/octet-stream";
+    return { bytes: new Uint8Array(await res.arrayBuffer()), mime };
+  } catch {
+    return null;
+  }
 }

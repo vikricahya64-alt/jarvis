@@ -32,7 +32,7 @@
 //=====================================================================
 
 import { Env, searchMemory, recentContext } from "./db";
-import { llmRespond, searchTopResults } from "./ai";
+import { llmRespond, searchTopResults, deepReadPage } from "./ai";
 import { getAnswerBehaviorContext } from "./evolution";
 import { fetchPageText } from "./extract";
 import { isObj, parseStructured, cleanStr } from "./structured";
@@ -307,6 +307,16 @@ async function gatherAngle(env: Env, angle: string): Promise<AngleGather> {
     url: h.url.slice(0, 200),
     snippet: h.snippet.slice(0, 340),
   }));
+  // Deep scrape: enrich the top hit with the actual page text (bounded) so the
+  // writer synthesizes from real content, not just search snippets. Fail-closed:
+  // a page that can't be read simply leaves the snippet as-is.
+  const top = findings[0];
+  if (top?.url) {
+    const pageText = await deepReadPage(env, top.url, 1200).catch(() => null);
+    if (pageText) {
+      top.snippet = `${top.snippet} || ISI HALAMAN: ${pageText}`.slice(0, 1600);
+    }
+  }
   return { angle, findings };
 }
 
