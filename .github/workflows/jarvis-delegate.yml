@@ -49,15 +49,23 @@ jobs:
         id: exec
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || 'qwen/qwen3.6-27b' }}
+          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free' }}
         run: |
           set +e
           if [ -z "$OPENROUTER_API_KEY" ]; then
             echo "ERR: OPENROUTER_API_KEY repo secret kosong." > /tmp/jarvis-out.txt
             code=1
           else
-            opencode run --model "openrouter/$OPENROUTER_MODEL" "$(cat /tmp/task.txt)" > /tmp/jarvis-out.txt 2>&1
-            code=$?
+            # Free-tier models get transient upstream rate-limits on shared
+            # runner IPs → retry with backoff before giving up.
+            code=1
+            for attempt in 1 2 3; do
+              opencode run --model "openrouter/$OPENROUTER_MODEL" "$(cat /tmp/task.txt)" > /tmp/jarvis-out.txt 2>&1
+              code=$?
+              if [ "$code" = "0" ]; then break; fi
+              echo "attempt $attempt: opencode exit=$code -> retry" >&2
+              sleep $((attempt * 25))
+            done
           fi
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
