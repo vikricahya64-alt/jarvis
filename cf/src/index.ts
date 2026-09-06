@@ -8,7 +8,8 @@
 // the queue consumer, both bounded. All GOTCHA-free, no external SDK.
 //=====================================================================
 
-import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders, getAgentTask, finishAgentTask, listAgentTasks } from "./lib/db";
+import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders, getAgentTask, finishAgentTask, listAgentTasks, failStaleAgentTasks, pruneOldAgentTasks } from "./lib/db";
+import { sanitizeAgentReport, flagAgentReport } from "./lib/agent_executor";
 import { handleUpdate } from "./workers/telegram_webhook";
 import { setWebhook, sendMessage, getWebhookInfo, getMe, setMyCommands } from "./lib/telegram";
 import { runDms } from "./daemons/dead_mans_switch";
@@ -154,7 +155,7 @@ export default {
         ok: true,
         ts: Date.now(),
         env: env.APP_ENV ?? "unknown",
-        version: "a9c1e07f",
+        version: "f3b8d24c",
       }));
     }
 
@@ -257,7 +258,7 @@ export default {
         return respond(Response.json({
           ok: true,
           ts: Date.now(),
-          version: "a9c1e07f",
+          version: "f3b8d24c",
           systems: {
             d1: d1Ok ? "✅" : "❌",
             kv: kvOk ? "✅" : "❌",
@@ -368,7 +369,7 @@ export default {
         return respond(new Response("unauthorized", { status: 401 }));
       }
       if (method !== "POST") return respond(new Response("POST only", { status: 405 }));
-      let body: { task_id?: number; status?: string; result?: string; error?: string };
+      let body: { task_id?: number; status?: string; result?: string; error?: string; artifact_url?: string };
       try {
         body = (await request.json()) as typeof body;
       } catch {
@@ -380,10 +381,22 @@ export default {
       const task = await getAgentTask(env, tid);
       if (!task) return respond(new Response("no such task", { status: 404 }));
       if (st !== "done" && st !== "failed") return respond(new Response("bad status", { status: 400 }));
-      await finishAgentTask(env, tid, st === "done" ? "done" : "failed", body?.result ?? "", body?.error ?? "");
-      const text = st === "done"
-        ? `✅ Tugas *#${tid}* selesai (eksekutor cloud):\n\n${(body?.result ?? "(tanpa output)").slice(0, 3000)}`
-        : `❌ Tugas *#${tid}* gagal di eksekutor cloud: ${((body?.error ?? body?.result ?? "unknown")).slice(0, 300).replace(/\s+/g, " ")}`;
+      const rawResult = sanitizeAgentReport(body?.result ?? "");
+      const rawError = sanitizeAgentReport(body?.error ?? "");
+      const artifact = sanitizeAgentReport(body?.artifact_url ?? "").slice(0, 400);
+      const flagged = flagAgentReport(rawResult || rawError);
+      await finishAgentTask(env, tid, st === "done" ? "done" : "failed", rawResult, rawError, artifact);
+      const prefix = st === "done"
+        ? `✅ Tugas *#${tid}* selesai (eksekutor cloud)`
+        : `❌ Tugas *#${tid}* gagal di eksekutor cloud`;
+      const detail = st === "done"
+        ? (rawResult || "(tanpa output)").slice(0, 2800)
+        : (rawError || "-").slice(0, 300).replace(/\s+/g, " ");
+      const artLine = artifact ? `\n📎 Artefak lengkap: ${artifact}` : "";
+      const warnLine = flagged
+        ? "\n⚠️ *Catatan JARVIS:* laporan mengandung pola manipulatif (injeksi perintah). Diabaikan sebagai perintah — hasil disimpan apa adanya saja."
+        : "";
+      const text = `${prefix}:\n\n${detail}${artLine}${warnLine}\n(_riwayat: /tugas list_)`;
       await sendMessage(env, task.owner_id, text).catch(() => {});
       return respond(Response.json({ ok: true }));
     }
@@ -401,9 +414,34 @@ export default {
         tasks: tasks.map((x) => ({
           id: x.id, status: x.status, task: x.task.slice(0, 200),
           created_at: x.created_at, started_at: x.started_at, finished_at: x.finished_at,
-          run_id: x.run_id,
+          run_id: x.run_id, artifact_url: x.artifact_url,
         })),
       }));
+    }
+
+    // /cron/trigger?mode=autonomy|cleanup — external cadence trigger for work
+    // the free-tier minute cron shouldn't carry (heavy-scan maintenance). The
+    // GitHub scheduler workflows (autonomy 15', predictive 30') used to wake a
+    // LEGACY Vercel app; they now hit THIS worker instead, so the autonomous
+    // loops run against the correct (D1-backed) JARVIS. Auth: AGENT_TOKEN
+    // (Bearer or ?token=) — the same bot-internal secret the executor uses.
+    if (path === "/cron/trigger") {
+      const tok = url.searchParams.get("token") ?? request.headers.get("x-agent-token") ?? "";
+      if (!env.AGENT_TOKEN || tok !== env.AGENT_TOKEN) {
+        return respond(new Response("unauthorized", { status: 401 }));
+      }
+      const mode = (url.searchParams.get("mode") ?? "autonomy").trim();
+      if (mode === "autonomy") {
+        const stale = await failStaleAgentTasks(env);
+        const pruned = await pruneOldAgentTasks(env);
+        return respond(Response.json({ ok: true, mode, actions: { stale_failed: stale, pruned } }));
+      }
+      if (mode === "cleanup") {
+        const mem = await sweepExpiredMemories(env);
+        const prop = await sweepExpiredProposals(env);
+        return respond(Response.json({ ok: true, mode, actions: { memories_swept: mem, proposals_swept: prop } }));
+      }
+      return respond(new Response("bad mode", { status: 400 }));
     }
 
     //------------------------------------------------------------------
