@@ -13,6 +13,8 @@ import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize"
 import { isFollowUpQuery } from "../src/lib/ai";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
+import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
+import { isBareTodoVerb } from "../src/workers/telegram_webhook";
 
 async function testPredictiveUrgencyRanking() {
   // Deterministic ranking: approval (open/expiring proposals) must rank first,
@@ -158,12 +160,12 @@ function testExpandedSlang() {
   // Han & Baldwin 2013, ViLexNorm EACL'24, MultiLexNorm++ 2026). All harmless
   // filler — never expands into a verb/command the guard must see.
   assert.strictEqual(normalizeInput("mksh ya"), "terima kasih ya", "mksh -> terima kasih");
-  assert.strictEqual(normalizeInput("klo gitu kapan"), "kalau gitu kapan", "klo -> kalau");
+  assert.strictEqual(normalizeInput("klo gitu kapan"), "kalau begitu kapan", "klo -> kalau, gitu -> begitu");
   assert.strictEqual(normalizeInput("cma mau tanya"), "cma mau tanya", "'cma' (not in dict) passes");
   assert.strictEqual(normalizeInput("mantul"), "mantap", "mantul -> mantap");
   assert.strictEqual(normalizeInput("bener banget"), "benar banget", "bener -> benar");
   assert.strictEqual(normalizeInput("jngn lupa"), "jangan lupa", "jngn -> jangan");
-  assert.strictEqual(normalizeInput("skrng gimana"), "sekarang gimana", "skrng -> sekarang");
+  assert.strictEqual(normalizeInput("skrng gimana"), "sekarang bagaimana", "skrng -> sekarang, gimana -> bagaimana");
   assert.strictEqual(normalizeInput("plis bantu"), "tolong bantu", "plis -> tolong");
   // A real verb/command word is NOT expanded (guard must still see it).
   assert.strictEqual(normalizeInput("reset todo"), "reset todo", "real command words preserved");
@@ -350,6 +352,86 @@ function testReflectionParser() {
   assert.strictEqual(empty.improvement, "");
 }
 
+type TodoRow = { id: number; text: string; done: number; created_at: number };
+
+/** Minimal D1 mock: SELECT returns the in-memory list, DELETE clears it. */
+function makeTodoEnv(items: TodoRow[]) {
+  const fakeDb = {
+    prepare(sql: string) {
+      const isSelect = /^SELECT/i.test(sql);
+      const isDelete = /^DELETE/i.test(sql);
+      return {
+        bind() { return this; },
+        async all<T>() {
+          return { results: isSelect ? (items as T[]) : ([] as T[]) };
+        },
+        async run() {
+          if (isDelete) {
+            const removed = items.length;
+            items.length = 0;
+            return { meta: { changes: removed } };
+          }
+          return { meta: { changes: 1 } };
+        },
+      };
+    },
+  };
+  return { DB: fakeDb } as never;
+}
+
+function testNormAndKey() {
+  // Punctuation/space/case normalization.
+  assert.strictEqual(normForMatch("  Beli,  TELUR! "), "beli telur");
+  // Leading todo verbs/indexes stripped to the real target.
+  assert.strictEqual(todoDeleteKey("Hapus Todo beli telur"), "beli telur");
+  assert.strictEqual(todoDeleteKey("DELETE TASK susu"), "susu");
+  assert.strictEqual(todoDeleteKey("hapus todo no 3 beli telur"), "beli telur");
+  assert.strictEqual(todoDeleteKey(""), "");
+}
+
+async function testFuzzyTodoDelete() {
+  const base: TodoRow[] = [
+    { id: 1, text: "beli telur", done: 0, created_at: 1 },
+    { id: 2, text: "beli Susu, dan roti!", done: 0, created_at: 2 },
+    { id: 3, text: "topup game", done: 0, created_at: 3 },
+  ];
+  // Substring needle.
+  let env = makeTodoEnv(base.map((r) => ({ ...r })));
+  assert.strictEqual(await deleteTodoByText(env, 1, "telur"), 1);
+  // Full item restated as the needle.
+  env = makeTodoEnv(base.map((r) => ({ ...r })));
+  assert.strictEqual(await deleteTodoByText(env, 1, "beli telur"), 1);
+  // Over-qualified phrasing with the todo verb prefix.
+  env = makeTodoEnv(base.map((r) => ({ ...r })));
+  assert.strictEqual(await deleteTodoByText(env, 1, "Hapus Todo beli susu"), 1);
+  // Case + punctuation-insensitive token coverage ("susu roti" ⊂ "Susu, dan roti").
+  env = makeTodoEnv(base.map((r) => ({ ...r })));
+  assert.strictEqual(await deleteTodoByText(env, 1, "hapus SUSU, ROTI"), 1);
+  // Order-insensitive coverage ("roti susu" hits "susu, dan roti").
+  env = makeTodoEnv(base.map((r) => ({ ...r })));
+  assert.strictEqual(await deleteTodoByText(env, 1, "roti susu"), 1);
+  // No match -> 0 (never deletes everything by accident).
+  env = makeTodoEnv(base.map((r) => ({ ...r })));
+  assert.strictEqual(await deleteTodoByText(env, 1, "jadwal dokter"), 0);
+  // Empty / actionable-less needle -> 0.
+  env = makeTodoEnv(base.map((r) => ({ ...r })));
+  assert.strictEqual(await deleteTodoByText(env, 1, ""), 0);
+  env = makeTodoEnv(base.map((r) => ({ ...r })));
+  assert.strictEqual(await deleteTodoByText(env, 1, "hapus"), 0);
+}
+
+function testBareTodoVerb() {
+  assert.strictEqual(isBareTodoVerb("/hapus"), true);
+  assert.strictEqual(isBareTodoVerb("hapus"), true);
+  assert.strictEqual(isBareTodoVerb("hapus "), true);
+  assert.strictEqual(isBareTodoVerb("/todo del"), true);
+  assert.strictEqual(isBareTodoVerb("delete"), true);
+  // With a target -> NOT bare.
+  assert.strictEqual(isBareTodoVerb("hapus todo telur"), false);
+  assert.strictEqual(isBareTodoVerb("/hapus beli telur"), false);
+  assert.strictEqual(isBareTodoVerb("hapus semua file"), false);
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -365,6 +447,9 @@ async function main() {
   await testFeedbackLearning();
   await testBehaviorAlignmentRanking();
   testReflectionParser();
+  testNormAndKey();
+  await testFuzzyTodoDelete();
+  testBareTodoVerb();
   console.log("LOGIC TESTS PASSED");
 }
 

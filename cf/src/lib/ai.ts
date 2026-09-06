@@ -11,13 +11,13 @@
 // CPU is I/O-wait only). DuckDuckGo instant answer is plain fetch.
 //=====================================================================
 
-import { Env, recentContext, appendMemory, searchMemory } from "./db";
+import { Env, recentContext, appendMemory, searchMemory, storeLearnedKnowledge, isTopicKnown } from "./db";
 import { withResilience, fetchWithTimeout, logRequest } from "./resilience";
 import { getAnswerBehaviorContext, reflectOnTurn } from "./evolution";
-import { isResearchClass, orchestrateResearch, isDesignIntent, orchestrateDesign } from "./subagents";
+import { isResearchClass, orchestrateResearch } from "./subagents";
 import { buildConversationMessages, detectLanguage } from "./conversation";
 import { buildFinalReply } from "./response_formatter";
-import { detectEmotion as detectEmotionSig } from "./emotion";
+import { detectEmotion as detectEmotionSig, inferEmotionFromContext, getMoodState, detectTopicSentiment } from "./emotion";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
 
 const GROQ_MODEL = "qwen/qwen3.6-27b";
@@ -69,11 +69,34 @@ export function isFollowUpQuery(text: string): boolean {
 
 /** Derive a research topic from the last assistant analysis (for follow-up
  *  anchoring). Returns the last assistant reply's content as the anchor topic,
- *  or null if there's no prior assistant analysis to build on. */
+ *  or null if there's no prior assistant analysis to build on.
+ *
+ *  The anchor must point at the ACTUAL current research answer — never at a
+ *  stale clarification or an unrelated older turn. Guards, all fail-closed
+ *  (return null when unsure, so the caller falls through to the generic reply):
+ *   1. FRESHNESS — only context from the last <RECENT_MS> is eligible. An
+ *      old turn (minutes/hours ago) is not a valid anchor for a live
+ *      follow-up like "Lakukan riset lebih lanjut".
+ *   2. NO-CLARIFICATION — turns that are questions back at the owner
+ *      ("Anda ingin saya...? / benarkah?") or bare short acks are NOT answers;
+ *      anchoring a follow-up to them reproduces the off-topic "Kota Malang"
+ *      bug. Only substantive replies qualify. */
+const RECENT_MS = 15 * 60 * 1000; // 15 minutes
+const CLARIFY_RE =
+  /(?:benarkah|apakah\s+anda\s+ingin|yang\s+dimaksud|bener\s+ga|yakin|benar\?|maksud\s+anda|apakah\s+itu\s+yang|apakah\s+ini\s+yang)/i;
+
 export function resolveFollowUpAnchor(
-  context: Array<{ role: string; content: string }>,
+  context: Array<{ role: string; content: string; ts?: number }>,
 ): { topic: string; prior: string } | null {
-  const lastAssistant = [...(context || [])].reverse().find((c) => c.role === "assistant");
+  const now = Date.now();
+  const lastAssistant = [...(context || [])].reverse().find((c) => {
+    if (c.role !== "assistant") return false;
+    if (typeof c.ts === "number" && now - c.ts > RECENT_MS) return false;
+    const t = (c.content || "").trim();
+    if (t.length < 30) return false;
+    if (CLARIFY_RE.test(t)) return false;
+    return true;
+  });
   if (!lastAssistant || !lastAssistant.content || lastAssistant.content.trim().length < 30) return null;
   const text = lastAssistant.content.trim();
   return { topic: text.slice(0, 120), prior: text.slice(0, 3000) };
@@ -596,14 +619,12 @@ export async function searchAndSynthesize(
     if (anchor) followupAnchor = anchor.prior;
   }
   if (isResearchClass(topic, userText)) {
-    // Iron Man JARVIS: when the user explicitly asks for design/spec/analysis,
-    // run the full engineering pipeline (research + design + risk) instead of
-    // research alone. Fail-closed: on orchestrateDesign failure, falls through
-    // to single-pass (never burns budget twice).
-    const useDesign = isDesignIntent(userText);
-    const sub = useDesign
-      ? await orchestrateDesign(env, owner, userText, topic, followupAnchor)
-      : await orchestrateResearch(env, owner, userText, topic, followupAnchor);
+    // Iron Man JARVIS: complex design/research queries go through the bounded
+    // orchestrator pipeline (research + design outline). The separate video
+    // design spec was removed — flux renders images via generateImage, so any
+    // visual request lands on the image path. Fail-closed: if orchestration
+    // returns null, fall through to single-pass (never burns budget twice).
+    const sub = await orchestrateResearch(env, owner, userText, topic, followupAnchor);
     if (sub) {
       await appendMemory(env, owner, "user", userText, topic);
       await appendMemory(env, owner, "assistant", sub, topic);
@@ -614,8 +635,15 @@ export async function searchAndSynthesize(
   // Run all independent pre-LLM I/O in parallel: web search + conversation
   // history + memory retrieval + answer-behavior context (each is a separate
   // D1 read / network call, so serializing them wastes latency on every query).
+  // L18: SELF-LEARNING — Check if topic is already known before searching.
+  // If high-confidence memories exist, use them directly (no web search needed).
+  const topicKnown = await isTopicKnown(env, topic, 2.0).catch(() => false);
+  
+  // Run all independent pre-LLM I/O in parallel: web search + conversation
+  // history + memory retrieval + answer-behavior context (each is a separate
+  // D1 read / network call, so serializing them wastes latency on every query).
   const [searchResult, context, mems, behaviorContext] = await Promise.all([
-    ddgSearch(env, topic),
+    topicKnown ? Promise.resolve(null) : ddgSearch(env, topic), // Skip search if known
     recentContext(env, owner, 4),
     searchMemory(env, topic, 4).catch(() => []),
     getAnswerBehaviorContext(env, topic).catch(() => null),
@@ -639,9 +667,29 @@ export async function searchAndSynthesize(
   }
   const g = await llmRespond(env, userText, { context, topic });
   if (g.reply) {
+    // SELF-LEARNING: Store the synthesized knowledge for future queries
+    if (searchResult) {
+      await storeLearnedKnowledge(env, topic, searchResult, "web_search_synthesized").catch(() => {});
+    }
+    // L18: Enhanced emotion detection with inference for unknown topics
+    const rawEmotion = detectEmotionSig(userText);
+    const mood = getMoodState(owner);
+    const recentEmotions = mood.history.slice(-3).map(h => ({
+      sentiment: "neutral" as const,
+      intensity: h.intensity,
+      primary: h.emotion,
+      confidence: 0.5,
+    }));
+    const emotion = inferEmotionFromContext(rawEmotion, mood, recentEmotions);
+    
+    // Use topic sentiment as additional signal for unknown emotions
+    const topicSentiment = detectTopicSentiment(topic);
+    const finalSentiment = emotion.sentiment === "neutral" && topicSentiment.sentiment !== "neutral"
+      ? topicSentiment.sentiment
+      : emotion.sentiment;
+    
     // Format reply for natural conversation
-    const emotion = detectEmotionSig(userText);
-    const formatted = buildFinalReply(g.reply, "research", emotion.sentiment);
+    const formatted = buildFinalReply(g.reply, "research", finalSentiment);
     await appendMemory(env, owner, "user", userText, topic);
     await appendMemory(env, owner, "assistant", formatted, topic);
     if (formatted.length > 120) {
@@ -650,14 +698,229 @@ export async function searchAndSynthesize(
     return { reply: formatted, source: `${g.source}+ddg` };
   }
   if (searchResult) {
-    const fallback = `Berikut hasil pencarian tentang *${topic}*:\n\n${searchResult}\n\n(J.A.R.V.I.S. edge — tanpa LLM generatif, tampilkan hasil mentah.)`;
+    // SELF-LEARNING: Store the new knowledge for future queries
+    await storeLearnedKnowledge(env, topic, searchResult, "web_search").catch(() => {});
+    // Use topic sentiment for fallback formatting
+    const topicSentiment = detectTopicSentiment(topic);
+    const formatted = buildFinalReply(
+      `Berikut hasil pencarian tentang *${topic}*:\n\n${searchResult}\n\n(J.A.R.V.I.S. edge — tanpa LLM generatif, tampilkan hasil mentah.)`,
+      "research",
+      topicSentiment.sentiment,
+    );
     await appendMemory(env, owner, "user", userText, topic);
-    await appendMemory(env, owner, "assistant", fallback, topic);
-    return { reply: fallback, source: "ddg" };
+    await appendMemory(env, owner, "assistant", formatted, topic);
+    return { reply: formatted, source: "ddg" };
   }
   // Final fail-closed: canned reply.
   const canned = `Saya akan cari tentang *${topic}*, tapi belum bisa menghubungi mesin pencari saat ini. Coba lagi sebentar.`;
   await appendMemory(env, owner, "user", userText, topic);
   await appendMemory(env, owner, "assistant", canned, topic);
   return { reply: canned, source: "canned" };
+}
+
+// ============================================================================
+// Image Prompt Generation (L18)
+// Generates detailed image prompts for ANY user request,
+// with graceful fallback for unknown topics.
+//==========================================================================
+
+/** Generate an image prompt based on user description.
+ *  Works for ANY topic — products, concepts, scenes, objects, etc.
+ *  With automatic fallback when description is empty/unknown. */
+export async function generateImagePrompt(env: Env, userDescription: string): Promise<string> {
+  // Clean and validate input
+  const description = userDescription?.trim() ?? "";
+
+  // Use default descriptions for empty/very short inputs
+  const fallbackDescriptions: string[] = [
+    "natural scenery with mountains and river",
+    "portrait of a person reading a book in a cozy room",
+    "abstract art with vibrant colors and geometric shapes",
+    "city skyline at sunset with warm lighting",
+    "still life with fresh fruit and flowers on a wooden table",
+    "futuristic robot helper in a modern kitchen",
+    "warm café interior with bookshelves and steaming coffee cups",
+    "beach sunset with waves, palm trees, and a lone figure walking",
+  ];
+
+  let prompt: string;
+
+  if (description.length < 3) {
+    // Random fallback for empty/very short descriptions
+    const fallback = fallbackDescriptions[Math.floor(Math.random() * fallbackDescriptions.length)];
+    prompt = `Buatkan prompt deskripsi gambar yang detail dan vivid untuk: "${fallback}".
+  Prompt harus dalam Bahasa Indonesia, lengkap dengan subjek utama, gaya visual, warna dominan, komposisi, dan detail kecil.
+  Format: Hanya berikan prompt gambar saja, tanpa teks pembuka/penutup.
+  Gunakan format yang kompatibel dengan Midjourney/DALL-E/Stable Diffusion.`;
+  } else {
+    // Truncate very long descriptions to avoid token overflow
+    const cleanDesc = description.slice(0, 250);
+    prompt = `Buatkan prompt deskripsi gambar yang detail dan vivid untuk: "${cleanDesc}".
+  Prompt harus dalam Bahasa Indonesia, lengkap dengan:
+  - Subjek utama
+  - Gaya visual (realis, kartun, minimalis, dll.)
+  - Warna dominan
+  - Komposisi
+  - Detail kecil
+  - Pencerah/penyalaan
+  Format: Hanya berikan prompt gambar saja, tanpa teks pembuka/penutup.
+  Gunakan format yang kompatibel dengan Midjourney/DALL-E/Stable Diffusion.`;
+  }
+
+  const g = await llmRespond(env, prompt, {
+    topic: "image_prompt",
+  });
+  if (g.reply) {
+    // Clean the response - remove any non-prompt text
+    const cleanReply = g.reply.replace(/^bisa|bisa saja|ini prompt|promp|berikut|prompt:.+/i, "").trim();
+    return cleanReply.slice(0, 500);
+  }
+  // Fallback: use description as prompt base (if meaningful) or random fallback
+  if (description.length >= 3) {
+    return `Prompt gambar: ${description.slice(0, 200)}`;
+  }
+  // Final fallback: random scene
+  const fallbackIdx = Math.floor(Math.random() * fallbackDescriptions.length);
+  return `Prompt gambar: ${fallbackDescriptions[fallbackIdx]}`;
+}
+
+// ============================================================================
+// Image Generation (L19) — ACTUALLY creating the image
+//
+// The /gambar command used to output only a text prompt ("Prompt gambar:")
+// without ever producing an image. This layer generates the real raster image
+// via Cloudflare Workers AI (free tier, no API key — same env.AI binding used
+// for text models). Default model: @cf/black-forest-labs/flux-1-schnell.
+// Fail-closed: on Workers AI failure, callers fall back to the text prompt so
+// the user still gets a usable artifact.
+//==========================================================================
+
+/** The Cloudflare Workers AI text-to-image model used by /gambar. */
+export const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
+
+/** Generate a raster image from a prompt. Returns raw image bytes, or null on
+ *  any failure (so callers can fall back to the text prompt). Pure function
+ *  of (env, prompt) — no state, no side effects. */
+export async function generateImage(
+  env: Env,
+  prompt: string,
+): Promise<Uint8Array | null> {
+  if (!env.AI) return null;
+  try {
+    const out = (await env.AI.run(IMAGE_MODEL, { prompt }) as { image?: string });
+    if (!out || !out.image) return null;
+    // Base64 → bytes (safe decode: chat_id bytes are not used in image output).
+    const bin = atob(out.image);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  } catch (e) {
+    console.error("generateImage failed:", String(e).slice(0, 200));
+    return null;
+  }
+}
+
+/** Sniff image MIME type from leading magic bytes (png/jpeg/gif/webp). */
+export function sniffImageMime(bytes: Uint8Array): string {
+  if (bytes.length < 4) return "image/png";
+  // PNG: 89 50 4E 47
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+  // JPEG: FF D8 FF
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  // GIF: 47 49 46
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return "image/gif";
+  // WEBP: 52 49 46 46 ... 57 45 42 50
+  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) return "image/webp";
+  return "image/png";
+}
+
+// ============================================================================
+// Intent Comprehension ("Understand the User") — L19
+//
+// Bridging the last gap in JARVIS's cognition: when the user says something
+// JARVIS has never seen before — a vague request, an unknown topic, a cryptic
+// one-liner, or a desire expressed without standard keywords — the keyword
+// classifiers can't decode it. Plain simple_llm often replies with a generic
+// "Ok." or an off-topic guess. This layer uses the LLM itself to understand
+// what the user actually WANTS:
+//   * If it can infer a concrete need → answer it directly (natural Indonesian).
+//   * If the request stays ambiguous → ask ONE short, natural clarifying
+//     question (never a dead-end "Ok." and never 5 essays).
+// Fail-closed: if the LLM is unreachable, we return a graceful, human
+// clarifying question instead of an error.
+//==========================================================================
+
+/** Result of intent comprehension. */
+export interface IntentUnderstanding {
+  /** Final message to send to the user (answer OR clarifying question). */
+  reply: string;
+  /** Whether we already answered the need (true) or asked for clarification. */
+  understood: boolean;
+  /** Best-guess topic name for memory/logging (may approximate). */
+  topic: string;
+}
+
+/** Ask the LLM to decode what the user wants even for unknown/vague input.
+ *  Uses conversation history + retrieved memories when available. */
+export async function understandUserWants(
+  env: Env,
+  userText: string,
+  owner: number,
+  context: Array<{ role: string; content: string }> = [],
+): Promise<IntentUnderstanding> {
+  const text = (userText || "").trim();
+  const baseTopic = text.slice(0, 80);
+
+  // Pull memories for the owner to ground the understanding in prior turns.
+  let mems: string[] = [];
+  try {
+    const hits = await searchMemory(env, baseTopic, 3).catch(() => []);
+    mems = hits.map((m) => m.content).slice(0, 3);
+  } catch { mems = []; }
+
+  const prior = context
+    .filter((c) => (c.content || "").trim())
+    .slice(-6)
+    .map((c) => `[${c.role}] ${c.content.slice(0, 400)}`)
+    .join("\n");
+
+  const memoryBlock = mems.length
+    ? `\nKenangan yang relevan:\n${mems.join("\n").slice(0, 1200)}\n`
+    : "";
+
+  const prompt =
+    `Pemilik bertanya/meminta hal yang mungkin tidak jelas atau asing bagimu. ` +
+    `Tugasmu: PAHAMI apa yang sebenarnya pemilik INGINKAN, meskipun kamu belum pernah tahu topik ini.\n\n` +
+    `Pesan pemilik:\n"${text}"\n` +
+    (prior ? `\nKonteks percakapan terakhir:\n${prior}\n` : "") +
+    memoryBlock +
+    `\nAturan:
+1. Jika kamu cukup yakin (>= 60%) apa yang dia inginkan — jawab langsung dengan jelas, ringkas, bahasa Indonesia alami, dalam kepribadian J.A.R.V.I.S. (kompeten, hangat, lugas). Tidak perlu minta izin.
+2. Jika kamu BELUM yakin — ajukan SATU pertanyaan klarifikasi yang singkat, natural, dan spesifik (bukan daftar panjang). Contoh: "Maksudmu kamu mau aku cari info brand baru itu yang mana, atau mau desain kemasannya?" JANGAN bertele-tele, JANGAN menebak dengan jawaban panjang.
+3. Jangan pernah menjawab "Ok."/"Siap."/"Sistem dijalankan." sebagai tanggapan atas permintaan yang belum dipahami.
+4. Balas dalam bahasa yang sama dengan pemilik (Indonesia/Inggris).
+5. Maksimal 3 kalimat.`;
+
+  const g = await llmRespond(env, prompt, {
+    topic: `understand-${baseTopic}`,
+    contextIsEnriched: true,
+    context,
+  });
+
+  const reply = (g.reply ?? "").trim();
+  if (!reply) {
+    // Fail-closed graceful clarifying question.
+    return {
+      reply: `Maaf, saya belum memahaminya dengan baik. Bisa jelaskan sedikit lagi apa yang kamu butuhkan dari saya?`,
+      understood: false,
+      topic: baseTopic,
+    };
+  }
+
+  // Guess whether we answered or need clarification: clarification questions
+  // usually end with '?' or ask directly. Words like "Maksudmu", "bisa ... ?".
+  const looksLikeQuestion = /\?$/.test(reply) || /^\s*(?:maksud|apakah|bisa|boleh|mau|butuh|perlu|jelas|maks|mksud|kenapa|kamu maksud|apa yang)/i.test(reply);
+  const understood = !looksLikeQuestion;
+
+  return { reply, understood, topic: baseTopic };
 }

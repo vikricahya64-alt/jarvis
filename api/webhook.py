@@ -197,6 +197,21 @@ class handler(BaseHTTPRequestHandler):
         if not text or not chat_id:
             return self._send_json({"ok": True}, 200)
 
+        # SELF-REFERENTIAL GUARD — answer directly from utils/identity.py
+        # (single source of truth) BEFORE any routing decision. This covers
+        # EVERY path — local device, cloud pipeline, force_local override —
+        # so "siapa kamu" / "apa yang bisa kamu lakukan" NEVER reaches an LLM,
+        # which would otherwise hallucinate (e.g. invent that JARVIS is about
+        # money). We deliberately do NOT create a task row for this.
+        try:
+            from utils.identity import is_self_referential, SELF_REF_REPLY
+            if is_self_referential(text):
+                from utils.telegram import send_message
+                send_message(chat_id, SELF_REF_REPLY)
+                return self._send_json({"ok": True, "handled": "self_ref"}, 200)
+        except Exception as exc:
+            logger.exception(f"Self-ref guard failed (continuing): {exc}")
+
         # Photos: understand via Groq vision (Qwen multimodal), using the
         # caption as the instruction if present.
         if photo:
@@ -235,6 +250,50 @@ class handler(BaseHTTPRequestHandler):
         except Exception as exc:
             logger.exception(f"Failed to enqueue task: {exc}")
             return self._send_json({"ok": False, "error": "Enqueue failed"}, 200)
+
+        # 3c. Model-router auto-escalation (free-tier deep models). If the
+        #     message is confidently heavy (reasoning/code/research) we ask the
+        #     opencode workflow to handle it with the strongest :free model and
+        #     skip the local pipeline. This RUNS WITH THE NORMAL PIPELINE as
+        #     fallback on any failure, so it never degrades the live behavior:
+        #     dispatch_opencode returns False (never raises) when the PAT is
+        #     missing or the GitHub dispatch fails -> local pipeline proceeds.
+        #     Two safety gates keep it from firing on ambiguous input:
+        #       (a) short follow-ups with no topic of their own ("riset lebih
+        #           lanjut", "lanjutkan") are NOT escalated — a strong model
+        #           with the bare phrase and no history fabricates a topic;
+        #       (b) when we DO escalate, the recent conversation history is
+        #           attached to the prompt so opencode has context to continue.
+        try:
+            from utils import model_router as mr
+            from utils.commands import dispatch_opencode
+            if mr.should_escalate(text) and not mr.is_continuation(text):
+                mode, model = mr.escalation_plan(text)
+                prompt = text
+                try:
+                    from utils.supabase_client import get_recent_history
+                    history = get_recent_history(chat_id, limit=6)
+                    if history:
+                        ctx = "\n".join(
+                            f"- {h.get('role', '?')}: "
+                            f"{str(h.get('content', ''))[:300]}"
+                            for h in history if h.get("content"))
+                        if ctx:
+                            prompt = (
+                                "Konteks percakapan terakhir (lanjutkan dari "
+                                f"sini):\n{ctx}\n\nPertanyaan pemilik: {text}")
+                except Exception:
+                    pass
+                if dispatch_opencode(chat_id, prompt, mode=mode, model=model):
+                    logger.info(
+                        f"Auto-escalated task for chat {chat_id} ({mode})")
+                    return self._send_json(
+                        {"ok": True, "handled": "opencode_auto",
+                         "mode": mode}, 200)
+                logger.info(
+                    f"Auto-escalation unavailable ({mode}); local pipeline")
+        except Exception as exc:
+            logger.exception(f"Auto-escalation error (continuing): {exc}")
 
         # 4. Hybrid router decides local vs cloud (Level 6). If the local
         #    device is not configured/unreachable, this degrades to cloud.

@@ -155,7 +155,7 @@ export async function groqClassify(
         Authorization: `Bearer ${key}`,
       },
       body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
+        model: "qwen/qwen3.6-27b",
         temperature: 0,
         messages: [
           {
@@ -335,7 +335,7 @@ export async function routeCommand(
   // fail-closed constitutional guard above, so no risk guard is weakened.
   // The marker set mirrors extractTopic() so research-style phrasing
   // ("Analisis bisnis ...") is also served rather than defers.
-  if (origin === "user" && /\b(?:cari|search|ringkas|summarize|tentang|mengenai|topik|info|informasi|artikel|analis\w*|laporan|report|review|perbandingan|bandingkan|perkembangan|ulasan|kajian|menurut|menurutmu|bagaimana)\b/i.test(rawText)) {
+  if (origin === "user" && /\b(?:cari|search|ringkas|summarize|tentang|mengenai|topik|info|informasi|artikel|analis\w*|laporan|report|review|perbandingan|bandingkan|perkembangan|ulasan|kajian|menurut|menurutmu|bagaimana|apa|apakah|siapa|kenapa|mengapa|kapan|berapa|dimana|di mana)\b/i.test(rawText)) {
     const decision: Decision = {
       action: "EXECUTE",
       compliance: "COMPLIANT",
@@ -350,8 +350,11 @@ export async function routeCommand(
     return { decision, intent, cmdHash };
   }
 
-  // Low clarity + meaningful priority => ask for clarification before acting.
-  if (!clarityOk && intent.priority >= TIERS.DANGEROUS) {
+  // Low clarity + meaningful priority + actual risk => ask for clarification
+  // before acting. Risk-level guard prevents innocent general questions (which
+  // small LLMs may over-assign a high numeric priority) from triggering CLARIFY
+  // buttons instead of getting answered.
+  if (!clarityOk && intent.priority >= TIERS.DANGEROUS && (intent.riskLevel === "high" || intent.riskLevel === "medium")) {
     const decision: Decision = {
       action: "CLARIFY",
       compliance: "PENDING",
@@ -388,7 +391,9 @@ export async function routeCommand(
   }
 
   // Low-clarity terminal "restricted" utility that is otherwise safe.
-  if (!clarityOk && intent.priority >= TIERS.UTILITY) {
+  // Risk guard: safe (low-risk) conversational statements fall through to
+  // EXECUTE so they get an AI response rather than a terse "ditangguhkan".
+  if (!clarityOk && intent.priority >= TIERS.UTILITY && (intent.riskLevel === "high" || intent.riskLevel === "medium")) {
     const decision: Decision = {
       action: "DEFER",
       compliance: "BLOCKED",

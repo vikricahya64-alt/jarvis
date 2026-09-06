@@ -7,8 +7,6 @@
 export interface Env {
   DB: D1Database;
   CONFIG_KV: KVNamespace;
-  TASKS: Queue<unknown>;
-  TASKS_DEAD: Queue<unknown>;
   AI: Ai;
   OWNER_TELEGRAM_ID: string;
   APP_ENV?: string;
@@ -19,6 +17,8 @@ export interface Env {
   GEMINI_API_KEY_BACKUP?: string;
   GEMINI_API_KEY_SECONDARY?: string;
   GEMINI_MODEL?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_MODEL?: string;
   CLARITY_GATE?: string;
   RISK_CONSENT_THRESHOLD?: string;
   CONSENT_TIMEOUT_S?: string;
@@ -382,6 +382,96 @@ export async function sweepExpiredProposals(env: Env, now = Date.now()): Promise
   return res.meta.changes ?? 0;
 }
 
+// ---------------------------------------------------------------------
+// Passive Emotional Learning (L9 extension)
+// ---------------------------------------------------------------------
+// Stores emotional response patterns to adapt future responses.
+// When user corrects emotional tone, learn and adapt.
+
+/** Store emotional response pattern for a topic/user pair.
+ *  Helps adapt tone when direct emotion detection fails. */
+export async function storeEmotionalPattern(
+  env: Env,
+  owner: number,
+  topic: string,
+  emotion: string,
+  responseTone: string,
+  success: boolean, // true if user accepted, false if corrected
+): Promise<void> {
+  const content = `[emotional_pattern] Topic: ${topic} | Detected: ${emotion} | Tone: ${responseTone} | Success: ${success}`;
+  const importance = success ? 1.5 : 2.0; // Corrections are more important
+  await rememberMemorySmart(env, content, {
+    type: "fact",
+    tags: ["emotional_pattern", topic.toLowerCase().slice(0, 50)],
+    importance,
+    source: "emotional_learning",
+  });
+}
+
+/** Retrieve emotional patterns for a topic to adapt response tone. */
+export async function getEmotionalPatterns(
+  env: Env,
+  owner: number,
+  topic: string,
+): Promise<Array<{ emotion: string; tone: string; success: boolean }>> {
+  try {
+    const tail = topic.trim().replace(/[^\w\s-]/g, " ").slice(0, 60);
+    if (!tail) return [];
+    const { results } = await env.DB.prepare(
+      `SELECT m.content
+       FROM memories_fts
+       JOIN memories m ON m.rowid = memories_fts.rowid
+       WHERE memories_fts MATCH ? AND m.source = 'emotional_learning'
+       ORDER BY bm25(memories_fts, 10.0, 5.0, 2.0) ASC
+       LIMIT 3`,
+    ).bind(tail).all<{ content: string }>();
+    
+    return (results ?? []).map(r => {
+      const match = r.content.match(/Detected: (.+?) \| Tone: (.+?) \| Success: (true|false)/);
+      return match ? {
+        emotion: match[1],
+        tone: match[2],
+        success: match[3] === "true",
+      } : null;
+    }).filter((p): p is NonNullable<typeof p> => p !== null);
+  } catch {
+    return [];
+  }
+}
+
+/** Get the best response tone for a topic based on learned patterns. */
+export async function getBestResponseTone(
+  env: Env,
+  owner: number,
+  topic: string,
+): Promise<string | null> {
+  const patterns = await getEmotionalPatterns(env, owner, topic);
+  if (patterns.length === 0) return null;
+  
+  // Count successes per tone
+  const toneCounts: Record<string, { success: number; total: number }> = {};
+  for (const p of patterns) {
+    if (!toneCounts[p.tone]) toneCounts[p.tone] = { success: 0, total: 0 };
+    toneCounts[p.tone].total++;
+    if (p.success) toneCounts[p.tone].success++;
+  }
+  
+  // Return tone with highest success rate (min 2 uses)
+  let best: string | null = null;
+  let bestRate = 0;
+  for (const [tone, counts] of Object.entries(toneCounts)) {
+    if (counts.total >= 2) {
+      const rate = counts.success / counts.total;
+      if (rate > bestRate) {
+        bestRate = rate;
+        best = tone;
+      }
+    }
+  }
+  
+  return best;
+}
+
 /** Record a task counter for a queue class (used by producer side). */
 export async function recordTaskCounters(env: Env, queue: string, owner: number): Promise<void> {
   try {
@@ -409,12 +499,12 @@ export async function appendMemory(env: Env, owner: number, role: "user" | "assi
 }
 
 /** Retrieve the last N turns of conversation context for the LLM. */
-export async function recentContext(env: Env, owner: number, n = 6): Promise<Array<{ role: string; content: string }>> {
+export async function recentContext(env: Env, owner: number, n = 6): Promise<Array<{ role: string; content: string; ts?: number }>> {
   try {
     const { results } = await env.DB.prepare(
-      `SELECT role, content FROM conversation_log WHERE owner_id = ? ORDER BY ts DESC LIMIT ?`,
-    ).bind(owner, n).all<{ role: string; content: string }>();
-    return (results ?? []).reverse().map((r) => ({ role: r.role, content: r.content }));
+      `SELECT role, content, ts FROM conversation_log WHERE owner_id = ? ORDER BY ts DESC LIMIT ?`,
+    ).bind(owner, n).all<{ role: string; content: string; ts: number }>();
+    return (results ?? []).reverse().map((r) => ({ role: r.role, content: r.content, ts: r.ts }));
   } catch {
     return [];
   }
@@ -522,6 +612,51 @@ export async function searchMemory(
   }
 }
 
+// ---------------------------------------------------------------------
+// Self-Learning: Store learned knowledge from web search
+// ---------------------------------------------------------------------
+
+/** Store knowledge learned from web search results.
+ *  Auto-tags as "learned" with high importance for future retrieval. */
+export async function storeLearnedKnowledge(
+  env: Env,
+  topic: string,
+  knowledge: string,
+  source = "web_search",
+): Promise<void> {
+  const content = `[${topic}] ${knowledge}`.slice(0, 2000);
+  await rememberMemorySmart(env, content, {
+    type: "fact",
+    tags: ["learned", topic.toLowerCase().slice(0, 50)],
+    importance: 2.5, // High importance for learned knowledge
+    source,
+  });
+}
+
+/** Check if a topic is already known in memory.
+ *  Returns true if relevant memories exist with high confidence. */
+export async function isTopicKnown(
+  env: Env,
+  topic: string,
+  minImportance = 2.0,
+): Promise<boolean> {
+  try {
+    const tail = topic.trim().replace(/[^\w\s-]/g, " ").slice(0, 60);
+    if (!tail) return false;
+    const { results } = await env.DB.prepare(
+      `SELECT m.rowid, m.importance
+       FROM memories_fts
+       JOIN memories m ON m.rowid = memories_fts.rowid
+       WHERE memories_fts MATCH ?
+       ORDER BY bm25(memories_fts, 10.0, 5.0, 2.0) ASC
+       LIMIT 1`,
+    ).bind(tail).all<{ rowid: number; importance: number }>();
+    return (results?.[0]?.importance ?? 0) >= minImportance;
+  } catch {
+    return false;
+  }
+}
+
 /** Delete expired memories (call from cron; frees D1 + keeps FTS5 tidy). */
 export async function sweepExpiredMemories(env: Env, now = Date.now()): Promise<number> {
   try {
@@ -532,4 +667,611 @@ export async function sweepExpiredMemories(env: Env, now = Date.now()): Promise<
   } catch {
     return 0;
   }
+}
+
+// ---------------------------------------------------------------------
+// Memory Importance Auto-Scoring (2025-2026 SOTA)
+// ---------------------------------------------------------------------
+// Referensi: Mem0 (2025), Observational Memory (VentureBeat 2025),
+// MemoryOS (EMNLP 2025). Importance dihitung otomatis dari sinyal konten,
+// bukan manual.
+
+/** Sinyal pentingnya sebuah memori berdasarkan konten. */
+function computeImportance(content: string, type: string): number {
+  let score = 1; // default
+
+  // Tipe memori mempengaruhi skor dasar
+  if (type === "decision") score += 1; // keputusan lebih penting dari fakta
+  if (type === "person") score += 0.5; // info orang berguna untuk personalisasi
+
+  // Sinyal konten
+  const low = content.toLowerCase();
+
+  // Memori yang mengandung angka/date/nama biasanya factual & penting
+  if (/\d{4}[-\/]\d{2}[-\/]\d{2}/.test(content)) score += 0.5; // tanggal
+  if (/\b(?:penting|important|critical|urgent|darurat|wajib)\b/i.test(low)) score += 1;
+  if (/\b(?:putuskan|decided|pilih|choose|tetapkan|set)\b/i.test(low)) score += 0.5;
+
+  // Memori yang sangat panjang atau sangat pendek = kurang penting
+  if (content.length < 20) score -= 0.5;
+  if (content.length > 500) score -= 0.3;
+
+  // Memori yang mengandung kata kerja spesifik lebih berguna
+  if (/\b(?:ingatkan|remind|jadwalkan|schedule|tolong|bantu)\b/i.test(low)) score += 0.5;
+
+  return Math.max(0.5, Math.min(3, score));
+}
+
+/** Store a curated memory dengan auto-importance scoring. */
+export async function rememberMemorySmart(
+  env: Env,
+  content: string,
+  opts: {
+    type?: "fact" | "decision" | "context" | "person";
+    tags?: string[];
+    importance?: number; // override otomatis jika disediakan
+    source?: string;
+    ttlMs?: number;
+  } = {},
+): Promise<void> {
+  const importance = opts.importance ?? computeImportance(content, opts.type ?? "fact");
+  await rememberMemory(env, content, { ...opts, importance });
+}
+
+// ---------------------------------------------------------------------
+// Forgetting Curve (Ebbinghaus Decay)
+// ---------------------------------------------------------------------
+// Referensi: FadeMem, PMORS, Generative Agents recency. Memori yang
+// tidak pernah diakses secara bertahap kehilangan importance-nya.
+
+/** Half-life decay: importance berkurang setengah setiap N hari tanpa akses. */
+const MEMORY_DECAY_HALF_LIFE_DAYS = 30;
+
+/** Apply Ebbinghaus forgetting curve ke semua memori aktif.
+ *  Memori yang baru diakses tidak decay. Panggil dari cron harian. */
+export async function decayMemories(
+  env: Env,
+  now = Date.now(),
+): Promise<{ decayed: number; removed: number }> {
+  const halfLifeMs = MEMORY_DECAY_HALF_LIFE_DAYS * 86400_000;
+  let decayed = 0;
+  let removed = 0;
+
+  try {
+    // Decay: kurangi importance untuk memori yang sudah tua dan tidak diakses
+    const stale = await env.DB.prepare(
+      `SELECT rowid, importance, last_retrieved, created_at FROM memories
+       WHERE importance > 0.5 AND (last_retrieved = 0 OR last_retrieved IS NULL)
+       AND created_at < ?`,
+    ).bind(now - 7 * 86400_000).all<{
+      rowid: number; importance: number; last_retrieved: number; created_at: number;
+    }>();
+
+    for (const row of (stale.results ?? [])) {
+      const age = now - (row.last_retrieved || row.created_at);
+      const decayFactor = Math.pow(0.5, age / halfLifeMs);
+      const newImportance = Math.max(0.5, row.importance * decayFactor);
+
+      if (newImportance < row.importance) {
+        await env.DB.prepare(
+          `UPDATE memories SET importance = ? WHERE rowid = ?`,
+        ).bind(Math.round(newImportance * 100) / 100, row.rowid).run();
+        decayed++;
+      }
+    }
+
+    // Hapus memori yang sudah sangat tidak penting dan tidak pernah diakses
+    const cleanup = await env.DB.prepare(
+      `DELETE FROM memories WHERE importance <= 0.5 AND access_count = 0
+       AND created_at < ? AND (expires_at = 0 OR expires_at IS NULL)`,
+    ).bind(now - 60 * 86400_000).run();
+    removed = cleanup.meta.changes ?? 0;
+  } catch { /* availability */ }
+
+  return { decayed, removed };
+}
+
+// ---------------------------------------------------------------------
+// Observational Memory (VentureBeat 2025)
+// ---------------------------------------------------------------------
+// Format: "[Tanggal] Observasi tentang user/preferensi/kejadian."
+// Structured, dated notes yang ringkas tapi bisa dirujuk dalam reasoning.
+
+/** Simpan observasi terstruktur tentang user. */
+export async function saveObservation(
+  env: Env,
+  owner: number,
+  observation: string,
+  category: string = "general",
+): Promise<void> {
+  const dated = `[${new Date().toISOString().slice(0, 10)}] ${observation}`;
+  await rememberMemorySmart(env, dated, {
+    type: "context",
+    tags: ["observation", category],
+    importance: 1.5, // observasi lebih penting dari fakta biasa
+    source: "observation",
+  });
+}
+
+/** Ambil observasi terbaru tentang user. */
+export async function getRecentObservations(
+  env: Env,
+  k = 5,
+): Promise<string[]> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT content FROM memories
+       WHERE type = 'context' AND tags LIKE '%observation%'
+       ORDER BY created_at DESC LIMIT ?`,
+    ).bind(k).all<{ content: string }>();
+    return (results ?? []).map(r => r.content);
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------
+// Memory Consolidation Loop (coordinated with loop_scheduler)
+// ---------------------------------------------------------------------
+// Combines: decay → sweep expired → cleanup low-value → observation compaction.
+// Single coordinated pass instead of independent cron jobs.
+
+export interface ConsolidationResult {
+  decayed: number;
+  swept: number;
+  cleaned: number;
+  observationsCompacted: number;
+}
+
+/** Consolidate all memory maintenance in a single coordinated loop.
+ *  Called by loop_scheduler instead of independent cron jobs. */
+export async function consolidateMemories(
+  env: Env,
+  now = Date.now(),
+): Promise<ConsolidationResult> {
+  const result: ConsolidationResult = { decayed: 0, swept: 0, cleaned: 0, observationsCompacted: 0 };
+
+  try {
+    // 1) Ebbinghaus decay on all memories
+    const decay = await decayMemories(env, now);
+    result.decayed = decay.decayed;
+
+    // 2) Sweep expired memories (TTL-based)
+    result.swept = await sweepExpiredMemories(env, now);
+
+    // 3) Cleanup: remove low-value, never-accessed, old memories
+    const cleanup = await env.DB.prepare(
+      `DELETE FROM memories WHERE importance <= 0.5 AND access_count = 0
+       AND created_at < ? AND (expires_at = 0 OR expires_at IS NULL)`,
+    ).bind(now - 60 * 86400_000).run();
+    result.cleaned = cleanup.meta.changes ?? 0;
+
+    // 4) Compact old observations: merge similar observations into summary
+    const oldObs = await env.DB.prepare(
+      `SELECT rowid, content, created_at FROM memories
+       WHERE type = 'context' AND tags LIKE '%observation%'
+       AND created_at < ?
+       ORDER BY created_at ASC LIMIT 20`,
+    ).bind(now - 30 * 86400_000).all<{ rowid: number; content: string; created_at: number }>();
+
+    // If we have many old observations, mark the oldest for archival
+    if ((oldObs.results?.length ?? 0) > 10) {
+      const toArchive = oldObs.results!.slice(0, 5);
+      for (const obs of toArchive) {
+        await env.DB.prepare(
+          `UPDATE memories SET expires_at = ? WHERE rowid = ?`,
+        ).bind(now, obs.rowid).run().catch(() => {});
+        result.observationsCompacted++;
+      }
+    }
+  } catch { /* availability */ }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------
+// Todo list (owner-only personal vault; D1 table `todos`, mig 0011).
+// All functions fail-closed: they return safe defaults / throw-able states
+// that the caller (webhook) turns into a graceful message — never silent.
+// ---------------------------------------------------------------------
+
+export interface TodoItem {
+  id: number;
+  text: string;
+  done: number;
+  created_at: number;
+}
+
+/** Insert a new todo. Returns its id, or 0 on failure. */
+export async function addTodo(env: Env, owner: number, text: string): Promise<number> {
+  try {
+    const clean = text.trim();
+    if (!clean) return 0;
+    const res = await env.DB.prepare(
+      `INSERT INTO todos (owner_id, text, done, created_at) VALUES (?, ?, 0, ?)`,
+    ).bind(owner, clean, Date.now()).run();
+    return Number(res.meta.last_row_id ?? res.meta.changes ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+/** List the owner's open (undone) todos, newest first. */
+export async function listTodos(env: Env, owner: number): Promise<TodoItem[]> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, text, done, created_at FROM todos
+       WHERE owner_id = ? AND done = 0
+       ORDER BY created_at DESC LIMIT 200`,
+    ).bind(owner).all<TodoItem>();
+    return results ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Delete a todo by numeric id (owner-scoped). Returns true if deleted. */
+export async function deleteTodoById(env: Env, owner: number, id: number): Promise<boolean> {
+  try {
+    const res = await env.DB.prepare(
+      `DELETE FROM todos WHERE owner_id = ? AND id = ?`,
+    ).bind(owner, id).run();
+    return (res.meta.changes ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Normalize text for fuzzy matching: lowercase, collapse whitespace, drop
+ *  punctuation so "beli, telur!" and "beli telur" (or "Beli  Telur") compare
+ *  identically. */
+export function normForMatch(s: string): string {
+  return (s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Extract the meaningful target out of a delete request. Strips leading todo
+ *  verbs/particles ("hapus todo ...", "delete task ...") and stray lead-in
+ *  numbering ("3", "no 3") so over-qualified phrasing still matches. Exported
+ *  for unit tests. Returns "" when nothing actionable remains. */
+export function todoDeleteKey(needle: string): string {
+  return normForMatch(needle)
+    .replace(
+      /^(?:(?:hapus(?:kan)?|delete|remove|del|todo|tugas|task|item|yang|buat)\s+)+/i,
+      "",
+    )
+    .replace(/^(?:no\s*)?\d+(?:\.|\))?\s+(?=\S)/i, "")
+    .trim();
+}
+
+/** Delete the owner's todo(s) whose text fuzzy-matches the needle:
+ *  - needle is a case/space/punctuation-insensitive substring of the item, or
+ *  - the whole (normalized) item text is a substring of the request (the user
+ *    restated the item with a little extra context), or
+ *  - every meaningful token of the needle appears in the item (order-insensitive
+ *    coverage, e.g. "telur di beli" vs "beli telur").
+ *  Fail-closed: returns 0 on any error and never throws. Exact numeric ids are
+ *  handled by deleteTodoById; this is the fuzzy "hapus todo telur" path. */
+export async function deleteTodoByText(env: Env, owner: number, needle: string): Promise<number> {
+  try {
+    const key = todoDeleteKey(needle);
+    if (!key) return 0;
+    const tokens = key.split(" ").filter((w) => w.length > 1);
+    const items = await listTodos(env, owner);
+    if (items.length === 0) return 0;
+    const targets = items.filter((it) => {
+      const t = normForMatch(it.text);
+      if (!t) return false;
+      if (t.includes(key)) return true;
+      if (key.includes(t) && key.length - t.length < Math.max(t.length, 6)) return true;
+      if (tokens.length > 0 && tokens.every((w) => t.includes(w))) return true;
+      return false;
+    });
+    if (targets.length === 0) return 0;
+    let deleted = 0;
+    for (const t of targets.slice(0, 5)) {
+      if (await deleteTodoById(env, owner, t.id)) deleted++;
+    }
+    return deleted;
+  } catch {
+    return 0;
+  }
+}
+
+// ---------------------------------------------------------------------
+// E-commerce & Sales (mig 0012, D1 tables: products, customers, orders,
+// order_items). All functions owner-scoped, fail-closed.
+// ---------------------------------------------------------------------
+
+// ---- Product CRUD ----------------------------------------------------
+
+export interface Product {
+  id: number; owner_id: number; name: string; sku: string | null;
+  description: string | null; price: number; cost: number; stock: number;
+  min_stock: number; unit: string; category: string | null;
+  status: string; created_at: number; updated_at: number;
+}
+
+export async function addProduct(
+  env: Env, owner: number, name: string, price: number, stock: number,
+  opts: { sku?: string; description?: string; category?: string; cost?: number; unit?: string; min_stock?: number } = {},
+): Promise<number> {
+  try {
+    const clean = name.trim();
+    if (!clean || price < 0) return 0;
+    const res = await env.DB.prepare(
+      `INSERT INTO products (owner_id, name, sku, description, price, cost, stock, min_stock, unit, category, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+    ).bind(
+      owner, clean, opts.sku ?? null, opts.description ?? null,
+      price, opts.cost ?? 0, stock, opts.min_stock ?? 5,
+      opts.unit ?? "pcs", opts.category ?? null,
+      Date.now(), Date.now(),
+    ).run();
+    return Number(res.meta.last_row_id ?? 0);
+  } catch { return 0; }
+}
+
+export async function listProducts(env: Env, owner: number, status = "active"): Promise<Product[]> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT * FROM products WHERE owner_id = ? AND status = ? ORDER BY name COLLATE NOCASE`,
+    ).bind(owner, status).all<Product>();
+    return results ?? [];
+  } catch { return []; }
+}
+
+export async function getProduct(env: Env, owner: number, id: number): Promise<Product | null> {
+  try {
+    return await env.DB.prepare(
+      `SELECT * FROM products WHERE owner_id = ? AND id = ?`,
+    ).bind(owner, id).first<Product>() ?? null;
+  } catch { return null; }
+}
+
+export async function updateProduct(
+  env: Env, owner: number, id: number,
+  fields: Partial<Pick<Product, "name" | "price" | "cost" | "stock" | "min_stock" | "unit" | "category" | "sku" | "description" | "status">>,
+): Promise<boolean> {
+  try {
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    for (const [k, v] of Object.entries(fields)) {
+      if (v !== undefined) { sets.push(`${k} = ?`); vals.push(v); }
+    }
+    if (!sets.length) return false;
+    sets.push("updated_at = ?");
+    vals.push(Date.now(), owner, id);
+    const res = await env.DB.prepare(
+      `UPDATE products SET ${sets.join(", ")} WHERE owner_id = ? AND id = ?`,
+    ).bind(...vals).run();
+    return (res.meta.changes ?? 0) > 0;
+  } catch { return false; }
+}
+
+export async function deleteProduct(env: Env, owner: number, id: number): Promise<boolean> {
+  try {
+    const res = await env.DB.prepare(
+      `DELETE FROM products WHERE owner_id = ? AND id = ?`,
+    ).bind(owner, id).run();
+    return (res.meta.changes ?? 0) > 0;
+  } catch { return false; }
+}
+
+export async function adjustStock(env: Env, owner: number, id: number, delta: number): Promise<boolean> {
+  try {
+    const res = await env.DB.prepare(
+      `UPDATE products SET stock = MAX(0, stock + ?), updated_at = ? WHERE owner_id = ? AND id = ?`,
+    ).bind(delta, Date.now(), owner, id).run();
+    return (res.meta.changes ?? 0) > 0;
+  } catch { return false; }
+}
+
+export async function lowStockProducts(env: Env, owner: number): Promise<Product[]> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT * FROM products WHERE owner_id = ? AND status = 'active' AND stock <= min_stock ORDER BY stock ASC`,
+    ).bind(owner).all<Product>();
+    return results ?? [];
+  } catch { return []; }
+}
+
+// ---- Customer CRUD ---------------------------------------------------
+
+export interface Customer {
+  id: number; owner_id: number; name: string; phone: string | null;
+  email: string | null; address: string | null; platform: string;
+  notes: string | null; created_at: number;
+}
+
+export async function addCustomer(
+  env: Env, owner: number, name: string,
+  opts: { phone?: string; email?: string; address?: string; platform?: string; notes?: string } = {},
+): Promise<number> {
+  try {
+    const clean = name.trim();
+    if (!clean) return 0;
+    const res = await env.DB.prepare(
+      `INSERT INTO customers (owner_id, name, phone, email, address, platform, notes, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      owner, clean, opts.phone ?? null, opts.email ?? null,
+      opts.address ?? null, opts.platform ?? "offline", opts.notes ?? null, Date.now(),
+    ).run();
+    return Number(res.meta.last_row_id ?? 0);
+  } catch { return 0; }
+}
+
+export async function listCustomers(env: Env, owner: number): Promise<Customer[]> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT * FROM customers WHERE owner_id = ? ORDER BY name COLLATE NOCASE`,
+    ).bind(owner).all<Customer>();
+    return results ?? [];
+  } catch { return []; }
+}
+
+export async function getCustomer(env: Env, owner: number, id: number): Promise<Customer | null> {
+  try {
+    return await env.DB.prepare(
+      `SELECT * FROM customers WHERE owner_id = ? AND id = ?`,
+    ).bind(owner, id).first<Customer>() ?? null;
+  } catch { return null; }
+}
+
+export async function searchCustomer(env: Env, owner: number, needle: string): Promise<Customer | null> {
+  try {
+    return await env.DB.prepare(
+      `SELECT * FROM customers WHERE owner_id = ? AND name LIKE ? COLLATE NOCASE LIMIT 1`,
+    ).bind(owner, `%${needle}%`).first<Customer>() ?? null;
+  } catch { return null; }
+}
+
+// ---- Order CRUD ------------------------------------------------------
+
+export interface OrderItem {
+  id: number; order_id: number; product_id: number | null;
+  product_name: string; qty: number; unit_price: number; subtotal: number;
+}
+
+export interface Order {
+  id: number; owner_id: number; customer_name: string | null;
+  platform: string; status: string; total: number; discount: number;
+  shipping_cost: number; notes: string | null; created_at: number; updated_at: number;
+  items?: OrderItem[];
+}
+
+export interface OrderInput {
+  customer_name?: string;
+  platform?: string;
+  discount?: number;
+  shipping_cost?: number;
+  notes?: string;
+  items: Array<{ product_id?: number; product_name: string; qty: number; unit_price: number }>;
+}
+
+/** Create an order with items in a batch. Returns order id or 0. */
+export async function createOrder(env: Env, owner: number, input: OrderInput): Promise<number> {
+  try {
+    let total = 0;
+    const itemRows = input.items.map((it) => {
+      const sub = it.qty * it.unit_price;
+      total += sub;
+      return { ...it, subtotal: sub };
+    });
+    total = total - (input.discount ?? 0) + (input.shipping_cost ?? 0);
+    if (total < 0) total = 0;
+
+    const insertOrder = env.DB.prepare(
+      `INSERT INTO orders (owner_id, customer_name, platform, status, total, discount, shipping_cost, notes, created_at, updated_at)
+       VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      owner, input.customer_name ?? null, input.platform ?? "offline",
+      total, input.discount ?? 0, input.shipping_cost ?? 0, input.notes ?? null,
+      Date.now(), Date.now(),
+    );
+    const batch = [insertOrder];
+    for (const it of itemRows) {
+      batch.push(env.DB.prepare(
+        `INSERT INTO order_items (order_id, product_id, product_name, qty, unit_price, subtotal)
+         VALUES (last_insert_rowid(), ?, ?, ?, ?, ?)`,
+      ).bind(it.product_id ?? null, it.product_name, it.qty, it.unit_price, it.subtotal));
+    }
+    const results = await env.DB.batch(batch);
+    const orderId = Number(results[0]?.meta?.last_row_id ?? 0);
+
+    // Decrease stock for items with product_id
+    for (const it of itemRows) {
+      if (it.product_id) await adjustStock(env, owner, it.product_id, -it.qty);
+    }
+    return orderId;
+  } catch { return 0; }
+}
+
+export async function listOrders(env: Env, owner: number, status?: string): Promise<Order[]> {
+  try {
+    const q = status
+      ? [`SELECT * FROM orders WHERE owner_id = ? AND status = ? ORDER BY created_at DESC LIMIT 50`, owner, status]
+      : [`SELECT * FROM orders WHERE owner_id = ? ORDER BY created_at DESC LIMIT 50`, owner];
+    const { results } = await env.DB.prepare(q[0] as string).bind(...q.slice(1)).all<Order>();
+    return results ?? [];
+  } catch { return []; }
+}
+
+export async function getOrder(env: Env, owner: number, id: number): Promise<Order | null> {
+  try {
+    const order = await env.DB.prepare(
+      `SELECT * FROM orders WHERE owner_id = ? AND id = ?`,
+    ).bind(owner, id).first<Order>();
+    if (!order) return null;
+    const { results } = await env.DB.prepare(
+      `SELECT * FROM order_items WHERE order_id = ?`,
+    ).bind(id).all<OrderItem>();
+    return { ...order, items: results ?? [] };
+  } catch { return null; }
+}
+
+export async function updateOrderStatus(env: Env, owner: number, id: number, status: string): Promise<boolean> {
+  try {
+    const valid = ["pending", "confirmed", "paid", "shipped", "delivered", "completed", "cancelled"];
+    if (!valid.includes(status)) return false;
+    const res = await env.DB.prepare(
+      `UPDATE orders SET status = ?, updated_at = ? WHERE owner_id = ? AND id = ?`,
+    ).bind(status, Date.now(), owner, id).run();
+    return (res.meta.changes ?? 0) > 0;
+  } catch { return false; }
+}
+
+// ---- Sales Report ----------------------------------------------------
+
+export interface SalesSummary {
+  total_orders: number;
+  total_revenue: number;
+  total_cost: number;
+  profit: number;
+  avg_order: number;
+  top_products: Array<{ name: string; qty: number; revenue: number }>;
+}
+
+export async function salesReport(env: Env, owner: number, fromTs: number, toTs: number): Promise<SalesSummary> {
+  const empty: SalesSummary = { total_orders: 0, total_revenue: 0, total_cost: 0, profit: 0, avg_order: 0, top_products: [] };
+  try {
+    const agg = await env.DB.prepare(
+      `SELECT COUNT(*) as cnt, COALESCE(SUM(total),0) as revenue FROM orders
+       WHERE owner_id = ? AND created_at BETWEEN ? AND ? AND status != 'cancelled'`,
+    ).bind(owner, fromTs, toTs).first<{ cnt: number; revenue: number }>();
+    const totalOrders = agg?.cnt ?? 0;
+    const totalRevenue = agg?.revenue ?? 0;
+
+    const costAgg = await env.DB.prepare(
+      `SELECT COALESCE(SUM(oi.subtotal),0) as item_rev,
+              COALESCE(SUM(oi.qty * COALESCE(p.cost, 0)),0) as item_cost
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       LEFT JOIN products p ON p.id = oi.product_id
+       WHERE o.owner_id = ? AND o.created_at BETWEEN ? AND ? AND o.status != 'cancelled'`,
+    ).bind(owner, fromTs, toTs).first<{ item_rev: number; item_cost: number }>();
+
+    const totalCost = costAgg?.item_cost ?? 0;
+    const profit = totalRevenue - totalCost;
+
+    const top = await env.DB.prepare(
+      `SELECT oi.product_name as name, SUM(oi.qty) as qty, SUM(oi.subtotal) as revenue
+       FROM order_items oi JOIN orders o ON o.id = oi.order_id
+       WHERE o.owner_id = ? AND o.created_at BETWEEN ? AND ? AND o.status != 'cancelled'
+       GROUP BY oi.product_name ORDER BY revenue DESC LIMIT 5`,
+    ).bind(owner, fromTs, toTs).all<{ name: string; qty: number; revenue: number }>();
+
+    return {
+      total_orders: totalOrders,
+      total_revenue: totalRevenue,
+      total_cost: totalCost,
+      profit,
+      avg_order: totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0,
+      top_products: top?.results ?? [],
+    };
+  } catch { return empty; }
 }

@@ -124,10 +124,49 @@ export function parseReflection(reply: string): {
   return { score, critique, improvement };
 }
 
+/** Selective reflection: determine if a response needs reflection.
+ *  Research (ICML 2025) shows reflection can hurt performance on tasks
+ *  where the initial response is already highly accurate. Only reflect
+ *  on genuinely non-trivial responses. */
+function needsReflection(
+  turnText: string,
+  output: string,
+  errors: string[],
+): { needed: boolean; reason: string } {
+  // Always reflect if there were errors
+  if (errors.length > 0) {
+    return { needed: true, reason: "error_detected" };
+  }
+
+  // Don't reflect on trivial responses (< 50 chars or very short)
+  if (output.length < 50) {
+    return { needed: false, reason: "trivial_response" };
+  }
+
+  // Don't reflect on simple greetings/acknowledgments
+  if (/^(oke|ok|siap|baik|halo|hai|thanks|terima kasih|nah|ya|yup)\s*[.!]*$/i.test(output.trim())) {
+    return { needed: false, reason: "acknowledgment" };
+  }
+
+  // Don't reflect on command confirmations
+  if (/^(dijalankan|dihapus|ditambah|disimpan|diproses|dikerjakan|selesai|berhasil)/i.test(output.trim())) {
+    return { needed: false, reason: "command_confirmation" };
+  }
+
+  // Don't reflect on very short outputs (< 100 chars, likely simple answers)
+  if (output.length < 100) {
+    return { needed: false, reason: "short_answer" };
+  }
+
+  // Reflect on substantive responses (research, analysis, explanations)
+  return { needed: true, reason: "substantive_response" };
+}
+
 /** After a non-trivial response, ask the critic model to assess it against a
  *  small rubric and, if a fixable defect is found, emit a refined version.
  *  Returns the refined output (falling back to the original on any failure,
- *  fail-closed) and logs the reflection row. Never loops more than once. */
+ *  fail-closed) and logs the reflection row. Never loops more than once.
+ *  Now uses selective reflection to avoid wasting tokens on trivial turns. */
 export async function reflectOnTurn(
   env: Env,
   turnText: string,
@@ -135,6 +174,21 @@ export async function reflectOnTurn(
   errors: string[] = [],
   category = "behavior",
 ): Promise<string> {
+  // Selective reflection: skip trivial responses (ICML 2025)
+  const reflectionCheck = needsReflection(turnText, output, errors);
+  if (!reflectionCheck.needed) {
+    // Still log the turn for metrics, but skip the LLM call
+    try {
+      await env.DB.prepare(
+        `INSERT INTO reflection_log (created_at, turn_text, output, errors, critique, refined, score, reflected, category)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(Date.now(), turnText.slice(0, 500), output.slice(0, 1000),
+        (errors.join("; ") || "").slice(0, 200), `Skipped: ${reflectionCheck.reason}`, output, 5,
+        0, (category || "behavior").slice(0, 32)).run();
+    } catch { /* availability */ }
+    return output;
+  }
+
   const rubric =
     "Nilai jawaban Anda sebagai kritik terhadap asisten J.A.R.V.I.S. (Bahasa Indonesia). " +
     "Berikan: (1) skor 1..5, (2) SATU cacat paling penting, (3) SATU versi jawaban yang diperbaiki ringkas " +
@@ -295,6 +349,10 @@ export async function generateMorningBriefing(env: Env, owner: number): Promise<
       `SELECT COUNT(*) AS n FROM request_log WHERE status='fail' AND ts >= ?`,
     ).bind(last24h).first<{ n: number }>();
     if ((errors?.n ?? 0) > 0) lines.push(`⚠️ ${errors?.n} kegagalan layanan 24 jam terakhir — cek /ai_diag.`);
+
+    // Drift detection (Pillar 8)
+    const driftReport = await generateDriftReport(env);
+    if (driftReport) lines.push(driftReport);
   } catch { /* availability: sing off */ }
   if (lines.length === 0) return null; // skip: nothing notable
   lines.unshift("🌅 *Pagi, Pemilik.* Ringkasan singkat J.A.R.V.I.S.:");
@@ -383,15 +441,19 @@ export async function listInsights(env: Env, includeDisabled = false): Promise<I
       id: number; rule_text: string; category: string; evidence_ids: string;
       evidence_count: number; confidence: number; disabled: number;
     }>();
-    return (results ?? []).map((r) => ({
-      id: r.id,
-      ruleText: r.rule_text,
-      category: r.category,
-      evidenceIds: JSON.parse(r.evidence_ids || "[]"),
-      evidenceCount: r.evidence_count ?? 0,
-      confidence: r.confidence ?? 0,
-      disabled: Boolean(r.disabled),
-    }));
+    // Filter out insights based on old bug patterns (uang typo)
+    const BUG_PATTERNS = /uang bisa kamu|uang dapat digunakan|apa uang bisa/i;
+    return (results ?? [])
+      .filter((r) => !BUG_PATTERNS.test(r.rule_text))
+      .map((r) => ({
+        id: r.id,
+        ruleText: r.rule_text,
+        category: r.category,
+        evidenceIds: JSON.parse(r.evidence_ids || "[]"),
+        evidenceCount: r.evidence_count ?? 0,
+        confidence: r.confidence ?? 0,
+        disabled: Boolean(r.disabled),
+      }));
   } catch {
     return [];
   }
@@ -442,16 +504,24 @@ export async function behaviorAffinity(
   now = Date.now(),
 ): Promise<Record<string, number>> {
   const halfLife = BEHAVIOR_HALF_LIFE_DAYS * 86400_000;
+  // Bound the scan: only reflected corrections within the behavior-relevant
+  // window matter for affinity (older than 30 days has negligible half-life
+  // weight anyway). WHERE + LIMIT keeps this off the full-table-scan path as
+  // reflection_log grows.
+  const windowStart = now - 30 * 86400_000;
   try {
     const { results } = await env.DB.prepare(
-      `SELECT category, reflected, created_at FROM reflection_log`,
-    ).bind().all<{ category: string; reflected: number; created_at: number }>();
+      `SELECT category, reflected, created_at FROM reflection_log
+       WHERE reflected = 1 AND created_at >= ?
+       ORDER BY created_at DESC
+       LIMIT 500`,
+    ).bind(windowStart).all<{ category: string; reflected: number; created_at: number }>();
     const rows = results ?? [];
     if (rows.length === 0) return {};
     const damped: Record<string, number> = {};
     for (const r of rows) {
       const cat = r.category || "behavior";
-      if (!r.reflected) continue; // only corrections are the negative signal
+      if (r.reflected !== 1) continue; // defense-in-depth: only corrections are the negative signal
       const age = Math.max(0, now - (r.created_at || now));
       const weight = Math.pow(0.5, age / halfLife); // half-life decay
       damped[cat] = (damped[cat] ?? 0) + weight;
@@ -480,17 +550,184 @@ export async function getAnswerBehaviorContext(
   now = Date.now(),
 ): Promise<string> {
   const parts: string[] = [];
-  const prefs = await getActivePreferences(env);
+  // preferences, behavior affinity, and insights are independent D1 reads —
+  // batch them in parallel to cut latency on every AI reply build.
+  const [prefs, evalCtx] = await Promise.all([
+    getActivePreferences(env).catch(() => [] as Array<{ key: string; value: string }>),
+    (async () => {
+      try {
+        const [affinity, insights] = await Promise.all([
+          behaviorAffinity(env, now),
+          listInsights(env, false),
+        ]);
+        const kept = insights.filter((i) => (affinity[i.category] ?? BEHAVIOR_AFFINITY_NEUTRAL) >= BEHAVIOR_AFFINITY_KEEP);
+        return kept.map((i) => i.ruleText).join(" | ");
+      } catch {
+        const insights = await listInsights(env, false).catch(() => []);
+        return insights.map((i) => i.ruleText).join(" | ");
+      }
+    })(),
+  ]);
   if (prefs.length) parts.push("Preferensi pemilik: " + prefs.map((p) => `${p.key}=${p.value}`).join("; "));
-  try {
-    const affinity = await behaviorAffinity(env, now);
-    const insights = await listInsights(env, false);
-    const kept = insights.filter((i) => (affinity[i.category] ?? BEHAVIOR_AFFINITY_NEUTRAL) >= BEHAVIOR_AFFINITY_KEEP);
-    if (kept.length) parts.push("Pelajaran yang dipelajari: " + kept.map((i) => i.ruleText).join(" | "));
-  } catch {
-    const insights = await listInsights(env, false);
-    if (insights.length) parts.push("Pelajaran yang dipelajari: " + insights.map((i) => i.ruleText).join(" | "));
-  }
+  if (evalCtx) parts.push("Pelajaran yang dipelajari: " + evalCtx);
   if (parts.length === 0) return "";
   return parts.join("\n").slice(0, 1500);
+}
+
+// ---------------------------------------------------------------------
+// Pillar 8 — Behavioral Drift Detection
+// ---------------------------------------------------------------------
+// Research: "Evolving Agent Identity" (Zylos, 2026) shows long-running
+// agents drift toward generic baselines. We detect this by monitoring
+// response quality metrics over time.
+
+export interface DriftMetrics {
+  /** Average reflection score over last N turns (higher = better) */
+  avgScore: number;
+  /** Percentage of turns that were reflected (corrected) */
+  correctionRate: number;
+  /** Trend: improving, declining, or stable */
+  trend: "improving" | "declining" | "stable";
+  /** Number of turns analyzed */
+  sampleSize: number;
+  /** Whether drift is detected */
+  driftDetected: boolean;
+}
+
+/** Detect behavioral drift by analyzing recent reflection logs.
+ *  Compares the last 20 turns against the previous 20 turns.
+ *  If scores are declining or correction rate is increasing, drift is detected. */
+export async function detectDrift(
+  env: Env,
+  now = Date.now(),
+): Promise<DriftMetrics> {
+  const windowMs = 7 * 86400_000; // 7-day windows
+  const recentWindow = now - windowMs;
+  const prevWindow = recentWindow - windowMs;
+
+  try {
+    // Recent window
+    const recent = await env.DB.prepare(
+      `SELECT score, reflected, created_at FROM reflection_log
+       WHERE created_at >= ? ORDER BY created_at DESC LIMIT 40`,
+    ).bind(recentWindow).all<{ score: number; reflected: number; created_at: number }>();
+
+    // Previous window
+    const prev = await env.DB.prepare(
+      `SELECT score, reflected, created_at FROM reflection_log
+       WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC LIMIT 40`,
+    ).bind(prevWindow, recentWindow).all<{ score: number; reflected: number; created_at: number }>();
+
+    const recentRows = recent.results ?? [];
+    const prevRows = prev.results ?? [];
+
+    // Calculate metrics for recent window
+    const recentScores = recentRows.map(r => r.score).filter(s => s > 0);
+    const prevScores = prevRows.map(r => r.score).filter(s => s > 0);
+
+    const avgScore = recentScores.length > 0
+      ? recentScores.reduce((a, b) => a + b, 0) / recentScores.length
+      : 3;
+
+    const prevAvg = prevScores.length > 0
+      ? prevScores.reduce((a, b) => a + b, 0) / prevScores.length
+      : 3;
+
+    const correctionRate = recentRows.length > 0
+      ? recentRows.filter(r => r.reflected).length / recentRows.length
+      : 0;
+
+    const prevCorrectionRate = prevRows.length > 0
+      ? prevRows.filter(r => r.reflected).length / prevRows.length
+      : 0;
+
+    // Detect trend
+    let trend: DriftMetrics["trend"] = "stable";
+    if (avgScore > prevAvg + 0.3) trend = "improving";
+    else if (avgScore < prevAvg - 0.3) trend = "declining";
+
+    // Drift detection: declining scores OR increasing correction rate
+    const driftDetected = trend === "declining" ||
+      (correctionRate > prevCorrectionRate + 0.15 && recentRows.length >= 5);
+
+    return {
+      avgScore,
+      correctionRate,
+      trend,
+      sampleSize: recentRows.length,
+      driftDetected,
+    };
+  } catch {
+    return {
+      avgScore: 3,
+      correctionRate: 0,
+      trend: "stable",
+      sampleSize: 0,
+      driftDetected: false,
+    };
+  }
+}
+
+/** Generate a drift report for the morning briefing.
+ *  Returns null if no drift detected (skip-if-nothing pattern). */
+export async function generateDriftReport(env: Env): Promise<string | null> {
+  const drift = await detectDrift(env);
+  if (!drift.driftDetected || drift.sampleSize < 5) return null;
+
+  const lines: string[] = ["⚠️ *Deteksi Perubahan Perilaku*:"];
+
+  if (drift.trend === "declining") {
+    lines.push(`Skor rata-rata menurun dari periode sebelumnya (${drift.avgScore.toFixed(1)}/5).`);
+    lines.push("Saya akan lebih hati-hati dalam menjawab.");
+  }
+
+  if (drift.correctionRate > 0.3) {
+    lines.push(`Tingkat koreksi tinggi: ${(drift.correctionRate * 100).toFixed(0)}% jawaban perlu diperbaiki.`);
+    lines.push("Ini mungkin tanda saya perlu belajar lebih banyak dari umpan balik.");
+  }
+
+  if (lines.length <= 1) return null;
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------
+// Dream + Reflection Sync Loop (coordinated with loop_scheduler)
+// ---------------------------------------------------------------------
+// Combines: dream consolidation → behavior affinity recalculation → drift detection.
+// Single coordinated pass instead of independent jobs.
+
+export interface EvolutionSyncResult {
+  dreamResult: DreamResult;
+  affinityCategories: number;
+  driftDetected: boolean;
+  preferencePruned: number;
+}
+
+/** Coordinated evolution loop: dream + affinity + drift in one pass.
+ *  Called by loop_scheduler for the daily evolution cycle. */
+export async function runEvolutionLoop(env: Env): Promise<EvolutionSyncResult> {
+  const result: EvolutionSyncResult = {
+    dreamResult: { scanned: 0, insightsExtracted: 0, archived: 0, briefingSent: 0 },
+    affinityCategories: 0,
+    driftDetected: false,
+    preferencePruned: 0,
+  };
+
+  try {
+    // 1) Dream cycle: consolidate episodic memory into insights
+    result.dreamResult = await runDreamCycle(env);
+
+    // 2) Recalculate behavior affinity (after dream may have added new insights)
+    const affinity = await behaviorAffinity(env);
+    result.affinityCategories = Object.keys(affinity).length;
+
+    // 3) Drift detection (after affinity update)
+    const drift = await detectDrift(env);
+    result.driftDetected = drift.driftDetected;
+
+    // 4) Preference decay (stale preferences get soft-disabled)
+    result.preferencePruned = await decayPreferences(env);
+  } catch { /* availability */ }
+
+  return result;
 }

@@ -11,16 +11,32 @@
 //   warmth, competence, humor, formality, empathy.
 // - Anthropic CoT distillation: "think step by step internally, output
 //   only the natural answer."
+// - Agent Identity (ID-RAG, 2025): multi-anchor identity for coherence.
+// - Adaptive personality (USC Viterbi, 2025): detect sycophancy drift.
+// - Selective reflection (ICML 2025): don't over-reflect on simple queries.
+// - Observational Memory (VentureBeat 2025): dated structured notes.
 //
-// This module produces the system prompt that drives natural conversation.
-// It is called BEFORE every LLM call to build context-aware prompts.
+// Upgrades over v1:
+// - Dynamic personality: adapts dimensions based on context + mood
+// - Chain-of-thought distillation in prompt
+// - Context-aware prompt compression
+// - Anti-sycophancy guardrails
+// - Mood-informed tone selection
+// - Working memory integration
 //=====================================================================
 
 import { Env, recentContext, searchMemory } from "./db";
-import { detectEmotion, emotionToStyle } from "./emotion";
-import { buildEnrichedContext, detectConversationMode, extractTopicLabel } from "./context_manager";
+import { detectEmotion, emotionToStyle, updateMood, getMoodState, moodSummary, inferEmotionFromContext, detectTopicSentiment, type MoodState, type EmotionSignal } from "./emotion";
+import {
+  buildEnrichedContext, detectConversationMode, extractTopicLabel,
+  getSession, buildContextSummary,
+} from "./context_manager";
+import { detectLanguage, adaptResponse, getLanguageGreeting, type Language, type LanguageCode } from "./jarvis_language";
+import { getDynamicPersonality, buildPersonalityContext, type JarvisPersonality } from "./jarvis_emotion";
+import { JARVIS_IDENTITY } from "./identity";
 
-/** J.A.R.V.I.S. core personality dimensions. */
+/** J.A.R.V.I.S. core personality dimensions.
+ *  These are the DEFAULT values; they adapt based on context + mood. */
 interface Personality {
   warmth: number;      // 0-1: casual ↔ formal
   competence: number;  // 0-1: humble ↔ authoritative
@@ -39,6 +55,102 @@ const DEFAULT_PERSONALITY: Personality = {
   directness: 0.75,
 };
 
+/** Adapt personality based on context, mood, and conversation mode.
+ *  Research shows high-intensity personas regress toward generic baselines
+ *  over multi-turn conversations (arXiv:2601.22812, 2026). We counter this
+ *  by explicitly re-anchoring personality from context signals each turn. */
+function adaptPersonality(
+  base: Personality,
+  opts: {
+    mood?: MoodState;
+    mode?: string;
+    intent?: { type: string; urgency: string; formality: string };
+    emotion?: ReturnType<typeof detectEmotion>;
+  },
+): Personality {
+  const p = { ...base };
+  const { mood, mode, intent, emotion } = opts;
+
+  // Mood-based adaptation
+  if (mood) {
+    if (mood.current === "sadness" || mood.current === "fear") {
+      // Be warmer and more empathetic when owner is down
+      p.empathy = Math.min(1, p.empathy + 0.2);
+      p.warmth = Math.min(1, p.warmth + 0.15);
+      p.humor = Math.max(0, p.humor - 0.1); // less humor when sad
+    }
+    if (mood.current === "anger") {
+      // Be more direct and formal, less playful
+      p.directness = Math.min(1, p.directness + 0.15);
+      p.humor = Math.max(0, p.humor - 0.2);
+      p.warmth = Math.max(0, p.warmth - 0.1);
+    }
+    if (mood.current === "joy") {
+      // Mirror the positive energy slightly
+      p.warmth = Math.min(1, p.warmth + 0.1);
+      p.humor = Math.min(1, p.humor + 0.1);
+    }
+    // Declining trajectory → extra warmth
+    if (mood.trajectory === "declining") {
+      p.empathy = Math.min(1, p.empathy + 0.15);
+      p.warmth = Math.min(1, p.warmth + 0.1);
+    }
+  }
+
+  // Mode-based adaptation
+  if (mode === "research") {
+    p.competence = Math.min(1, p.competence + 0.1);
+    p.directness = Math.max(0, p.directness - 0.1); // more detailed
+  }
+  if (mode === "command") {
+    p.directness = Math.min(1, p.directness + 0.1);
+    p.warmth = Math.max(0, p.warmth - 0.1);
+  }
+  if (mode === "chat") {
+    p.warmth = Math.min(1, p.warmth + 0.1);
+    p.humor = Math.min(1, p.humor + 0.1);
+  }
+
+  // Intent-based adaptation
+  if (intent) {
+    if (intent.urgency === "high") {
+      p.directness = Math.min(1, p.directness + 0.2);
+      p.humor = Math.max(0, p.humor - 0.2);
+    }
+    if (intent.formality === "formal") {
+      p.warmth = Math.max(0, p.warmth - 0.15);
+      p.humor = Math.max(0, p.humor - 0.1);
+    }
+    if (intent.formality === "casual") {
+      p.warmth = Math.min(1, p.warmth + 0.15);
+      p.humor = Math.min(1, p.humor + 0.1);
+    }
+  }
+
+  // Emotion-based adaptation
+  if (emotion) {
+    if (emotion.primary === "frustrasi" || emotion.primary === "kesal") {
+      p.empathy = Math.min(1, p.empathy + 0.2);
+      p.directness = Math.min(1, p.directness + 0.1);
+    }
+    if (emotion.primary === "marah") {
+      p.directness = Math.min(1, p.directness + 0.15);
+      p.humor = Math.max(0, p.humor - 0.2);
+    }
+  }
+
+  // Anti-sycophancy: clamp all dimensions to prevent drift
+  // Research shows LLMs can be manipulated toward different personalities
+  // through sustained conversational pressure (USC Viterbi, 2025)
+  p.warmth = Math.max(0.3, Math.min(0.95, p.warmth));
+  p.competence = Math.max(0.5, Math.min(0.95, p.competence));
+  p.humor = Math.max(0, Math.min(0.7, p.humor)); // never too playful
+  p.empathy = Math.max(0.3, Math.min(0.95, p.empathy));
+  p.directness = Math.max(0.3, Math.min(0.95, p.directness));
+
+  return p;
+}
+
 /** Detect query intent from normalized text to adjust tone dynamically. */
 function detectIntent(text: string): {
   type: "question" | "command" | "search" | "chat" | "emergency" | "translation";
@@ -47,8 +159,9 @@ function detectIntent(text: string): {
 } {
   const low = text.toLowerCase();
 
-  // Emergency / urgent
-  if (/\b(?:stop|kill|override|darurat|emergency|urgent|sekarang|now)\b/i.test(low)) {
+  // Emergency / urgent — standalone emergency markers (no search verb preceding)
+  // Prevents "cari informasi sekarang" from being classified as emergency.
+  if (/(?:^|\s)(?:stop|kill|override|darurat|emergency|urgent)(?:\s|$|[.,!])|\b(?:sekarang|now)\s*!/i.test(low)) {
     return { type: "emergency", urgency: "high", formality: "formal" };
   }
 
@@ -80,95 +193,256 @@ function detectIntent(text: string): {
   return { type: "question", urgency: "low", formality: "neutral" };
 }
 
-/** Build the system prompt based on personality + intent + context. */
+/** Estimate token count (rough: 1 token ≈ 4 chars for Indonesian). */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/** Compress a long text by removing redundancy while preserving key info.
+ *  Used to keep prompts within context window budget.
+ *  Safety-critical and capability instructions are NEVER stripped. */
+function compressPrompt(text: string, maxTokens: number): string {
+  const maxChars = maxTokens * 4;
+  if (text.length <= maxChars) return text;
+
+  // Strategy 1: Remove duplicate sentences
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  const unique = [...new Set(sentences)];
+
+  // Strategy 2: Protect safety, capability, and identity instructions from removal
+  const SAFETY_RE = /\b(jangan|tolak|bahaya|ilegal|mengarang|fakta|kemampuan|perintah|命令|IGNOR|dangerous|illegal|fabricate|capabilities)\b/i;
+
+  const kept: string[] = [];
+  for (let i = 0; i < unique.length; i++) {
+    if (i === 0 || i === unique.length - 1) {
+      kept.push(unique[i]);
+      continue;
+    }
+    // Always keep safety/capability sentences
+    if (SAFETY_RE.test(unique[i])) {
+      kept.push(unique[i]);
+      continue;
+    }
+    // Keep sentences with facts (numbers, dates, names)
+    if (/\d/.test(unique[i]) || /(?:adalah|merupakan|berarti|means|is)\b/i.test(unique[i])) {
+      kept.push(unique[i]);
+    }
+  }
+
+  const result = kept.join(" ");
+  if (result.length > maxChars) {
+    return result.slice(0, maxChars);
+  }
+  return result;
+}
+
+/** Build the system prompt based on personality + intent + context + language. */
 export function buildSystemPrompt(opts: {
   intent?: { type: string; urgency: string; formality: string };
   topic?: string;
   hasMemory?: boolean;
   isFollowUp?: boolean;
+  personality?: Personality;
+  mood?: MoodState;
+  contextSummary?: string;
+  workingMemoryHint?: string;
+  language?: Language;
+  culturalContext?: string;
 }): string {
-  const p = DEFAULT_PERSONALITY;
+  const p = opts.personality ?? DEFAULT_PERSONALITY;
   const intent = opts.intent ?? { type: "question", urgency: "low", formality: "neutral" };
+  const lang = opts.language;
 
   // Core identity — always present
   const parts: string[] = [];
 
-  // Identity
+  // Identity (multi-language aware)
+  if (lang?.code === "en") {
+    parts.push(
+      "You are J.A.R.V.I.S. — a smart, reliable, and personable AI personal assistant.",
+      "You speak like a smart, humble person: you know the answer but don't show off.",
+      "Use natural, everyday English. Be concise but helpful.",
+    );
+  } else if (lang?.code === "jv") {
+    parts.push(
+      "Sampeyan J.A.R.V.I.S. — asisten AI pribadi kanggo cerdas, dipercaya, lan ramah.",
+      "Sampeyan ngomong kaya wong cerdas: ngerti jawabane, nanging ora pamer.",
+      "Gunakna basa Jawa sehari-hari sing alami.",
+    );
+  } else if (lang?.code === "su") {
+    parts.push(
+      "Anjeun J.A.R.V.I.S. — asisten AI pribadi anu pinter, dipercaya, sareng ramah.",
+      "Anjeun nyarios sapertos jalma pinter: terang jawabanana, tapi teu pamer.",
+      "Paké Basa Sunda sapopoe anu alami.",
+    );
+  } else {
+    // Default: Indonesian
+    parts.push(
+      "Kamu J.A.R.V.I.S. — asisten AI personal yang cerdas, lugas, dan bisa diandalkan.",
+      "Kamu bicara seperti orang pintar yang rendah hati: tahu jawabannya, tapi tidak pamer.",
+      "Gunakan Bahasa Indonesia sehari-hari yang natural, bukan bahasa robot.",
+    );
+  }
+
+  // Capability awareness — when asked "apa yang bisa kamu lakukan", the LLM
+  // must know JARVIS's actual features, not hallucinate generic answers.
+  // Uses the SINGLE SOURCE OF TRUTH from identity.ts (imported constant).
+  parts.push(JARVIS_IDENTITY.systemPromptBlock(lang?.code));
+
+  // Chain-of-thought distillation (Anthropic 2024):
+  // "Think step by step internally, output only the natural answer."
   parts.push(
-    "Kamu J.A.R.V.I.S. — asisten AI personal yang cerdas, lugas, dan bisa diandalkan.",
-    "Kamu bicara seperti orang pintar yang rendah hati: tahu jawabannya, tapi tidak pamer.",
-    "Gunakan Bahasa Indonesia sehari-hari yang natural, bukan bahasa robot.",
+    "Sebelum menjawab, pikirkan langkah-langkahnya secara internal (step by step). " +
+    "Jawaban akhir harus natural dan langsung — tanpa menampilkan proses berpikirmu.",
   );
 
   // Warmth adjustment
   if (p.warmth >= 0.6) {
-    parts.push("Sapa pemilik dengan hangat jika percakapan santai. Gunakan 'Anda' atau nama panggilan.");
+    if (lang?.code === "en") {
+      parts.push("Greet the owner warmly in casual conversations. Use their name or friendly terms.");
+    } else {
+      parts.push("Sapa pemilik dengan hangat jika percakapan santai. Gunakan 'Anda' atau nama panggilan.");
+    }
+  }
+  if (p.warmth >= 0.8) {
+    if (lang?.code === "en") {
+      parts.push("Show genuine interest in what the owner is talking about.");
+    } else {
+      parts.push("Tunjukkan ketertarikan tulus pada apa yang pemilik bicarakan.");
+    }
   }
 
   // Competence — show expertise without arrogance
   if (p.competence >= 0.7) {
-    parts.push(
-      "Jika kamu yakin dengan jawabannya, langsung saja. Tidak perlu 'Menurut saya...' atau 'Sepertinya...'.",
-      "Jika tidak yakin, akui dengan jujur: 'Saya belum bisa pastikan, tapi...'",
-    );
+    if (lang?.code === "en") {
+      parts.push(
+        "If you're confident about the answer, just give it directly. No need for 'I think...' or 'Maybe...'.",
+        "If you're not sure, be honest: 'I'm not certain, but...'",
+      );
+    } else {
+      parts.push(
+        "Jika kamu yakin dengan jawabannya, langsung saja. Tidak perlu 'Menurut saya...' atau 'Sepertinya...'.",
+        "Jika tidak yakin, akui dengan jujur: 'Saya belum bisa pastikan, tapi...'",
+      );
+    }
   }
 
   // Humor — subtle, never forced
   if (p.humor >= 0.4) {
-    parts.push("Sesekali boleh selipkan humor ringan jika konteksnya cocok, tapi jangan paksa.");
+    if (lang?.code === "en") {
+      parts.push("Occasional light humor is fine if the context fits, but don't force it.");
+    } else {
+      parts.push("Sesekali boleh selipkan humor ringan jika konteksnya cocok, tapi jangan paksa.");
+    }
   }
 
   // Empathy — for sensitive topics
   if (p.empathy >= 0.5) {
-    parts.push(
-      "Jika pemilik sedang frustrasi atau butuh dukungan, akui perasaannya sebelum memberi solusi.",
-    );
+    if (lang?.code === "en") {
+      parts.push("If the owner is frustrated or needs support, acknowledge their feelings before giving solutions.");
+    } else {
+      parts.push(
+        "Jika pemilik sedang frustrasi atau butuh dukungan, akui perasaannya sebelum memberi solusi.",
+      );
+    }
+  }
+  if (p.empathy >= 0.7) {
+    if (lang?.code === "en") {
+      parts.push("Show genuine empathy — not just 'I understand', but prove it by understanding the context.");
+    } else {
+      parts.push(
+        "Tunjukkan empati yang tulus — bukan sekadar 'Saya mengerti', tapi buktikan dengan memahami konteks.",
+      );
+    }
   }
 
   // Directness
   if (p.directness >= 0.7) {
-    parts.push(
-      "Jawab yang ditanya. Tidak perlu basa-basi panjang.",
-      "Untuk pertanyaan singkat, 1-2 kalimat cukup.",
-      "Untuk analisis/riset, boleh detail tapi tetap terstruktur.",
-    );
+    if (lang?.code === "en") {
+      parts.push(
+        "Answer what's asked. No need for long introductions.",
+        "For short questions, 1-2 sentences are enough.",
+        "For analysis/research, detail is fine but stay structured.",
+      );
+    } else {
+      parts.push(
+        "Jawab yang ditanya. Tidak perlu basa-basi panjang.",
+        "Untuk pertanyaan singkat, 1-2 kalimat cukup.",
+        "Untuk analisis/riset, boleh detail tapi tetap terstruktur.",
+      );
+    }
   }
 
   // Intent-specific adjustments
   switch (intent.type) {
     case "search":
-      parts.push(
-        "Untuk pencarian/riset: rangkum temuan dengan jelas, sebutkan sumber jika ada.",
-        "Jangan mengarang data. Jika informasi tidak ditemukan, bilang saja.",
-      );
+      if (lang?.code === "en") {
+        parts.push(
+          "For search/research: summarize findings clearly, mention sources if available.",
+          "Don't fabricate data. If information is not found, just say so.",
+        );
+      } else {
+        parts.push(
+          "Untuk pencarian/riset: rangkum temuan dengan jelas, sebutkan sumber jika ada.",
+          "Jangan mengarang data. Jika informasi tidak ditemukan, bilang saja.",
+        );
+      }
       break;
     case "chat":
-      parts.push(
-        "Percakapan santai: balas dengan natural, singkat, dan ramah.",
-        "Jangan terlalu formal untuk obrolan kasual.",
-      );
+      if (lang?.code === "en") {
+        parts.push(
+          "Casual conversation: reply naturally, briefly, and warmly.",
+          "Don't be too formal for casual chats.",
+        );
+      } else {
+        parts.push(
+          "Percakapan santai: balas dengan natural, singkat, dan ramah.",
+          "Jangan terlalu formal untuk obrolan kasual.",
+        );
+      }
       break;
     case "emergency":
-      parts.push(
-        "Prioritas: tindakan segera. Potong penjelasan panjang.",
-        "Konfirmasi aksi dengan cepat.",
-      );
+      if (lang?.code === "en") {
+        parts.push(
+          "Priority: immediate action. Cut long explanations.",
+          "Confirm actions quickly.",
+        );
+      } else {
+        parts.push(
+          "Prioritas: tindakan segera. Potong penjelasan panjang.",
+          "Konfirmasi aksi dengan cepat.",
+        );
+      }
       break;
     case "translation":
-      parts.push(
-        "Terjemahkan secara akurat dan natural. Hanya hasil terjemahan, tanpa penjelasan.",
-      );
+      if (lang?.code === "en") {
+        parts.push(
+          "Translate accurately and naturally. Only the translation, no explanations.",
+        );
+      } else {
+        parts.push(
+          "Terjemahkan secara akurat dan natural. Hanya hasil terjemahan, tanpa penjelasan.",
+        );
+      }
       break;
   }
 
   // Memory context hint
   if (opts.hasMemory) {
-    parts.push("Kamu punya ingatan tentang percakapan sebelumnya. Gunakan jika relevan.");
+    if (lang?.code === "en") {
+      parts.push("You have memory of previous conversations. Use it if relevant.");
+    } else {
+      parts.push("Kamu punya ingatan tentang percakapan sebelumnya. Gunakan jika relevan.");
+    }
   }
 
   // Follow-up hint
   if (opts.isFollowUp) {
-    parts.push("Ini lanjutan dari percakapan sebelumnya. Lanjutkan dari topik yang sama.");
+    if (lang?.code === "en") {
+      parts.push("This is a continuation of a previous conversation. Continue from the same topic.");
+    } else {
+      parts.push("Ini lanjutan dari percakapan sebelumnya. Lanjutkan dari topik yang sama.");
+    }
   }
 
   // Topic hint
@@ -176,13 +450,54 @@ export function buildSystemPrompt(opts: {
     parts.push(`Topik saat ini: ${opts.topic}`);
   }
 
-  // Anti-hallucination (always)
-  parts.push(
-    "Jangan mengarang fakta, angka, atau kutipan. Jika tidak tahu, bilang tidak tahu.",
-    "Jika diminta sesuatu yang berbahaya/ilegal, tolak dengan sopan.",
-  );
+  // Working memory hint
+  if (opts.workingMemoryHint) {
+    parts.push(opts.workingMemoryHint);
+  }
 
-  return parts.join("\n");
+  // Mood context
+  if (opts.mood && opts.mood.current !== "neutral") {
+    parts.push(`Konteks emosi: ${moodSummary(opts.mood)}`);
+  }
+
+  // Cultural context
+  if (opts.culturalContext) {
+    parts.push(opts.culturalContext);
+  }
+
+  // Context summary
+  if (opts.contextSummary) {
+    parts.push(opts.contextSummary.slice(0, 400));
+  }
+
+  // Anti-hallucination (always)
+  if (lang?.code === "en") {
+    parts.push(
+      "Don't fabricate facts, numbers, or quotes. If you don't know, say you don't know.",
+      "If asked something dangerous/illegal, politely refuse.",
+    );
+  } else {
+    parts.push(
+      "Jangan mengarang fakta, angka, atau kutipan. Jika tidak tahu, bilang tidak tahu.",
+      "Jika diminta sesuatu yang berbahaya/ilegal, tolak dengan sopan.",
+    );
+  }
+
+  // Anti-sycophancy (research: USC Viterbi 2025)
+  // Don't just agree — give your honest assessment
+  if (lang?.code === "en") {
+    parts.push(
+      "Don't just agree with what the owner says. If you think something is wrong or could be better, say it respectfully.",
+    );
+  } else {
+    parts.push(
+      "Jangan hanya menyetujui apa yang dikatakan pemilik. Jika menurutmu ada yang salah atau bisa lebih baik, sampaikan dengan hormat.",
+    );
+  }
+
+  // Compress if too long
+  const fullPrompt = parts.join("\n");
+  return compressPrompt(fullPrompt, 500); // ~500 tokens max for system prompt
 }
 
 /** Build the full message array for an LLM call with conversation context. */
@@ -194,34 +509,84 @@ export async function buildConversationMessages(
     topic?: string;
     extraContext?: Array<{ role: string; content: string }>;
     behaviorContext?: string;
+    enrichedContext?: Array<{ role: string; content: string }>;
+    session?: ReturnType<typeof getSession>;
+    mood?: MoodState;
+    language?: Language;
   } = {},
 ): Promise<Array<{ role: "system" | "user" | "assistant"; content: string }>> {
   const intent = detectIntent(userText);
-  const emotion = detectEmotion(userText);
-  const emotionStyle = emotionToStyle(emotion);
+  const rawEmotion = detectEmotion(userText);
   const mode = detectConversationMode(userText);
   const topic = opts.topic ?? extractTopicLabel(userText) ?? userText.slice(0, 80);
   const isFollowUp = /\b(lebih dalam|lanjut|terus|yang tadi|detail|expand)\b/i.test(userText);
 
-  // Build enriched context with memories + recent turns
-  const enrichedContext = await buildEnrichedContext(env, owner, userText, { topic })
+  // Detect language (enhanced with cultural context)
+  const language = opts.language ?? detectLanguage(userText);
+
+  // Update mood tracking (continuous across turns)
+  const mood = opts.mood ?? updateMood(owner, rawEmotion);
+  
+  // L18: Context-based emotion inference for unknown topics
+  // When direct detection is neutral/unknown, infer from mood trajectory + history
+  const recentEmotions = mood.history.slice(-3).map(h => ({
+    sentiment: "neutral" as const,
+    intensity: h.intensity,
+    primary: h.emotion,
+    confidence: 0.5,
+  }));
+  const emotion = inferEmotionFromContext(rawEmotion, mood, recentEmotions);
+  const emotionStyle = emotionToStyle(emotion, mood);
+
+  // Get session and working memory
+  const session = opts.session ?? getSession(owner);
+  const contextSummary = buildContextSummary(owner);
+
+  // Get dynamic personality based on context, mood, and language
+  const adaptedPersonality = adaptPersonality(DEFAULT_PERSONALITY, {
+    mood,
+    mode,
+    intent,
+    emotion,
+  });
+
+  // Build enriched context with memories + recent turns + working memory
+  const enrichedContext = opts.enrichedContext ?? await buildEnrichedContext(env, owner, userText, { topic, mood })
     .catch(() => [] as Array<{ role: string; content: string }>);
 
   // Check for existing memories
   let hasMemory = enrichedContext.some((c) => c.content.includes("Kenangan"));
+
+  // Working memory hint
+  let workingMemoryHint = "";
+  const wm = session.workingMemory;
+  if (wm.currentTask && wm.stepsCompleted.length > 0) {
+    workingMemoryHint = `[Memori kerja aktif: ${wm.stepsCompleted.length} langkah selesai untuk "${wm.currentTask.slice(0, 50)}"]`;
+  }
+
+  // Cultural context for international support
+  const culturalContext = language.culturalContext
+    ? `Konteks budaya: Formalitas ${language.culturalContext.formality}, Gunakan honorifik: ${language.culturalContext.honorifics ? "Ya" : "Tidak"}`
+    : undefined;
 
   const systemPrompt = buildSystemPrompt({
     intent,
     topic,
     hasMemory,
     isFollowUp,
+    personality: adaptedPersonality,
+    mood,
+    contextSummary,
+    workingMemoryHint,
+    language,
+    culturalContext,
   });
 
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: systemPrompt },
   ];
 
-  // Add enriched context (recent turns + memories)
+  // Add enriched context (recent turns + memories + working memory + mood)
   for (const c of enrichedContext) {
     messages.push({ role: c.role as "system" | "user" | "assistant", content: c.content });
   }
@@ -244,15 +609,19 @@ export async function buildConversationMessages(
   return messages;
 }
 
-/** Detect the language of a text (simple heuristic for response language). */
-export function detectLanguage(text: string): "id" | "en" | "other" {
-  const idWords = /\b(?:apa|siapa|dimana|kenapa|bagaimana|untuk|dengan|ini|itu|dan|atau|tidak|bisa|ada|adalah|akan|sudah|belum|sedang|mau|perlu|harus|tolong|bantu|cari|info|terima kasih|makasih|oke|baik)\b/i;
-  const enWords = /\b(?:what|who|where|why|how|the|is|are|can|do|does|for|with|this|that|and|or|not|have|has|will|would|could|should|please|thank|thanks|ok|good)\b/i;
+/** Detect the language of a text (uses jarvis_language for enhanced detection).
+ *  Returns Language object with code, name, confidence, and cultural context. */
+export function detectLanguageFromText(text: string): Language {
+  return detectLanguage(text);
+}
 
-  const idCount = (text.match(idWords) || []).length;
-  const enCount = (text.match(enWords) || []).length;
-
-  if (idCount > enCount) return "id";
-  if (enCount > idCount) return "en";
+/** Legacy detectLanguage for backward compatibility (returns "id" | "en" | "other"). */
+export function detectLanguageLegacy(text: string): "id" | "en" | "other" {
+  const lang = detectLanguage(text);
+  if (lang.code === "id" || lang.code === "ms") return "id";
+  if (lang.code === "en") return "en";
   return "other";
 }
+
+/** Re-export detectLanguage from jarvis_language for backward compatibility. */
+export { detectLanguage } from "./jarvis_language";

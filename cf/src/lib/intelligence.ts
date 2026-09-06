@@ -22,7 +22,7 @@
 import { Env, searchMemory, recentContext, appendMemory } from "./db";
 import {
   detectEmotion, updateMood, getMoodState,
-  emotionToStyle, moodSummary,
+  emotionToStyle, moodSummary, inferEmotionFromContext, detectTopicSentiment,
   type EmotionSignal, type MoodState,
 } from "./emotion";
 import { detectLanguage, type Language } from "./jarvis_language";
@@ -35,11 +35,12 @@ import { buildConversationMessages } from "./conversation";
 import {
   llmRespond, searchAndSynthesize, extractTopic,
   isFollowUpQuery, resolveFollowUpAnchor,
-  parseTranslate, translateText,
+  parseTranslate, translateText, understandUserWants,
+  generateImagePrompt, generateImage, sniffImageMime,
 } from "./ai";
 import {
   isResearchClass, orchestrateResearch,
-  isDesignIntent, orchestrateDesign,
+  isDesignIntent,
 } from "./subagents";
 import { reflectOnTurn, getAnswerBehaviorContext } from "./evolution";
 import { buildFinalReply } from "./response_formatter";
@@ -63,7 +64,7 @@ export interface Perception {
 
 /** Intent classification result. */
 export interface IntentResult {
-  type: "question" | "command" | "search" | "chat" | "emergency" | "translation" | "design" | "self_referential";
+  type: "question" | "command" | "search" | "chat" | "emergency" | "translation" | "design" | "self_referential" | "understand";
   urgency: "low" | "medium" | "high";
   formality: "casual" | "neutral" | "formal";
   confidence: number;
@@ -72,7 +73,7 @@ export interface IntentResult {
 
 /** Strategy decision — how the brain will handle this message. */
 export interface Strategy {
-  approach: "simple_llm" | "search_synthesize" | "orchestrate_research" | "orchestrate_design" | "translate" | "self_referential";
+  approach: "simple_llm" | "search_synthesize" | "orchestrate_research" | "orchestrate_design" | "translate" | "self_referential" | "understand_intent";
   depth: "shallow" | "medium" | "deep";
   providerPreference: "any" | "fast" | "thorough";
   riskLevel: "safe" | "caution" | "blocked";
@@ -86,6 +87,8 @@ export interface IntelligenceResponse {
   source: string;
   latencyMs: number;
   reflection: { shouldReflect: boolean; topic: string | null };
+  /** Optional rendered visual (flux image) accompanying design intents. */
+  image?: { bytes: Uint8Array; mime: string };
 }
 
 // ============================================================================
@@ -145,14 +148,23 @@ export async function perceive(
   text: string,
 ): Promise<Perception> {
   // Parallel perception tasks (independent of each other)
-  const [language, emotion, session] = await Promise.all([
+  const [language, rawEmotion, session] = await Promise.all([
     Promise.resolve(detectLanguage(text)),
     Promise.resolve(detectEmotion(text)),
     Promise.resolve(getSession(owner)),
   ]);
 
   const mood = getMoodState(owner);
-  updateMood(owner, emotion);
+  updateMood(owner, rawEmotion);
+  
+  // L18: Context-based emotion inference for unknown topics
+  const recentEmotions = mood.history.slice(-3).map(h => ({
+    sentiment: "neutral" as const,
+    intensity: h.intensity,
+    primary: h.emotion,
+    confidence: 0.5,
+  }));
+  const emotion = inferEmotionFromContext(rawEmotion, mood, recentEmotions);
 
   const mode = detectConversationMode(text);
   const isFollowUp = isFollowUpQuery(text);
@@ -184,7 +196,7 @@ export async function perceive(
 
 /**
  * Unified intent classifier — combines signals from multiple sources.
- * Priority: self-referential > emergency > design > translate > search > command > chat > question
+ * Priority: self-referential > emergency > design > translate > search > command > chat > question > understand
  */
 function classifyIntent(text: string, topic: string | null): IntentResult {
   const low = text.toLowerCase();
@@ -199,9 +211,16 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
     return { type: "emergency", urgency: "high", formality: "formal", confidence: 0.9, entities: {} };
   }
 
-  // Design engineering intent
+  // Design engineering intent. Synonymous design keywords (video, film, clip,
+  // reels, tiktok, dll.) also carry non-design meanings — so keep pure
+  // recommendation/descriptive questions ("film apa yang bagus?") on the
+  // question path, while creation phrasings ("buat video X") stay design.
   if (isDesignIntent(text)) {
-    return { type: "design", urgency: "medium", formality: "neutral", confidence: 0.85, entities: { topic: text.slice(0, 100) } };
+    const designAsk = /\b(?:apa|siapa|berapa|kapan|kenapa|mengapa|apakah|bagaimana|yang\s+(?:bagus|terbaik|recommended)|rekomendasi|referensi|mirip)\b/i.test(text);
+    const creationVerb = /\b(?:buat|bikin|bkin|buatin|desain|rancang|gambar|foto|animasi\s*kan|videokan|tolong|minta|mohon|coba|mau|ingin|pengen|bisa|boleh)\b/i.test(text);
+    if (!designAsk || creationVerb) {
+      return { type: "design", urgency: "medium", formality: "neutral", confidence: 0.85, entities: { topic: text.slice(0, 100) } };
+    }
   }
 
   // Translation
@@ -231,6 +250,18 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
   // Question
   if (/\b(?:apa|siapa|dimana|kapan|kenapa|mengapa|bagaimana|gmn|bgmn|berapa|apakah|akah)\b/i.test(low)) {
     return { type: "question", urgency: "low", formality: "neutral", confidence: 0.7, entities: {} };
+  }
+
+  // Unknown / vague intent — text we couldn't match to any known pattern.
+  // Instead of guessing with a low-confidence "question"/"command", mark it
+  // as "understand" so the brain asks the LLM to decode the user's actual
+  // want (or ask a natural clarifying question) rather than replying "Ok.".
+  // Heuristics: it's a real message (>=3 chars), not a bare emoji/whitespace,
+  // carries some information-bearing content, and is NOT just short chatter
+  // like "lol", "test", "ok" (those stay on the cheap LLM path).
+  const isNoise = /^(?:lol|lmao|wkwk|hehe|haha|test|tes|coba|iya|ya|nggak|ga|gak|tidak|ok|oke|okay|yoi|sip|noted|mksd|maksud|kenapa)\W*$/i.test(low);
+  if (low.length >= 3 && !/^[\s\W_]+$/.test(low) && /[a-z0-9\u00e0-\u024f]/i.test(low) && !isNoise) {
+    return { type: "understand", urgency: "low", formality: "neutral", confidence: 0.5, entities: {} };
   }
 
   return { type: "question", urgency: "low", formality: "neutral", confidence: 0.5, entities: {} };
@@ -316,6 +347,17 @@ export function decide(perception: Perception): Strategy {
     };
   }
 
+  // Unknown / vague intent → ASK the LLM to understand the user's want
+  // (answer directly if clear, or ask one natural clarifying question).
+  if (intent.type === "understand") {
+    return {
+      approach: "understand_intent",
+      depth: "medium",
+      providerPreference: "any",
+      riskLevel: "safe",
+    };
+  }
+
   // Command / chat / question → simple LLM
   return {
     approach: "simple_llm",
@@ -339,7 +381,7 @@ export async function act(
   text: string,
   perception: Perception,
   strategy: Strategy,
-): Promise<{ reply: string; source: string }> {
+): Promise<{ reply: string; source: string; image?: { bytes: Uint8Array; mime: string } }> {
   const { topic, enrichedContext, language } = perception;
 
   switch (strategy.approach) {
@@ -364,12 +406,26 @@ export async function act(
 
     case "orchestrate_design": {
       if (!topic) return { reply: "Topik tidak ditemukan.", source: "design" };
-      const anchor = isFollowUpQuery(text) ? resolveFollowUpAnchor(enrichedContext)?.prior ?? "" : "";
-      const result = await orchestrateDesign(env, owner, text, topic, anchor);
-      if (result) return { reply: result, source: "design" };
-      // Fallback to search
+      // The separate video-design capability was removed (free tier has no
+      // video model). Design intents now yield a concise design outline text
+      // PLUS a real flux image of the subject — flux is merged into the image
+      // generation path. Fail-closed: outline failure falls back to search;
+      // image failure degrades to text-only.
+      const outline = await llmRespond(env, `Buat konsep desain singkat (4-6 baris, markdown) untuk: "${text}".\nTermasuk: ide utama, gaya visual, warna dominan, dan elemen utama. Bahasa Indonesia. Jangan sebut storyboard/keyframe/video.` , {
+        topic: `desain-${topic}`,
+      }).catch(() => null);
+      let image: { bytes: Uint8Array; mime: string } | undefined;
+      try {
+        const promptText = text.length >= 3 ? text.slice(0, 250) : text;
+        const prompt = await generateImagePrompt(env, promptText);
+        const bytes = await generateImage(env, prompt).catch(() => null);
+        if (bytes && bytes.length > 0) image = { bytes, mime: sniffImageMime(bytes) };
+      } catch (e) {
+        console.error("orchestrate_design image failed:", String(e).slice(0, 120));
+      }
+      if (outline?.reply) return { reply: outline.reply.slice(0, 900), source: "design", image };
       const fallback = await searchAndSynthesize(env, owner, text, topic);
-      return { reply: fallback.reply ?? "Gagal memproses desain.", source: "design_fallback" };
+      return { reply: fallback.reply ?? "Gagal memproses desain.", source: "design_fallback", image };
     }
 
     case "orchestrate_research": {
@@ -386,6 +442,24 @@ export async function act(
       if (!topic) return { reply: "Topik tidak ditemukan.", source: "search" };
       const result = await searchAndSynthesize(env, owner, text, topic);
       return { reply: result.reply ?? "Pencarian tidak menghasilkan jawaban.", source: result.source ?? "search" };
+    }
+
+    case "understand_intent": {
+      // Decode what the user actually WANTS, even for unknown/vague requests.
+      const result = await understandUserWants(env, text, owner, enrichedContext);
+      if (result.reply) {
+        return { reply: result.reply, source: result.understood ? "understand" : "understand_clarify" };
+      }
+      // Fallback: plain LLM, fail-closed.
+      const fallback = await llmRespond(env, text, {
+        topic: topic ?? undefined,
+        context: enrichedContext,
+        contextIsEnriched: true,
+      });
+      if (fallback.reply) {
+        return { reply: fallback.reply, source: fallback.source ?? "llm" };
+      }
+      return { reply: "Maaf, saya belum memahami permintaan ini. Bisa jelaskan lagi dengan lebih detail?", source: "understand_fallback" };
     }
 
     case "simple_llm":
@@ -460,7 +534,7 @@ export async function processIntelligence(
   const strategy = decide(perception);
 
   // Phase 3: ACT
-  const { reply, source } = await act(env, owner, text, perception, strategy);
+  const { reply, source, image } = await act(env, owner, text, perception, strategy);
 
   // Phase 4: REFLECT
   await reflect(env, owner, text, reply, perception, strategy);
@@ -476,6 +550,7 @@ export async function processIntelligence(
     strategy,
     source,
     latencyMs,
+    image,
     reflection: {
       shouldReflect: reply.length > 120,
       topic: perception.topic,

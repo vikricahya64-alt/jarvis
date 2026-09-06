@@ -58,6 +58,27 @@ export const MAX_VERIFIER_REPLY_LEN = 3000; // only verify long, multi-facet rep
 // A complex/multi-facet query must carry >= this many "faceting" signals.
 const FACET_RE = /\b(dan|or|atau|bandingkan|compare|perbandingan|analisis|analis|analisa|laporan|review|perkembangan|perbandingan|terbaru|bagaimana|langkah|tutorial|cara|vs|versus|pro[\s-]?kontra|kelebihan|kekurangan|dampak|trend|tren)\b/i;
 
+// Design intent detection and orchestration
+export function isDesignIntent(text: string): boolean {
+  // Detect visual/design intent for ANY subject (not just products).
+  // Covers images, video, logos, posters, UI, etc.
+  // Word-boundary form: the short, substring-heavy keywords (produk, reka,
+  // konsep, gambar, video) are matched as whole words only — so "produktif",
+  // "produksi", "konsepsi", "andai" never falsely trip design intent.
+  // NOTE: video is no longer a separate design capability — flux renders all
+  // visuals as images via generateImage (webhook free-text trigger). This
+  // intent still routes design-y requests to the outline+image pipeline.
+  const designKeywords =
+    /\b(?:desain|spesifikasi|produk|reka|konsep|gambar|video)\b|arsitektur|visual|ilustrasi|poster|logo|animasi|infografis|banner|mockup|sketsa|drawing|sketch|paint|ilustrat|design|ui\/ux|aplikasi|interface/i;
+  return designKeywords.test(text.toLowerCase());
+}
+export function orchestrateDesign(env: Env, owner: number, userText: string, topic: string, anchor?: string): Promise<string | null> {
+  // Fallback hook kept for backward compatibility with any code that still
+  // references it. Visual/design requests are handled by the free-text image
+  // trigger in the webhook (flux via generateImage).
+  return Promise.resolve(null);
+}
+
 // ---- typed schemas (Instructor-style validators) -----------------------
 interface ResearcherPlan {
   angles: string[]; // 1..MAX_ANGLES concrete search angles

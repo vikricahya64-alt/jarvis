@@ -49,6 +49,14 @@ export interface ModuleResult {
   traceMemory?: boolean;
   /** Optional: confidence score (0-1) for the reply. */
   confidence?: number;
+  /** Optional: semantic validation result (auto-filled by validator). */
+  validation?: {
+    valid: boolean;
+    issues: string[];
+    rule_id: string;
+  };
+  /** Optional: execution audit ID for tracing. */
+  audit_id?: string;
 }
 
 /** The single contract every module MUST implement. */
@@ -74,6 +82,15 @@ export interface JarvisModule {
   /** getCapabilities() — what this module can handle.
    *  Used by the orchestrator for routing. */
   getCapabilities(): ModuleCapability[];
+
+  /** validateOutput(output) — OPTIONAL semantic validation hook.
+   *  Called AFTER execute() to verify business logic integrity.
+   *  If not implemented, orchestrator uses default validation. */
+  validateOutput?(output: ModuleResult, context: CleanContext): Promise<{
+    valid: boolean;
+    issues: string[];
+    corrected_output?: ModuleResult;
+  }>;
 }
 
 /** ---------- CleanContext — What AI Sees ----------
@@ -111,6 +128,20 @@ export interface CleanContext {
 
   /** Optional: current conversation mode (from intelligence.ts). */
   conversationMode?: string;
+
+  /** Optional: adaptive context metadata (from context_adaptor). */
+  context_adaptation?: {
+    profile_id: string;
+    original_count: number;
+    adapted_count: number;
+    reason: string;
+  };
+
+  /** Optional: user emotional state for context sizing. */
+  user_state?: {
+    emotional: "stressed" | "calm" | "excited" | "frustrated" | "neutral";
+    complexity: "simple" | "moderate" | "complex" | "critical";
+  };
 }
 
 // ============================================================================
