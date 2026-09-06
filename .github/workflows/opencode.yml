@@ -2,13 +2,14 @@
 # Triggered via workflow_dispatch from JARVIS /opencode command.
 #
 # Secrets required in the GitHub repo:
-#   TELEGRAM_TOKEN   — Bot token (same as JARVIS) for delivering results
-#   GROQ_API_KEY     — JARVIS's own Groq key (100% free tier, no extra cost).
-#                      opencode reads GROQ_API_KEY natively for the Groq provider.
+#   TELEGRAM_TOKEN       — Bot token (same as JARVIS) for delivering results
+#   OPENROUTER_API_KEY   — JARVIS's OpenRouter key; grants access to many
+#                          :free models (100% free, no extra cost).
+#   GROQ_API_KEY         — (fallback candidate) JARVIS's Groq key, free tier.
 # Optional secrets/vars:
-#   OPENCODE_MODEL   — model id in "provider/model" form (default:
-#                      groq/openai/gpt-oss-120b, a free-tier Groq model
-#                      available on the shared GROQ_API_KEY).
+#   OPENCODE_MODEL       — model id in "provider/model" form (default:
+#                          openrouter/nvidia/nemotron-3-super-120b-a12b:free,
+#                          a strong free OpenRouter model). Set vars to override.
 
 name: opencode
 
@@ -54,7 +55,7 @@ jobs:
         id: model
         run: |
           MODEL="${{ vars.OPENCODE_MODEL }}"
-          if [ -z "$MODEL" ]; then MODEL="groq/openai/gpt-oss-120b"; fi
+          if [ -z "$MODEL" ]; then MODEL="openrouter/nvidia/nemotron-3-super-120b-a12b:free"; fi
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
           echo "Anggota model: $MODEL"
 
@@ -77,6 +78,7 @@ jobs:
           fi
           printf '%s' "$RESULT" > /tmp/oc_result.txt
         env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
 
       - name: Send result to Telegram
