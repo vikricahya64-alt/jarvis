@@ -19,6 +19,8 @@ except ImportError:
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 FALLBACK_MODELS = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b", "qwen/qwen3.6-27b"]
 
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "thinkingmachines/inkling:free")
+
 # Deadline shared across all Groq calls within one pipeline run, so a burst
 # of 429s (free tier) or slow fallbacks can never blow Vercel's 60s Hobby cap.
 _deadline_ts = None  # set by set_budget(seconds); None = no deadline
@@ -516,6 +518,43 @@ def sync_completion(user_input, context=None, system_prompt=None,
             raise RuntimeError(f"Groq error: {exc}")
 
 
+def _openrouter_completion(messages, temperature=0.2, max_tokens=900):
+    """OpenRouter fallback (OpenAI-compatible). Returns text or None.
+
+    Only active when OPENROUTER_API_KEY is set; otherwise this returns
+    None and the caller keeps its existing Groq-only behaviour."""
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        return None
+    try:
+        import httpx
+    except ImportError:
+        return None
+    if _over_deadline():
+        return None
+    try:
+        resp = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": OPENROUTER_MODEL,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            timeout=30.0,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        return data["choices"][0]["message"]["content"] or ""
+    except Exception:
+        return None
+
+
 def plain_completion(system_prompt: str, user_input: str,
                      max_tokens: int = 900, temperature: float = 0.2) -> str:
     """
@@ -554,7 +593,8 @@ def plain_completion(system_prompt: str, user_input: str,
         except RateLimitError as exc:
             attempts += 1
             if attempts >= 4:
-                raise RuntimeError(f"Groq rate limited after {attempts} tries: {exc}")
+                return _plain_fallback(messages, temperature, max_tokens,
+                                       f"Groq rate limited after {attempts} tries: {exc}")
             wait = _retry_after_seconds(str(exc)) or (2 * attempts)
             time.sleep(min(wait, max(_remaining_budget() - 3, 1)))
         except Exception as exc:
@@ -566,7 +606,16 @@ def plain_completion(system_prompt: str, user_input: str,
                     return resp.choices[0].message.content or ""
                 except Exception:
                     continue
-            raise RuntimeError(f"Groq error: {exc}")
+            return _plain_fallback(messages, temperature, max_tokens,
+                                   f"Groq error: {exc}")
+
+
+def _plain_fallback(messages, temperature, max_tokens, message) -> str:
+    text = _openrouter_completion(messages, temperature=temperature,
+                                  max_tokens=max_tokens)
+    if text is not None:
+        return text
+    raise RuntimeError(message)
 
 
 VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-3.2-11b-vision-preview")
