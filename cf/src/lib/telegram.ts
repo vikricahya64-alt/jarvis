@@ -146,6 +146,28 @@ export async function editMessageReplyMarkup(
   });
 }
 
+/** Send a voice note from raw audio bytes (multipart/form-data). Currently used
+ *  to deliver TTS speech back to the owner (the voice loop: hear → think → speak). */
+export async function sendVoice(
+  env: { TELEGRAM_TOKEN?: string },
+  chatId: number,
+  audioBytes: Uint8Array | ArrayBuffer,
+  caption?: string,
+  mime = "audio/mpeg",
+): Promise<unknown> {
+  const form = new FormData();
+  const buf = audioBytes instanceof Uint8Array ? audioBytes : new Uint8Array(audioBytes);
+  form.append("chat_id", String(chatId));
+  form.append("voice", new Blob([buf as unknown as Blob], { type: mime }), "jarvis_voice.mp3");
+  if (caption) form.append("caption", truncate(caption));
+  const res = await fetch(`${API}/bot${token(env)}/sendVoice`, { method: "POST", body: form });
+  const data = (await res.json()) as { ok: boolean; result?: unknown; description?: string };
+  if (!res.ok || !data.ok) {
+    throw new Error(`Telegram sendVoice: ${data.description ?? res.status}`);
+  }
+  return data.result;
+}
+
 export async function setWebhook(
   env: { TELEGRAM_TOKEN?: string },
   url: string,
@@ -154,6 +176,24 @@ export async function setWebhook(
   const body: Record<string, unknown> = { url };
   if (secret) body.secret_token = secret;
   return call(env, "setWebhook", body);
+}
+
+/** Register the bot's slash command menu so users see what J.A.R.V.I.S. can do.
+ *  Idempotent by design; callers may retry daily without harm. */
+export async function setMyCommands(env: { TELEGRAM_TOKEN?: string }): Promise<boolean> {
+  const commands = [
+    { command: "help", description: "Bantuan & daftar perintah" },
+    { command: "reminder", description: "Set pengingat (contoh: /reminder X in 5 menit)" },
+    { command: "baca", description: "Baca + ringkas halaman web (/baca <url>)" },
+    { command: "suara", description: "Ubah teks jadi pesan suara (/suara <teks>)" },
+    { command: "status", description: "Cek kesehatan J.A.R.V.I.S." },
+  ];
+  try {
+    const res = await call(env, "setMyCommands", { commands });
+    return Boolean((res as { ok?: boolean })?.ok ?? false);
+  } catch {
+    return false;
+  }
 }
 
 export async function getWebhookInfo(

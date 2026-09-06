@@ -10,7 +10,7 @@
 
 import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders } from "./lib/db";
 import { handleUpdate } from "./workers/telegram_webhook";
-import { setWebhook, sendMessage, getWebhookInfo, getMe } from "./lib/telegram";
+import { setWebhook, sendMessage, getWebhookInfo, getMe, setMyCommands } from "./lib/telegram";
 import { runDms } from "./daemons/dead_mans_switch";
 import { processMessage, escalateToDms, TaskMessage } from "./workers/task_processor";
 import { requireCert } from "./lib/zero_trust";
@@ -21,6 +21,7 @@ import { ddgSearch } from "./lib/ai";
 import { acquireCronLock, releaseCronLock } from "./lib/resilience";
 import { runDreamCycle, generateMorningBriefing, decayPreferences, runEvolutionLoop } from "./lib/evolution";
 import { offerSuggestions } from "./lib/predictive";
+import { tickAutonomy } from "./lib/maestro";
 import { syncAllSessions } from "./lib/context_manager";
 import { runErrorHealLoop } from "./lib/error_monitor";
 import { runConfigOptimization } from "./lib/config_optimizer";
@@ -61,6 +62,19 @@ async function getCurrentEpochId(env: Env): Promise<string | null> {
     `SELECT epoch_id FROM identity_epochs ORDER BY timestamp DESC LIMIT 1`,
   ).first();
   return (row as { epoch_id: string } | null)?.epoch_id ?? null;
+}
+
+/** Register the slash-command menu once a day (KV-guarded, resets often so a
+ *  bot upgrade re-publishes the menu). Fail-closed: never throws. */
+async function ensureTelegramCommands(env: Env): Promise<void> {
+  try {
+    const last = await env.CONFIG_KV.get("tg_commands_set");
+    if (last === "1") return;
+    const ok = await setMyCommands(env);
+    if (ok) {
+      await env.CONFIG_KV.put("tg_commands_set", "1", { expirationTtl: 82800 }).catch(() => {});
+    }
+  } catch { /* availability over verbosity */ }
 }
 
 /** Environment-adaptive privileged-endpoint gate. */
@@ -140,7 +154,7 @@ export default {
         ok: true,
         ts: Date.now(),
         env: env.APP_ENV ?? "unknown",
-        version: "00ea695b",
+        version: "9f4c2d8a",
       }));
     }
 
@@ -202,6 +216,7 @@ export default {
       const webhookUrl = url.searchParams.get("url") ?? WORKER_URL + "/webhook";
       try {
         await setWebhook(env, webhookUrl, env.TELEGRAM_SECRET);
+        await ensureTelegramCommands(env);
         const info = await getWebhookInfo(env);
         return respond(Response.json({
           ok: true,
@@ -242,7 +257,7 @@ export default {
         return respond(Response.json({
           ok: true,
           ts: Date.now(),
-          version: "00ea695b",
+          version: "9f4c2d8a",
           systems: {
             d1: d1Ok ? "✅" : "❌",
             kv: kvOk ? "✅" : "❌",
@@ -287,6 +302,7 @@ export default {
       if (!authed) return respond(new Response("unauthorized", { status: 401 }));
       const target = url.searchParams.get("url") ?? WORKER_URL + "/webhook";
       await setWebhook(env, target, env.TELEGRAM_SECRET);
+      await ensureTelegramCommands(env);
       return respond(Response.json({ ok: true, target }));
     }
 
@@ -359,6 +375,7 @@ export default {
       } else if (cron === "0 3 * * *") {
         const expired = await sweepExpiredProposals(env);
         console.log(`[cron] value_alignment: ${expired} expired (${Date.now() - start}ms)`);
+        await ensureTelegramCommands(env);
         const optResult = await runConfigOptimization(env);
         console.log(`[cron] config_opt: applied=${optResult.applied.length} suggestions=${optResult.suggestions.length} (${Date.now() - start}ms)`);
       } else if (cron === "0 8 * * 0" || cron === "0 8 * * *") {
@@ -395,6 +412,19 @@ export default {
             ).catch(() => {/* best-effort: marking already done on the D1 side */});
           }
           console.log(`[cron] reminders: fired=${due.length} (${Date.now() - start}ms)`);
+        }
+        // Autonomy pulse: advance delegated plans one step + fire due recurring
+        // tasks (both LOW-risk only, covenant + /pause-guarded). Owner is
+        // notified only when something actually moved.
+        const auto = await tickAutonomy(env, owner);
+        if (auto.plans > 0 || auto.tasksFired > 0 || auto.pendingConsent > 0) {
+          const lines = [
+            auto.plans > 0 ? `⚙️ ${auto.plans} langkah rencana otonom dijalankan.` : "",
+            auto.tasksFired > 0 ? `✅ ${auto.tasksFired} tugas terjadwal otomatis dijalankan.` : "",
+            auto.pendingConsent > 0 ? `⚠️ ${auto.pendingConsent} tugas terjadwal (risk menengah/tinggi) menunggu persetujuan — tidak dijalankan otomatis.` : "",
+          ].filter(Boolean);
+          await sendMessage(env, owner, lines.join("\n") + "\n(_sementara berhenti: /pause_)").catch(() => {});
+          console.log(`[cron] autonomy: plans=${auto.plans} tasks=${auto.tasksFired} consent=${auto.pendingConsent} (${Date.now() - start}ms)`);
         }
       }
     } catch (e) {
