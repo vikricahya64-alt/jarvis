@@ -881,17 +881,26 @@ export interface ReminderItem {
   text: string;
   due_at: number;
   notified: number;
+  repeat: string;
   created_at: number;
 }
 
-/** Insert a one-off reminder. Returns its id, or 0 on failure/invalid input. */
-export async function addReminder(env: Env, owner: number, text: string, dueAt: number): Promise<number> {
+/** Insert a reminder. repeat '' = once; 'hourly' | 'daily' | 'weekly' rolls to
+ *  the next slot after firing. Returns its id, or 0 on failure/invalid input. */
+export async function addReminder(
+  env: Env,
+  owner: number,
+  text: string,
+  dueAt: number,
+  repeat: "" | "hourly" | "daily" | "weekly" = "",
+): Promise<number> {
   try {
     const clean = text.trim();
     if (!clean || !Number.isFinite(dueAt) || dueAt <= 0) return 0;
+    const rep = repeat;
     const res = await env.DB.prepare(
-      `INSERT INTO reminders (owner_id, text, due_at, notified, created_at) VALUES (?, ?, ?, 0, ?)`,
-    ).bind(owner, clean, Math.floor(dueAt), Date.now()).run();
+      `INSERT INTO reminders (owner_id, text, due_at, notified, repeat, created_at) VALUES (?, ?, ?, 0, ?, ?)`,
+    ).bind(owner, clean, Math.floor(dueAt), rep, Date.now()).run();
     return Number(res.meta.last_row_id ?? res.meta.changes ?? 0);
   } catch {
     return 0;
@@ -902,7 +911,7 @@ export async function addReminder(env: Env, owner: number, text: string, dueAt: 
 export async function listReminders(env: Env, owner: number): Promise<ReminderItem[]> {
   try {
     const { results } = await env.DB.prepare(
-      `SELECT id, owner_id, text, due_at, notified, created_at FROM reminders
+      `SELECT id, owner_id, text, due_at, notified, repeat, created_at FROM reminders
        WHERE owner_id = ? AND notified = 0
        ORDER BY due_at ASC LIMIT 100`,
     ).bind(owner).all<ReminderItem>();
@@ -924,20 +933,31 @@ export async function cancelReminderById(env: Env, owner: number, id: number): P
   }
 }
 
-/** Find all due-but-unnotified reminders across owners. Marks them notified
- *  FIRST (before any send) so a crash mid-send never double-fires; returning
- *  the payload so the caller (cron) can deliver best-effort notifications. */
+/** Find all due-but-unnotified reminders across owners. Marks one-off rows
+ *  notified FIRST (before any send) so a crash mid-send never double-fires;
+ *  recurring rows are rolled to their next slot (still unnotified) so the next
+ *  tick re-fires them. Returns the payload so the caller (cron) can deliver
+ *  best-effort notifications. */
 export async function checkDueReminders(env: Env): Promise<Array<{ ownerId: number; text: string; dueAt: number }>> {
   const now = Date.now();
   try {
     const { results } = await env.DB.prepare(
-      `SELECT id, owner_id, text, due_at FROM reminders WHERE notified = 0 AND due_at <= ? LIMIT 100`,
-    ).bind(now).all<{ id: number; owner_id: number; text: string; due_at: number }>();
+      `SELECT id, owner_id, text, due_at, notified, repeat FROM reminders WHERE notified = 0 AND due_at <= ? LIMIT 100`,
+    ).bind(now).all<{ id: number; owner_id: number; text: string; due_at: number; repeat: string }>();
     const due = results ?? [];
     for (const r of due) {
-      await env.DB.prepare(
-        `UPDATE reminders SET notified = 1 WHERE id = ? AND notified = 0`,
-      ).bind(r.id).run().catch(() => {});
+      if (r.repeat === "daily" || r.repeat === "weekly" || r.repeat === "hourly") {
+        const step = r.repeat === "daily" ? 86400_000 : r.repeat === "weekly" ? 604800_000 : 3600_000;
+        let next = r.due_at + step;
+        while (next <= now) next += step; // skip catch-up bursts
+        await env.DB.prepare(
+          `UPDATE reminders SET due_at = ? WHERE id = ? AND notified = 0`,
+        ).bind(next, r.id).run().catch(() => {});
+      } else {
+        await env.DB.prepare(
+          `UPDATE reminders SET notified = 1 WHERE id = ? AND notified = 0`,
+        ).bind(r.id).run().catch(() => {});
+      }
     }
     return due.map((r) => ({ ownerId: r.owner_id, text: r.text, dueAt: r.due_at }));
   } catch {

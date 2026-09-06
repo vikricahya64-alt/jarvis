@@ -1,3 +1,5 @@
 node_modules/
+.wrangler/
 .dev.vars
 .vscode/
+wrangler local_state/

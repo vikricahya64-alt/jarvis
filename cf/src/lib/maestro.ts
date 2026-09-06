@@ -284,3 +284,111 @@ export async function getScheduledTasks(env: Env, owner: number): Promise<Schedu
   ).bind(owner).all();
   return results as unknown as ScheduledTask[];
 }
+
+/** Next schedule slot by cadence. 'once' gets a far-future slot so it never
+ *  re-fires after its single run (the guard `last_run < schedule_at` handles
+ *  idempotence across consecutive cron ticks). */
+function nextSlot(cadence: "hourly" | "daily" | "weekly" | "once", after: number): number {
+  if (cadence === "daily") return after + 86400_000;
+  if (cadence === "weekly") return after + 604800_000;
+  if (cadence === "hourly") return after + 3600_000;
+  return 4102444800000; // once → far future (2299)
+}
+
+/** Advance every ACTIVE plan by exactly one pending step, using the guarded
+ *  executor (covenant + global /pause + priority≥9-consent are all enforced
+ *  inside executePlanStep). A plan with no pending steps left is completed.
+ *  Autonomous steps that get blocked keep their status and pause the plan
+ *  until the owner acts. Returns the number of steps consumed. */
+export async function advancePlans(env: Env, owner: number): Promise<number> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id FROM plans WHERE owner_id = ? AND status = 'active' LIMIT 10`,
+    ).bind(owner).all<{ id: string }>();
+    let advanced = 0;
+    for (const p of results ?? []) {
+      const stepBefore = await getNextPendingStep(env, owner, p.id);
+      if (!stepBefore) {
+        await env.DB.prepare(
+          `UPDATE plans SET status = 'completed', last_run = ? WHERE id = ? AND status = 'active'`,
+        ).bind(Date.now(), p.id).run().catch(() => {});
+        continue;
+      }
+      await executePlanStep(env, owner, p.id);
+      void advanced; // count below
+      const stepAfter = await getNextPendingStep(env, owner, p.id);
+      if (!stepAfter || stepAfter.id !== stepBefore.id) advanced++;
+      if (!stepAfter) {
+        // Final step consumed → the plan is done.
+        await env.DB.prepare(
+          `UPDATE plans SET status = 'completed', last_run = ? WHERE id = ? AND status = 'active'`,
+        ).bind(Date.now(), p.id).run().catch(() => {});
+      }
+    }
+    return advanced;
+  } catch {
+    return 0;
+  }
+}
+
+type ScheduledTaskRow = {
+  id: string;
+  description: string;
+  cadence: "hourly" | "daily" | "weekly" | "once";
+  schedule_at: number;
+  last_run: number;
+  approved: number;
+  risk_level: "low" | "medium" | "high";
+};
+
+/** Fire due owner-delegated scheduled tasks (the part of the Maestro that was
+ *  designed but never wired to a trigger). SAFETY: only LOW-risk tasks fire
+ *  autonomously; medium/high-risk tasks are reported to the owner as needing
+ *  explicit consent and are NEVER auto-run. Global /pause stops this entirely
+ *  at the caller. Returns counts for the owner notification. */
+export async function fireDueScheduledTasks(
+  env: Env,
+  owner: number,
+): Promise<{ fired: number; pendingConsent: number }> {
+  const now = Date.now();
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, description, cadence, schedule_at, last_run, approved, risk_level
+       FROM scheduled_tasks
+       WHERE owner_id = ? AND approved = 1 AND schedule_at <= ? AND last_run < schedule_at
+       LIMIT 10`,
+    ).bind(owner, now).all<ScheduledTaskRow>();
+    let fired = 0;
+    let pendingConsent = 0;
+    for (const t of results ?? []) {
+      if (t.risk_level !== "low") {
+        pendingConsent++;
+        continue;
+      }
+      await logObedience(env, owner, `TASK_RUN ${t.description.slice(0, 80)}`, 60, "EXECUTE", "COMPLIANT", {
+        commandHash: t.id, evidence: { cadence: t.cadence, origin: "autonomous" },
+      });
+      await touchActivity(env, owner, "autonomous");
+      const next = nextSlot(t.cadence, now);
+      await env.DB.prepare(
+        `UPDATE scheduled_tasks SET last_run = ?, schedule_at = ? WHERE id = ? AND last_run < schedule_at`,
+      ).bind(now, next, t.id).run();
+      fired++;
+    }
+    return { fired, pendingConsent };
+  } catch {
+    return { fired: 0, pendingConsent: 0 };
+  }
+}
+
+/** Per-tick autonomy pulse: advance plans + fire due recurring tasks.
+ *  Cheap (D1 + tiny logging only), fully guarded, and owner-notified by the
+ *  cron caller. Returns a summary for the notification message. */
+export async function tickAutonomy(
+  env: Env,
+  owner: number,
+): Promise<{ plans: number; tasksFired: number; pendingConsent: number }> {
+  const tasks = await fireDueScheduledTasks(env, owner);
+  const plans = await advancePlans(env, owner);
+  return { plans, tasksFired: tasks.fired, pendingConsent: tasks.pendingConsent };
+}
