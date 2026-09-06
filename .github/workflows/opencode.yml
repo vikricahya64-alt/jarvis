@@ -1,8 +1,13 @@
 # Run opencode against a user prompt and deliver the result to Telegram.
-# Triggered via repository_dispatch from JARVIS /opencode command.
-# Secrets required:
-#   GITHUB_PAT     — Fine-grained token with Actions:Write (for workflow_dispatch)
-#   TELEGRAM_TOKEN — Bot token (same as JARVIS)
+# Triggered via workflow_dispatch from JARVIS /opencode command.
+#
+# Secrets required in the GitHub repo:
+#   TELEGRAM_TOKEN   — Bot token (same as JARVIS) for delivering results
+#   OPENCODE_API_KEY — API key for the model provider opencode uses
+#                      (e.g. Anthropic/OpenAI/Groq/OpenRouter key)
+# Optional secrets/vars:
+#   OPENCODE_MODEL   — model id in "provider/model" form (default: gpt-5
+#                      if unset; must match the provider of OPENCODE_API_KEY)
 
 name: opencode
 
@@ -27,6 +32,11 @@ jobs:
     name: Run opencode
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # Clear server-auth vars that cause "Session not found" bugs in headless
+      # `opencode run` (see anomalyco/opencode#28407 / #13221).
+      OPENCODE_SERVER_PASSWORD: ""
+      OPENCODE_SERVER_USERNAME: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,24 +47,52 @@ jobs:
           node-version: 22
 
       - name: Install opencode
-        run: npm install -g opencode
+        run: npm install -g opencode-ai
+
+      - name: Resolve model
+        id: model
+        run: |
+          MODEL="${{ vars.OPENCODE_MODEL }}"
+          if [ -z "$MODEL" ]; then MODEL="openai/gpt-5"; fi
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "Anggota model: $MODEL"
 
       - name: Run opencode
         id: oc
         run: |
-          RESULT=$(opencode run "${{ inputs.prompt }}" 2>&1) || true
-          # Truncate to Telegram's 4096-char limit
+          : > /tmp/oc_result.txt
+          set +e
+          RESULT=$(opencode run \
+            --model "${{ steps.model.outputs.model }}" \
+            "${{ inputs.prompt }}" 2>&1)
+          CODE=$?
+          set -e
+          if [ $CODE -ne 0 ]; then
+            RESULT="(opencode keluar dengan kode $CODE — cek API key/model)\n${RESULT}"
+          fi
+          # Truncate to Telegram's 4096-char limit, guard character.
           if [ ${#RESULT} -gt 4000 ]; then
             RESULT="${RESULT:0:4000}… (dipotong)"
           fi
-          # Escape for shell
           printf '%s' "$RESULT" > /tmp/oc_result.txt
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
 
       - name: Send result to Telegram
         run: |
           TEXT=$(cat /tmp/oc_result.txt)
-          curl -s -X POST \
-            "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-            -d chat_id="${{ inputs.chat_id }}" \
-            -d parse_mode="Markdown" \
-            --data-urlencode "text=🧠 *opencode*\n\`\`\`\n${TEXT}\n\`\`\`"
+          # JSON-encode so arbitrary content survives sendMessage safely.
+          python3 - "${{ inputs.chat_id }}" "$TEXT" <<'PY'
+          import json, os, subprocess, sys
+          chat_id = sys.argv[1]
+          text = sys.argv[2]
+          payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+          subprocess.run([
+            "curl", "-s", "-X", "POST",
+            f"https://api.telegram.org/bot{os.environ['TELEGRAM_TOKEN']}/sendMessage",
+            "-H", "Content-Type: application/json",
+            "-d", json.dumps(payload).encode("utf-8"),
+          ], check=False)
+          PY
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
