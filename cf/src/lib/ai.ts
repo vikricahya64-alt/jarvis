@@ -12,7 +12,7 @@
 //=====================================================================
 
 import { Env, recentContext, appendMemory, searchMemory, storeLearnedKnowledge, isTopicKnown } from "./db";
-import { withResilience, fetchWithTimeout, logRequest } from "./resilience";
+import { withResilience, fetchWithTimeout, logRequest, getBreakerState } from "./resilience";
 import { getAnswerBehaviorContext, reflectOnTurn } from "./evolution";
 import { isResearchClass, orchestrateResearch } from "./subagents";
 import { buildConversationMessages, detectLanguage } from "./conversation";
@@ -351,7 +351,10 @@ export async function geminiRespond(
 /** Cloudflare Workers AI — free edge inference, no API key needed.
  *  Uses the AI binding (env.AI) from wrangler.toml. OpenAI-compatible
  *  via env.AI.run() or direct fetch to the CF AI endpoint.
- *  Returns null on any failure so the chain stays fail-closed. */
+ *  Returns null on any failure so the chain stays fail-closed.
+ *  Uses withResilience so the free edge model participates in the same
+ *  circuit breaker, retry and observability as the external providers
+ *  (instead of silently failing off the observability radar). */
 export async function workersAiRespond(
   env: Env,
   userText: string,
@@ -372,19 +375,32 @@ export async function workersAiRespond(
   // Workers AI model — use a good conversational model
   const model = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
-  try {
-    const res = await env.AI.run(model, {
-      messages,
-      max_tokens: 600,
-      temperature: 0.6,
-    }) as { response?: string };
-
-    const reply = res.response?.trim();
-    if (reply) return reply;
-  } catch {
-    // Fail-closed: return null on any error
-  }
-  return null;
+  let reply: string | null = null;
+  const ok = await withResilience(env, "workers_ai", 0, async (timeoutMs) => {
+    const started = Date.now();
+    // AI.run() is not simple fetch; proxy it with a timeout guard.
+    return await new Promise<{ ok: boolean; status: number }>((resolve) => {
+      const timer = setTimeout(() => resolve({ ok: false, status: 0 }), timeoutMs);
+      env.AI.run(model, { messages, max_tokens: 600, temperature: 0.6 })
+        .then((res) => {
+          clearTimeout(timer);
+          const r = (res as { response?: string }).response?.trim();
+          if (r) {
+            reply = r;
+            resolve({ ok: true, status: 200 });
+          } else {
+            resolve({ ok: false, status: 0 });
+          }
+        })
+        .catch((e) => {
+          clearTimeout(timer);
+          console.error("workers_ai:", String(e).slice(0, 120));
+          resolve({ ok: false, status: 0 });
+        });
+      void started;
+    });
+  });
+  return ok ? reply : null;
 }
 
 /** Generative LLM dispatch with Workers AI → Groq → Gemini resilience ordering.
@@ -421,18 +437,29 @@ export async function llmRespond(
 
   const sharedOpts = { ...opts, prebuiltMessages };
 
-  // 1) Workers AI (free, no key, on CF edge — fastest path)
-  const wai = await workersAiRespond(env, userText, sharedOpts);
-  if (wai) return { reply: wai, source: "workers_ai" };
-  // 2) Groq (free tier, fast)
-  const groq = await groqRespond(env, userText, sharedOpts);
-  if (groq) return { reply: groq, source: "groq" };
-  // 2b) OpenRouter (free/provided models, breadth under one key)
-  const openrouter = await openrouterRespond(env, userText, sharedOpts);
-  if (openrouter) return { reply: openrouter, source: "openrouter" };
-  // 3) Gemini (free tier, last resort)
-  const gemini = await geminiRespond(env, userText, sharedOpts);
-  if (gemini) return { reply: gemini, source: "gemini" };
+  // Provider cascade with circuit-breaker awareness (free-tier smoothing).
+  // Workers AI (free edge) → Groq (free) → OpenRouter (free models) → Gemini
+  // (free last-resort). A provider whose breaker is OPEN is skipped up front
+  // (fast-fail) instead of burning an HTTP attempt + latency; its cooldown
+  // will reopen it later automatically via half-open probing. D1 reads only
+  // happen when the breaker has not been consulted recently (KV warm cache).
+  const preferred: Array<{ p: "workers_ai" | "groq" | "openrouter" | "gemini"; fn: () => Promise<string | null>; src: "workers_ai" | "groq" | "openrouter" | "gemini" }> = [
+    { p: "workers_ai", fn: () => workersAiRespond(env, userText, sharedOpts), src: "workers_ai" },
+    { p: "groq", fn: () => groqRespond(env, userText, sharedOpts), src: "groq" },
+    { p: "openrouter", fn: () => openrouterRespond(env, userText, sharedOpts), src: "openrouter" },
+    { p: "gemini", fn: () => geminiRespond(env, userText, sharedOpts), src: "gemini" },
+  ];
+  for (const cand of preferred) {
+    if (cand.p === "workers_ai" && !env.AI) continue;
+    // Fail-closed: breaker read failure means "try it" (availability first).
+    const state = await getBreakerState(env, cand.p).catch(() => "closed" as const);
+    if (state === "open") {
+      console.error(`[llm] skipped ${cand.p}: breaker open`);
+      continue;
+    }
+    const r = await cand.fn();
+    if (r) return { reply: r, source: cand.src };
+  }
   return { reply: null, source: null };
 }
 
@@ -485,7 +512,14 @@ export async function ddgSearch(env: Env, query: string): Promise<string | null>
       if (!title && !snippet) return null;
       return [title, snippet].filter(Boolean).join(" — ").slice(0, 400);
     },
-    // 3) Bing lightweight HTML — different egress reputation, likely reachable.
+    // 3) SearXNG public meta-search — aggregates many upstream engines, giving
+    //    the search path an independent egress reputation beyond DDG/Bing.
+    async () => {
+      const hits = await searxngSearch(query);
+      if (!hits.length) return null;
+      return hits.slice(0, 2).map((h) => `${h.title}: ${h.snippet}`).join(" — ").slice(0, 400);
+    },
+    // 4) Bing lightweight HTML — different egress reputation, likely reachable.
     async () => {
       const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=1`;
       const res = await fetchWithTimeout(url, {
@@ -521,6 +555,88 @@ export interface SearchHit {
   snippet: string;
 }
 
+/** SearXNG public meta-search (JSON), fail-closed. Aggregates multiple upstream
+ *  engines (Google/Bing/DDG/wikipedia) under one plain-HTTP call — gives the
+ *  search path a third, independent egress reputation beyond DDG and Bing.
+ *  Public instances come and go; we try a couple of long-lived ones and return
+ *  whatever aggregates, returning [] on any block/unreachability. */
+async function searxngSearch(query: string): Promise<SearchHit[]> {
+  const instances = ["https://searx.be", "https://searxng.world"];
+  for (const base of instances) {
+    try {
+      const url = `${base}/search?q=${encodeURIComponent(query)}&format=json&language=${encodeURIComponent("id-ID")}`;
+      const res = await fetchWithTimeout(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)", "Accept": "application/json" },
+      }, 9000);
+      if (!res.ok) continue;
+      const d = (await res.json()) as { results?: Array<{ title?: string; url?: string; content?: string }> };
+      const hits = (d.results ?? [])
+        .filter((r) => r.title && r.url)
+        .map((r) => ({
+          title: String(r.title).slice(0, 180),
+          url: String(r.url).slice(0, 200),
+          snippet: (r.content ?? "").slice(0, 340),
+        }));
+      if (hits.length) return hits.slice(0, 10);
+    } catch { /* next instance */ }
+  }
+  return [];
+}
+
+/** Deterministic HTML→readable-text conversion (regex-based; Workers has no DOM). */
+function readableText(html: string): string {
+  const cleaned = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<(?:nav|header|footer|aside|iframe|svg|form|noscript)[\s\S]*?<\/(?:nav|header|footer|aside|iframe|svg|form|noscript)>/gi, " ")
+    .replace(/<\/(?:p|h[1-6]|li|div|section|article|br|tr)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#39;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#x27;/gi, "'");
+  // Collapse whitespace but keep paragraph/newline structure minimal.
+  return cleaned.split(/\s*\n\s*/).map((l) => l.replace(/\s+/g, " ").trim()).filter((l) => l.length > 1).join("\n").trim();
+}
+
+/** Bounded deep-page reader: fetches url, reads at most MAX_BYTES of the body,
+ *  strips boilerplate, returns the best readable-text prefix (>=120 chars) or
+ *  null. Deterministic and fail-closed: it never throws, never hangs the caller
+ *  beyond the timeout, and never returns a useless sliver of text. */
+export async function deepReadPage(env: Env, url: string, maxChars = 1400): Promise<string | null> {
+  const MAX_BYTES = 60000;
+  try {
+    if (!/^https?:\/\/[^\s]+$/.test(url)) return null;
+    const res = await fetchWithTimeout(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (Linux; Android 10) JARVIS/1.0", "Accept-Language": "id,en;q=0.8" },
+    }, 8000);
+    if (!res.ok || !res.body) return null;
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        total += value.byteLength;
+        if (total >= MAX_BYTES) break;
+      }
+    }
+    reader.releaseLock();
+    const bytes = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { bytes.set(c, off); off += c.byteLength; }
+    const text = readableText(new TextDecoder("utf-8").decode(bytes)).slice(0, maxChars);
+    return text.length >= 120 ? text : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Multi-result web search (parallel fan-out support). Same layered-fallback
  *  strategy as ddgSearch() but returns the top N structured findings — richer
  *  evidence for the sub-agent writer to synthesize across multiple angles.
@@ -547,7 +663,13 @@ export async function searchTopResults(env: Env, query: string, limit = 3): Prom
       }
       return hits;
     },
-    // 2) Bing lightweight HTML — different egress reputation; diversifies the
+    // 2) SearXNG public meta-search — aggregates multiple upstream engines,
+    //    distinct egress; diversifies the hit pool vs. DDG alone.
+    async () => {
+      const hits = await searxngSearch(query);
+      return hits.slice(0, limit);
+    },
+    // 3) Bing lightweight HTML — different egress reputation; diversifies the
     //    reference pool for the same query with ONE extra subrequest only when
     //    DDG returned fewer than requested. Still well inside the 50/subreq cap.
     async () => {

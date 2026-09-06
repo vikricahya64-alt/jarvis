@@ -8,7 +8,7 @@
 // the queue consumer, both bounded. All GOTCHA-free, no external SDK.
 //=====================================================================
 
-import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories } from "./lib/db";
+import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders } from "./lib/db";
 import { handleUpdate } from "./workers/telegram_webhook";
 import { setWebhook, sendMessage, getWebhookInfo, getMe } from "./lib/telegram";
 import { runDms } from "./daemons/dead_mans_switch";
@@ -140,7 +140,7 @@ export default {
         ok: true,
         ts: Date.now(),
         env: env.APP_ENV ?? "unknown",
-        version: "7b188158",
+        version: "00ea695b",
       }));
     }
 
@@ -242,7 +242,7 @@ export default {
         return respond(Response.json({
           ok: true,
           ts: Date.now(),
-          version: "7b188158",
+          version: "00ea695b",
           systems: {
             d1: d1Ok ? "✅" : "❌",
             kv: kvOk ? "✅" : "❌",
@@ -385,6 +385,16 @@ export default {
           console.log(`[cron] suggestions: sent ${sugg.length} chars`);
         } else {
           console.log(`[cron] suggestions: skip`);
+        }
+      } else if (cron === "* * * * *") {
+        const due = await checkDueReminders(env);
+        if (due.length) {
+          for (const r of due) {
+            await sendMessage(env, r.ownerId,
+              `⏰ *Pengingat*\n\n${r.text}\n\n(Sudah selesai? kirim /reminder hapus <id> untuk menonaktifkan, atau abaikan.)`
+            ).catch(() => {/* best-effort: marking already done on the D1 side */});
+          }
+          console.log(`[cron] reminders: fired=${due.length} (${Date.now() - start}ms)`);
         }
       }
     } catch (e) {
