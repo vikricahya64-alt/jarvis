@@ -1,0 +1,82 @@
+# =====================================================================
+# jarvis-delegate.yml — serverless executor for J.A.R.V.I.S.
+#
+# JARVIS (Cloudflare free tier) can't run arbitrary processes, so heavy
+# digital-work tasks are delegated here: an EPHEMERAL GitHub VM (repo is
+# PUBLIC → Actions minutes UNLIMITED & FREE) installs `opencode` headless
+# and runs it against the SAME OpenRouter provider JARVIS already uses
+# (zero extra cost). Results POST back to /agent/done, which DMs the owner.
+#
+# Triggered by the worker via GitHub repository_dispatch ("jarvis-task").
+# Auth: AGENT_TOKEN repo secret (same value as the worker's secret).
+# LLM key: OPENROUTER_API_KEY repo secret (already in use by JARVIS).
+# =====================================================================
+name: jarvis-delegate
+
+on:
+  repository_dispatch:
+    types: [jarvis-task]
+
+# Public repo → unlimited minutes; still serialize to avoid resource fights.
+concurrency:
+  group: jarvis-agent
+  cancel-in-progress: false
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install opencode (headless)
+        run: |
+          npm install -g opencode-ai
+          opencode --version
+
+      # Task text is passed via env var (never glued into a shell string),
+      # so owner input can't inject shell commands into the runner.
+      - name: Materialize task
+        env:
+          TASK: ${{ github.event.client_payload.task }}
+        run: printf '%s' "$TASK" > /tmp/task.txt
+
+      - name: Run opencode agent
+        id: exec
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || 'qwen/qwen3.6-27b' }}
+        run: |
+          set +e
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "ERR: OPENROUTER_API_KEY repo secret kosong." > /tmp/jarvis-out.txt
+            code=1
+          else
+            opencode run --model "openrouter/$OPENROUTER_MODEL" "$(cat /tmp/task.txt)" > /tmp/jarvis-out.txt 2>&1
+            code=$?
+          fi
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Report result back to JARVIS
+        env:
+          AGENT_TOKEN: ${{ secrets.AGENT_TOKEN }}
+          WORKER: "https://jarvis-sovereign.vikricahya64.workers.dev"
+          TASK_ID: ${{ github.event.client_payload.task_id }}
+        run: |
+          EXIT_CODE="${{ steps.exec.outputs.exit_code }}"
+          if [ -z "$EXIT_CODE" ]; then EXIT_CODE=1; fi
+          if [ "$EXIT_CODE" = "0" ]; then
+            JSON="$(jq -nc --arg id "$TASK_ID" --arg r "$(head -c 60000 /tmp/jarvis-out.txt)" \
+              '{task_id:($id|tonumber), status:"done", result:$r}')"
+          else
+            JSON="$(jq -nc --arg id "$TASK_ID" --arg e "$(head -c 3000 /tmp/jarvis-out.txt)" \
+              '{task_id:($id|tonumber), status:"failed", result:"", error:$e}')"
+          fi
+          curl -fsS --max-time 30 -X POST "$WORKER/agent/done?token=$AGENT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$JSON"
