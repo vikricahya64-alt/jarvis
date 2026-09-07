@@ -217,20 +217,33 @@ export async function getMe(
   return call(env, "getMe", {}) as Promise<any>;
 }
 
+/** Result of a Telegram file download. `tooLarge` branches are distinct so
+ *  callers can give the owner a clear size cap message instead of a generic
+ *  "download failed" (the cap was previously only a comment — M6 audit fix). */
+export type DownloadResult = { bytes: Uint8Array; mime: string } | { tooLarge: true; limitMb: number; mime?: string } | null;
+
+const TELEGRAM_FILE_CAP_BYTES = 20 * 1024 * 1024;
+
 /** Resolve the downstream file (photo/voice) URL and download its bytes.
- *  Telegram serves media on api.telegram.org/file/bot<token>/<file_path>. */
+ *  Telegram serves media on api.telegram.org/file/bot<token>/<file_path>.
+ *  Rejects files above 20 MiB (free-tier voice/photos are small). */
 export async function downloadTelegramFile(
   env: { TELEGRAM_TOKEN?: string },
   fileId: string,
-): Promise<{ bytes: Uint8Array; mime: string } | null> {
+  capBytes = TELEGRAM_FILE_CAP_BYTES,
+): Promise<DownloadResult> {
   try {
     const info = (await call(env, "getFile", { file_id: fileId })) as { file_path?: string; file_size?: number };
     if (!info.file_path) return null;
-    // Cap download at ~20 MB (Telegram voice/photos are small; generous headroom).
+    if (typeof info.file_size === "number" && info.file_size > capBytes) {
+      return { tooLarge: true, limitMb: Math.round(capBytes / (1024 * 1024)) };
+    }
     const res = await fetch(`${API}/file/bot${token(env)}/${info.file_path}`);
     if (!res.ok) return null;
     const mime = res.headers.get("Content-Type") ?? "application/octet-stream";
-    return { bytes: new Uint8Array(await res.arrayBuffer()), mime };
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength > capBytes) return { tooLarge: true, limitMb: Math.round(capBytes / (1024 * 1024)), mime };
+    return { bytes, mime };
   } catch {
     return null;
   }

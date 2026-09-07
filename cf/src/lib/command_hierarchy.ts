@@ -155,7 +155,7 @@ export async function groqClassify(
         Authorization: `Bearer ${key}`,
       },
       body: JSON.stringify({
-        model: "qwen/qwen3.6-27b",
+        model: "openai/gpt-oss-120b",
         temperature: 0,
         messages: [
           {

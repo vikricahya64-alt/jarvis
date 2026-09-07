@@ -68,10 +68,15 @@ export async function touchActivity(env: Env, owner: number, source = "telegram"
        source=excluded.source,
        updated_at=excluded.updated_at`,
   ).bind(owner, now, now, source, now).run();
-  await env.DB.prepare(
-    `UPDATE dms_state SET stage='idle', last_interaction=?, updated_at=?
-     WHERE owner_id=?`,
-  ).bind(now, now, owner).run();
+  // DMS dead-man's switch: only OWNER presence ("telegram" interaction) resets
+  // the man-down timer. Autonomous/edge/heartbeat activity must NOT look like
+  // the owner is alive (M6: previously every source reset DMS to idle).
+  if (source === "telegram") {
+    await env.DB.prepare(
+      `UPDATE dms_state SET stage='idle', last_interaction=?, updated_at=?
+       WHERE owner_id=?`,
+    ).bind(now, now, owner).run();
+  }
   return now;
 }
 
@@ -1018,12 +1023,15 @@ export async function addAgentTask(env: Env, owner: number, task: string, ruleId
   }
 }
 
-/** Mark a task as dispatched (running) with an executor run id. */
-export async function markAgentTaskRunning(env: Env, id: number, runId: string): Promise<void> {
+/** Mark a task as dispatched (running) with an optional executor run id.
+ *  Called on dispatch SUCCESS regardless of whether GitHub returned a run id
+ *  (dispatches API returns 204 without one), so a wedged runner can't leave
+ *  the task silently "pending" forever (M6 stale-cleanup hole). */
+export async function markAgentTaskRunning(env: Env, id: number, runId = ""): Promise<void> {
   try {
     await env.DB.prepare(
       `UPDATE agent_tasks SET status = 'running', run_id = ?, started_at = ? WHERE id = ? AND status = 'pending'`,
-    ).bind(runId, Date.now(), id).run();
+    ).bind(runId || "", Date.now(), id).run();
   } catch { /* best-effort */ }
 }
 
@@ -1039,13 +1047,15 @@ export async function finishAgentTask(
   try {
     const now = Date.now();
     const artifact = artifactUrl.trim() ? artifactUrl.trim().slice(0, 400) : null;
+    // status='running' guard: only the FIRST report finalizes the task
+    // (replays/duplicates become no-ops at the DB layer too — M6).
     if (status === "failed") {
       await env.DB.prepare(
-        `UPDATE agent_tasks SET status = ?, error = ?, artifact_url = ?, finished_at = ? WHERE id = ?`,
+        `UPDATE agent_tasks SET status = ?, error = ?, artifact_url = ?, finished_at = ? WHERE id = ? AND status = 'running'`,
       ).bind(status, (error ?? result).slice(0, 6000), artifact, now, id).run();
     } else {
       await env.DB.prepare(
-        `UPDATE agent_tasks SET status = ?, result = ?, artifact_url = ?, finished_at = ? WHERE id = ?`,
+        `UPDATE agent_tasks SET status = ?, result = ?, artifact_url = ?, finished_at = ? WHERE id = ? AND status = 'running'`,
       ).bind(status, result.slice(0, 60000), artifact, now, id).run();
     }
   } catch { /* best-effort */ }
@@ -1062,11 +1072,13 @@ export async function failStaleAgentTasks(env: Env, timeoutMs = 30 * 60 * 1000):
     const { meta } = await env.DB.prepare(
       `UPDATE agent_tasks SET status = 'failed',
          error = ?, finished_at = ?
-       WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?`,
+       WHERE (status = 'running' AND started_at IS NOT NULL AND started_at < ?)
+          OR (status = 'pending' AND created_at < ?)`,
     ).bind(
       `executor timeout (no report within ${Math.round(timeoutMs / 60000)} menit)`,
       Date.now(),
       cutoff,
+      Date.now() - 24 * 60 * 60 * 1000,
     ).run();
     return Number(meta.changes ?? 0);
   } catch {

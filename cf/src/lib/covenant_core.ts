@@ -129,7 +129,7 @@ export async function validateActionAgainstCovenant(
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
       body: JSON.stringify({
-        model: "qwen/qwen3.6-27b",
+        model: "openai/gpt-oss-120b",
         temperature: 0,
         messages: [
           {
@@ -262,7 +262,7 @@ export class CovenantCore {
       try {
         const clauseSummary = results.map((c: any) => `${c.id}:${c.contentHash}`).join("\n");
         const res = await this.groq.completions({
-          model: "qwen/qwen3.6-27b",
+          model: "openai/gpt-oss-120b",
           messages: [
             {
               role: "system",
@@ -283,12 +283,14 @@ export class CovenantCore {
           }
         }
       } catch {
-        // Groq unavailable → fail-closed allow (preserve original behavior)
+        // Groq unavailable → fail-closed DENY: a covenant that cannot be
+        // verified must block, not silently allow ("covenant_unverifiable").
+        return { allowed: false, reasoning: "Covenant tidak dapat diverifikasi (fail-closed deny)." };
       }
     }
 
-    // Fallthrough: allowed (same as original when Groq unavailable).
-    return { allowed: true, reasoning: "Valid according to covenant (fallback allow)." };
+    // Clauses verified via Groq and nothing flagged → allow.
+    return { allowed: true, reasoning: "Selaras dengan klausa covenant aktif." };
   }
 
   /** healthCheck — module liveness probe. */

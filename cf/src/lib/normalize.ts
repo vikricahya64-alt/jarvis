@@ -365,8 +365,11 @@ export function normalizeInput(raw: string): string {
   return raw
     .replace(/\s+/g, " ")
     .trim()
-    // Strip "Username:" prefix Telegram group bots
-    .replace(/^[^:]+:\s*\n?\s*/i, "")
+    // Strip "Username: msg" prefix of Telegram group bots — colon MUST be
+    // followed by whitespace (and the prefix may span multiple words), so URLs
+    // ("https://…"), clock times ("15:30") and "name:/cmd" are NEVER mangled
+    // (verified live bug M6: the old `[^:]+:\s` ate the scheme of any URL).
+    .replace(/^[^\s:]+(?:\s+[^\s:]+)*:\s+/, "")
     // Leetspeak normalization (hanya jika ada campuran angka+huruf)
     .replace(/\b\w*\d\w*\b/g, (w) => {
       if (/\d/.test(w) && /[a-zA-Z]/.test(w)) return leetspeakNormalize(w);

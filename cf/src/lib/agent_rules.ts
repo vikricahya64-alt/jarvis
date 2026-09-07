@@ -18,7 +18,7 @@
 //   * WIB constant: JARVIS speaks with the owner in UTC+7 everywhere else.
 //=====================================================================
 
-import { Env, addAgentTask, getDueAgentRules, updateAgentRuleFired, getDmsConfig } from "./db";
+import { Env, addAgentTask, getDueAgentRules, updateAgentRuleFired, getDmsConfig, markAgentTaskRunning } from "./db";
 import { delegateToGithub } from "./agent_executor";
 import { sendMessage } from "./telegram";
 
@@ -134,16 +134,22 @@ export async function fireDueAgentRules(
       continue;
     }
     const next = computeNextFire(rule.recur_spec, now);
+    // Claim FIRST (advance-then-dispatch): persist next_fire_at before any
+    // dispatch work so a crash between addAgentTask and dispatch can NEVER
+    // re-select the same due rule on the next cron tick (no re-fire storm).
+    // Also makes the due-claim effectively atomic against overlapping runs:
+    // once advanced, the SELECT no longer matches the rule. M6 audit fix.
+    const claimed = await updateAgentRuleFired(env, rule.id, now, next);
+    if (!claimed) continue; // another tick already claimed it
     const instanceId = await addAgentTask(env, rule.owner_id, rule.task, rule.id);
     if (!instanceId) {
-      const ok = await updateAgentRuleFired(env, rule.id, now, next);
-      console.error(`[agent_rules] instans #rule ${rule.id} gagal; advance=${ok}`);
+      console.error(`[agent_rules] instans #rule ${rule.id} gagal (advance tetap dipertahankan)`);
       failed++;
       continue;
     }
     const sent = await delegateToGithub(env, instanceId, rule.task);
-    const ok = await updateAgentRuleFired(env, rule.id, now, next);
-    console.log(`[agent_rules] rule #${rule.id} fired instans #${instanceId} advance=${ok} next=${new Date(next).toISOString()}`);
+    await markAgentTaskRunning(env, instanceId, sent.runId ?? "");
+    console.log(`[agent_rules] rule #${rule.id} fired instans #${instanceId} claimed=${claimed}`);
     if (sent.error) {
       failed++;
       await sendMessage(env, rule.owner_id,

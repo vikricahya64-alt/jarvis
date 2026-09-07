@@ -22,6 +22,19 @@ const GITHUB_API = "https://api.github.com/repos/";
 
 export type DelegateResult = { runId?: string; error?: string };
 
+/** Source-cited report protocol appended to every delegated task (P2
+ *  deep-research parity): the executor must separate verifiable facts from
+ *  judgments and give a live source URL per claim. Keeps JARVIS's audit
+ *  discipline intact end-to-end — the DM the owner receives stays sourced. */
+const DEEP_RESEARCH_PROTOCOL = `
+
+PROTOKOL LAPORAN (wajib):
+1. Pisahkan FAKTA vs ANALISIS dalam laporan akhir.
+2. Tiap klaim/fakta penting diberi sumber URL yang nyata (1-3 per poin).
+3. Tulis ringkasan singkat di awal (maks 120 kata) dalam Bahasa Indonesia.
+4. Jangan menyebut angka tanpa sumber. Jika ragu, tandai "perlu verifikasi".
+5. Daftar sumber lengkap di bagian akhir.`;
+
 /** True when the cloud executor is fully configured. */
 export function agentExecutorConfigured(env: Env): boolean {
   const repo = env.GITHUB_REPO ?? "";
@@ -39,6 +52,7 @@ export async function delegateToGithub(
   const token = env.GITHUB_TOKEN ?? "";
   if (!repo || !token) return { error: "executor-not-configured" };
   try {
+    const payload = `${task}${DEEP_RESEARCH_PROTOCOL}`.slice(0, 3800);
     const res = await fetchWithTimeout(
       `${GITHUB_API}${repo}/dispatches`,
       {
@@ -52,12 +66,22 @@ export async function delegateToGithub(
         },
         body: JSON.stringify({
           event_type: "jarvis-task",
-          client_payload: { task_id: String(taskId), task: task.slice(0, 3800) },
+          client_payload: { task_id: String(taskId), task: payload },
         }),
       },
       15000,
     );
     if (!res.ok) return { error: `github_http_${res.status}` };
+    // gateguard audit: immutable dispatch record for the owner to verify.
+    if (env.CONFIG_KV) {
+      try {
+        await env.CONFIG_KV.put(
+          `dispatch:${taskId}`,
+          JSON.stringify({ ts: Date.now(), repo, task: task.slice(0, 200) }),
+          { expirationTtl: 7 * 86400 },
+        );
+      } catch { /* audit is best-effort, never breaks dispatch */ }
+    }
     return {};
   } catch (e) {
     return { error: `dispatch_failed:${String(e).slice(0, 80)}` };

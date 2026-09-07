@@ -197,6 +197,11 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   if (doc && (!doc.file_size || doc.file_size <= 15 * 1024 * 1024)) {
     const label = doc.file_name || doc.mime_type || "dokumen";
     const dl = await downloadTelegramFile(env, doc.file_id);
+    if (dl && "tooLarge" in dl) {
+      await fire(sendMessage(env, from,
+        `⚠️ Lampiran *${label.slice(0, 60)}* melebihi batas ${dl.limitMb} MB — tak dapat diproses. Kirim versi lebih kecil.`));
+      return new Response("ok", { status: 200 });
+    }
     if (!dl || !dl.bytes.byteLength) {
       await fire(sendMessage(env, from,
         `📎 Gagal mengunduh lampiran *${label.slice(0, 60)}* dari Telegram (periksa kembali, mungkin file rusak).`));
@@ -229,7 +234,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
       `📎 Lampiran *${label.slice(0, 60)}* (${(dl.bytes.byteLength / 1024).toFixed(0)} KB) diterima.\n` +
       `Tugas #${id}: analisis dikirim ke eksekutor cloud — hasil kubalas di sini.`));
     const sent = await delegateToGithub(env, id, text);
-    if (!sent.error && sent.runId) await markAgentTaskRunning(env, id, sent.runId);
+    if (!sent.error) await markAgentTaskRunning(env, id, sent.runId ?? "");
     if (sent.error) {
       await fire(sendMessage(env, from,
         `⚠️ Tugas #${id} tersimpan tapi gagal dispatch (${sent.error}). Status tetap ⏳; cek /tugas list.`));
@@ -479,6 +484,26 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     await safeDBReply(env, r, async () => `🛡️ *Audit Phantom*\n${await auditPhantomRules(env)}`);
     return new Response("ok", { status: 200 });
   }
+  if (trimmed === "/audit-dispatch") {
+    await safeDBReply(env, r, async () => {
+      const list = await (env.CONFIG_KV?.list({ prefix: "dispatch:", limit: 10 }) ?? Promise.resolve({ keys: [] }));
+      if (!list.keys || list.keys.length === 0) return "📡 Belum ada record dispatch eksekutor.";
+      const lines = list.keys.map((k) => `• ${k.name} (${new Date(k.expiration ? k.expiration * 1000 : Date.now()).toISOString().slice(0, 10)})`).join("\n");
+      return `📡 *Audit dispatch (TASK_DISPATCH)*\n${lines}`;
+    });
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed === "/usage") {
+    await safeDBReply(env, r, async () => {
+      const now = new Date().toISOString().slice(0, 7);
+      const prev = new Date(Date.now() - 40 * 86400_000).toISOString().slice(0, 7);
+      const cur = await env.CONFIG_KV?.get(`cost:${now}`).catch(() => null);
+      const last = await env.CONFIG_KV?.get(`cost:${prev}`).catch(() => null);
+      const fmt = (s: string | null | undefined, m: string) => { if (!s) return m; try { const o = JSON.parse(s); return Object.entries(o).map(([k, v]) => `${k}=${v}`).join(" ") || m; } catch { return m; } };
+      return `💸 *Pemakaian token (ledger KV)*\n• ${now}: ${fmt(cur, "belum ada")}\n• ${prev}: ${fmt(last, "belum ada")}\n(Lihat per-provider; direset tiap bulan)`;
+    });
+    return new Response("ok", { status: 200 });
+  }
   if (trimmed === "/preferences" || trimmed === "/prefs") {
     await safeDBReply(env, r, async () => {
       const prefs = await getActivePreferences(env);
@@ -665,29 +690,66 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
 }
 
 async function resolveConsent(env: Env, owner: number, corr: string, decision: string): Promise<boolean> {
-  // Enforce consent TTL (default-DENY). If the request was raised longer ago
-  // than CONSENT_TIMEOUT_S (default 60s) and no matching request row exists,
-  // treat as expired → deny. L11 python default-deny parity.
+  // Enforce consent TTL (default-DENY) and, on "yes", RE-EXECUTE the stored
+  // original command (previously "yes" only logged — M6 audit fix). Unknown
+  // correlation → deny (the old code treated a MISSING row as valid, the
+  // exact inverse of default-DENY; now fail-closed).
   const timeoutMs = Number(env.CONSENT_TIMEOUT_S || "60") * 1000;
   const requestedTs = await getConsentRequestTs(env, owner, corr);
-  const expired = requestedTs != null && Date.now() - requestedTs > timeoutMs;
-  const effective = expired ? "timeout" : decision;
-  // Record to consent_log (append-only). Redact the correlation id so raw
-  // PII/command hashes from the wire never persist verbatim.
-  await logConsent(env, owner, redact(corr), "inline-consent", "high", effective, 70);
-  await fire(sendMessage(env, owner,
-    effective === "pause"
-      ? "⏸️ Otonomi DI-PAUSE."
-      : effective === "timeout"
-        ? `⏰ Sesi consent kedaluwarsa (default DENY).`
-        : `Keputusan consent "${effective}" dicatat.`));
-  return !expired; // consumed (in-time) only
+  if (requestedTs == null) {
+    await logConsent(env, owner, redact(corr), "inline-consent", "high", "denied-unknown", 70);
+    await fire(sendMessage(env, owner,
+      "🔒 Sesi consent tidak ditemukan (default DENY). Kirim ulang permintaannya, lalu pilih keputusannya."));
+    return false;
+  }
+  const expired = Date.now() - requestedTs > timeoutMs;
+  if (expired) {
+    await logConsent(env, owner, redact(corr), "inline-consent", "high", "timeout", 70);
+    await fire(sendMessage(env, owner,
+      "⏰ Sesi consent kedaluwarsa (default DENY). Kirim ulang permintaannya."));
+    return false;
+  }
+  await logConsent(env, owner, redact(corr), "inline-consent", "high", decision, 70);
+
+  if (decision === "pause") {
+    await setAutonomyPaused(env, owner, true);
+    await fire(sendMessage(env, owner, "⏸️ Otonomi DI-PAUSE."));
+    return true;
+  }
+  if (decision !== "yes") {
+    await fire(sendMessage(env, owner, `❌ Keputusan consent "no" dicatat — aksi tidak dijalankan.`));
+    return true;
+  }
+
+  // "yes" → re-execute the original command through the full pipeline
+  // (constitutional guards + consent gate still apply; the ok:<corr> flag
+  // converts THIS already-approved correlation into an EXECUTE).
+  const stored = await env.CONFIG_KV.get(`consent:${corr}`).catch(() => null);
+  await env.CONFIG_KV.delete(`consent:${corr}`).catch(() => {});
+  if (!stored) {
+    await fire(sendMessage(env, owner,
+      "✅ Disetujui — tapi konteks asli sudah kedaluwarsa. Mohon kirim ulang permintaannya."));
+    return true;
+  }
+  await fire(sendMessage(env, owner, "✅ Disetujui — dijalankan sekarang."));
+  await env.CONFIG_KV.put(`ok:${corr}`, "1", { expirationTtl: 120 }).catch(() => {});
+  await act(env, owner, stored).catch((e) => {
+    console.error("[consent] re-exec gagal:", (e as Error).message);
+  });
+  return true;
 }
 
 /** Simplified action path for a normal (non-diagnostic) text command. */
 async function act(env: Env, owner: number, text: string): Promise<void> {
   const res = await routeCommand(env, owner, text);
-  switch (res.decision.action) {
+  // Consent re-execution (M6): a "Setujui" callback stored ok:<corr>, so this
+  // re-run of the SAME command resolves to EXECUTE instead of asking again —
+  // the owner already authorized that exact correlation once. Fail-closed:
+  // without the ok flag, consent is still asked every time.
+  const consentOk = await env.CONFIG_KV.get(`ok:${res.decision.correlationId}`).catch(() => null);
+  if (consentOk) await env.CONFIG_KV.delete(`ok:${res.decision.correlationId}`).catch(() => {});
+  const effectiveAction = consentOk ? "EXECUTE" : res.decision.action;
+  switch (effectiveAction) {
     case "EXECUTE":
       // Translation is a dedicated read-only request handled BEFORE the generic
       // search path so it never falls through to the bare "Ok." reply.
@@ -842,6 +904,9 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
         ] } }));
       break;
     case "CONSENT":
+      // Keep the original command so a "yes" can re-run it (M6 re-execution).
+      await env.CONFIG_KV.put(`consent:${res.decision.correlationId}`, text, { expirationTtl: 600 })
+        .catch(() => {/* degrade: owner re-sends */});
       await fire(sendMessage(env, owner,
         `⚠️ Aksi ini perlu persetujuan Anda:`,
         { replyMarkup: { inline_keyboard: [[
@@ -1015,7 +1080,7 @@ async function delegateNow(env: Env, from: number, text: string): Promise<string
   if (!id) return "Gagal menyimpan tugas (error D1). Coba lagi.";
   const sent = await delegateToGithub(env, id, body);
   if (sent.error) return `⚠️ Tugas #${id} tersimpan tapi gagal dispatch (${sent.error}). Status tetap ⏳ — /tugas list.`;
-  if (sent.runId) await markAgentTaskRunning(env, id, sent.runId);
+  await markAgentTaskRunning(env, id, sent.runId ?? "");
   return `📦 Tugas #${id} dikirim ke eksekutor cloud — hasil kubalas di sini.`;
 }
 
@@ -1027,7 +1092,10 @@ async function understandMedia(env: Env, owner: number, msg: TelegramMessage): P
 
   if (msg.voice) {
     const dl = await downloadTelegramFile(env, msg.voice!.file_id);
-    const transcript = dl ? await transcribeVoiceWithWorkersAi(env, bytesToBase64(dl.bytes)) : null;
+    if (dl && "tooLarge" in dl) {
+      return `⚠️ Voice note melebihi batas ${dl.limitMb} MB — kirim versi lebih pendek, atau ketik pesannya.`;
+    }
+    const transcript = dl && "bytes" in dl ? await transcribeVoiceWithWorkersAi(env, bytesToBase64(dl.bytes)) : null;
     if (!transcript) return null;
     if (mediaIsTaskIntent(transcript)) return delegateNow(env, owner, transcript);
     const ctx: MessageContext = { owner, text: transcript, source: "telegram" };
@@ -1038,7 +1106,18 @@ async function understandMedia(env: Env, owner: number, msg: TelegramMessage): P
   if (msg.photo?.length) {
     const best = msg.photo![msg.photo!.length - 1];
     const dl = await downloadTelegramFile(env, best.file_id);
-    if (!dl) return null;
+    if (dl && "tooLarge" in dl) {
+      return `⚠️ Foto melebihi batas ${dl.limitMb} MB — kirim versi lebih kecil.`;
+    }
+    // Download failure (or unsupported decode) → still understand the CAPTION
+    // so a task-intent photo/caption is never silently dropped (M6).
+    if ((!dl || !("bytes" in dl)) && caption) {
+      if (mediaIsTaskIntent(caption)) return delegateNow(env, owner, caption);
+      const ctx0: MessageContext = { owner, text: caption, source: "telegram" };
+      const g0 = await processMessage(env, ctx0);
+      return g0.text && g0.text.length > 5 ? g0.text : null;
+    }
+    if (!dl || !("bytes" in dl)) return null;
     const mime = dl.mime.toLowerCase().startsWith("image/") ? dl.mime : "image/jpeg";
     const dataUrl = `data:${mime};base64,${bytesToBase64(dl.bytes)}`;
     const prompt = caption && !mediaIsTaskIntent(caption) ? caption : undefined;
@@ -1083,7 +1162,13 @@ function isTodoCommand(trimmed: string, raw: string): boolean {
   // Slash forms.
   if (trimmed.startsWith("/todo")) return true;
   // Natural-language forms: "tambah todo ..." / "hapus todo ..." / "buat todo ..."
-  if (/^(tambah|tambahkan|buat|buatkan|catat|catatkan|simpan|add|hapus|hapuskan|delete|remove|del|done|selesai|cek)\s+(todo|task|tugas)\b/i.test(lower)) return true;
+  // plus delete verbs WITHOUT the keyword ("hapus telur") — the todo list is
+  // the only inline-deletable thing, so a bare "hapus <teks>" is todo intent
+  // (M6: previously fell through to a confusing "ditunda" reply).
+  if (/^(?:tambah|tambahkan|buat|buatkan|catat|catatkan|simpan|add)\s+(?:todo|task|tugas)\b/i.test(lower)) return true;
+  if (/^(?:hapus|hapuskan|delete|remove|del)\s+(?:todo|task|tugas)?\s*\S/i.test(lower)) return true;
+  if (/^(?:done|selesai)\s+(?:todo|task|tugas)\b/i.test(lower)) return true;
+  if (/^(?:cek|check|lihat|daftar)\s+(?:todo|task|tugas)\b/i.test(lower)) return true;
   // Bare "todo" listing.
   if (/^todo\b/i.test(lower) || lower === "list todo" || lower === "todo list") return true;
   return false;
@@ -1139,9 +1224,9 @@ async function handleTodoCommand(env: Env, owner: number, raw: string): Promise<
   }
 
   // --- Delete: "/todo del <id|teks>", "/todo delete <teks>", "hapus todo <teks>",
-  //             "delete todo <teks>" ---
+  //             "delete todo <teks>", bare "hapus <teks>" (todo-by-text) ---
   const delMatch = trimmed.match(
-    /^(?:\/todo\s+(?:del|delete|remove|hapus)|hapus(?:kan)?|delete|remove|del)\s+(?:todo|task|tugas)\s+(.+)$/i,
+    /^(?:\/?todo\s+(?:del|delete|remove|hapus)|hapus(?:kan)?|delete|remove|del)\s+(?:todo|task|tugas)?\s+(.+)$/i,
   );
   if (delMatch?.[1]) {
     const needle = delMatch[1].trim();
@@ -1216,7 +1301,7 @@ function isReminderCommand(trimmed: string, raw: string): boolean {
  *  min), absolute "jam HH:MM"/"pukul HH:MM" today interpreted as WIB (UTC+7),
  *  and recurring tokens ("setiap hari", "setiap pagi/siang/malam", "setiap
  *  minggu", "setiap jam"). */
-function parseReminder(raw: string): { text: string; dueAt: number; repeat: "" | "hourly" | "daily" | "weekly" } | null {
+export function parseReminder(raw: string): { text: string; dueAt: number; repeat: "" | "hourly" | "daily" | "weekly" } | null {
   const trimmed = raw.trim();
   const lower = trimmed.toLowerCase();
 
@@ -1297,6 +1382,26 @@ function parseReminder(raw: string): { text: string; dueAt: number; repeat: "" |
       .replace(/^(?:reminder|remind|remind me|remember|ingatkan|pengingat)(?:\s+saya|\s+aku)?\s*(?:untuk\s*)?/i, "")
       .trim();
     return text.length >= 2 ? { text, dueAt: due, repeat: "daily" } : null;
+  }
+
+  // Weekly without a clock → next fire exactly 7 days out (roll keeps the
+  // same weekday/time). Fail-closed: previously "setiap minggu" without a
+  // clock fell through to null ("Pengingat tidak dikenali") — M6 fix.
+  if (repeat === "weekly") {
+    const text = trimmed
+      .replace(/setiap\s+minggu\b/i, "")
+      .replace(/^(?:reminder|remind|remind me|remember|ingatkan|pengingat)(?:\s+saya|\s+aku)?\s*(?:untuk\s*)?/i, "")
+      .trim();
+    return text.length >= 2 ? { text, dueAt: Date.now() + 7 * 86400000, repeat: "weekly" } : null;
+  }
+
+  // Hourly without a clock → next hour boundary, repeated every hour.
+  if (repeat === "hourly") {
+    const text = trimmed
+      .replace(/setiap\s+jam\b/i, "")
+      .replace(/^(?:reminder|remind|remind me|remember|ingatkan|pengingat)(?:\s+saya|\s+aku)?\s*(?:untuk\s*)?/i, "")
+      .trim();
+    return text.length >= 2 ? { text, dueAt: Date.now() + 3600000, repeat: "hourly" } : null;
   }
   return null;
 }
@@ -1476,7 +1581,7 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
         `⚠️ Gagal dispatch ulang (${sent.error}). Coba lagi sebentar.`));
       return;
     }
-    if (sent.runId) await markAgentTaskRunning(env, target.id, sent.runId);
+    await markAgentTaskRunning(env, target.id, sent.runId ?? "");
     await fire(sendMessage(env, from, "🧠 Berhasil — hasil kubalas di sini. `/tugas list` untuk status."));
     return;
   }
@@ -1595,7 +1700,7 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
       `⚠️ Tugas #${id} tersimpan tapi *gagal dispatch* (${sent.error}). Status tetap ⏳. Cek /tugas list.`));
     return;
   }
-  if (sent.runId) await markAgentTaskRunning(env, id, sent.runId);
+  await markAgentTaskRunning(env, id, sent.runId ?? "");
   await fire(sendMessage(env, from,
     "🧠 Dikirim ke eksekutor cloud. Hasil kubalas di sini (biasanya 1–5 menit). `/tugas list` untuk status."));
 }

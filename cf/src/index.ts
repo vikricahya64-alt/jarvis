@@ -21,7 +21,7 @@ import { identityStatusText, createEpoch, verifyContinuity, markEpochVerified } 
 import { refreshQuotaSnapshot as monitorRefresh } from "./lib/monitor";
 import { ddgSearch } from "./lib/ai";
 import { acquireCronLock, releaseCronLock } from "./lib/resilience";
-import { runDreamCycle, generateMorningBriefing, decayPreferences, runEvolutionLoop } from "./lib/evolution";
+import { runDreamCycle, generateMorningBriefing, decayPreferences, runEvolutionLoop, runInsightLifecycle } from "./lib/evolution";
 import { offerSuggestions } from "./lib/predictive";
 import { tickAutonomy } from "./lib/maestro";
 import { syncAllSessions } from "./lib/context_manager";
@@ -156,7 +156,7 @@ export default {
         ok: true,
         ts: Date.now(),
         env: env.APP_ENV ?? "unknown",
-        version: "c21de407",
+        version: "p1-c6c1d2e3",
       }));
     }
 
@@ -259,7 +259,7 @@ export default {
         return respond(Response.json({
           ok: true,
           ts: Date.now(),
-          version: "c21de407",
+          version: "p1-c6c1d2e3",
           systems: {
             d1: d1Ok ? "✅" : "❌",
             kv: kvOk ? "✅" : "❌",
@@ -382,6 +382,12 @@ export default {
       const task = await getAgentTask(env, tid);
       if (!task) return respond(new Response("no such task", { status: 404 }));
       if (st !== "done" && st !== "failed") return respond(new Response("bad status", { status: 400 }));
+      // Replay/duplicate guard (M6): only the FIRST report from the executor
+      // wins. A finished task must never be re-finalized or re-DM'd by a
+      // replayed (or malicious re-posted) /agent/done with the same token.
+      if (task.status !== "running") {
+        return respond(new Response("already terminal", { status: 409 }));
+      }
       const rawResult = sanitizeAgentReport(body?.result ?? "");
       const rawError = sanitizeAgentReport(body?.error ?? "");
       const artifact = sanitizeAgentReport(body?.artifact_url ?? "").slice(0, 400);
@@ -411,9 +417,12 @@ export default {
     }
 
     // /agent/list?token=... — task statuses (used by /tugas list + manual ops).
+    // Auth tightened (M6): AGENT_TOKEN only, plus TELEGRAM_SECRET for
+    // first-party tooling — the raw TELEGRAM_TOKEN no longer doubles as an
+    // admin token for task listing.
     if (path === "/agent/list") {
       const tok = url.searchParams.get("token");
-      const allowed = (env.AGENT_TOKEN && tok === env.AGENT_TOKEN) || tok === env.TELEGRAM_SECRET || tok === env.TELEGRAM_TOKEN;
+      const allowed = (env.AGENT_TOKEN && tok === env.AGENT_TOKEN) || (env.TELEGRAM_SECRET && tok === env.TELEGRAM_SECRET);
       if (!allowed) return respond(new Response("unauthorized", { status: 401 }));
       const limitParam = Number(url.searchParams.get("limit") ?? "15");
       const limit = Number.isFinite(limitParam) ? Math.min(100, Math.max(1, limitParam)) : 15;
@@ -515,6 +524,8 @@ export default {
       } else if (cron === "0 3 * * *") {
         const expired = await sweepExpiredProposals(env);
         console.log(`[cron] value_alignment: ${expired} expired (${Date.now() - start}ms)`);
+        const insightLife = await runInsightLifecycle(env);
+        console.log(`[cron] insight_lifecycle: validated=${insightLife.validated} promoted=${insightLife.promoted} (${Date.now() - start}ms)`);
         await ensureTelegramCommands(env);
         const optResult = await runConfigOptimization(env);
         console.log(`[cron] config_opt: applied=${optResult.applied.length} suggestions=${optResult.suggestions.length} (${Date.now() - start}ms)`);
