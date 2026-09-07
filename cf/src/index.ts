@@ -46,6 +46,25 @@ async function logRequest(env: Env, path: string, method: string, status: number
   } catch { /* availability */ }
 }
 
+/** Fail-closed visibility: when handleUpdate throws, tell the owner instead of
+ *  silently swallowing the message. Best-effort — never throws. */
+async function notifyOwnerFailure(
+  env: Env,
+  update: { callback_query?: { message?: { chat?: { id?: number } } }; message?: { chat?: { id?: number } } },
+): Promise<void> {
+  try {
+    const chatId = update?.callback_query?.message?.chat?.id
+      ?? update?.message?.chat?.id
+      ?? Number(env.OWNER_TELEGRAM_ID || 0);
+    if (!chatId || !env.TELEGRAM_TOKEN) return;
+    await sendMessage(
+      env,
+      chatId,
+      "⚠️ Ada gangguan teknis sedang kuperbaiki — mohon ulangi pesan sebentar lagi.",
+    );
+  } catch { /* availability */ }
+}
+
 /** Cron: finalize a new identity epoch and enforce covenant binding. */
 async function finalizeIdentityEpoch(env: Env): Promise<void> {
   try {
@@ -156,7 +175,7 @@ export default {
         ok: true,
         ts: Date.now(),
         env: env.APP_ENV ?? "unknown",
-        version: "m8-v4-1e5123a5",
+        version: "m8-v5-c3d6d5e1",
       }));
     }
 
@@ -190,6 +209,9 @@ export default {
           res = await handleUpdate(env, update);
         } catch (e) {
           console.error("[webhook] handleUpdate error:", (e as Error).message, (e as Error).stack);
+          // NEVER silent: any internal exception still tells the owner what
+          // happened instead of dropping their message without a trace.
+          await notifyOwnerFailure(env, update);
           res = new Response("ok", { status: 200 }); // always 200 to prevent Telegram retry storm
         }
         await env.CONFIG_KV.put(`upd:${updId}`, "1", { expirationTtl: 172800 }).catch(() => {});
@@ -200,6 +222,7 @@ export default {
         res2 = await handleUpdate(env, update);
       } catch (e) {
         console.error("[webhook] handleUpdate error:", (e as Error).message);
+        await notifyOwnerFailure(env, update);
         res2 = new Response("ok", { status: 200 });
       }
       return respond(res2);
@@ -259,7 +282,7 @@ export default {
         return respond(Response.json({
           ok: true,
           ts: Date.now(),
-          version: "m8-v4-1e5123a5",
+          version: "m8-v5-c3d6d5e1",
           systems: {
             d1: d1Ok ? "✅" : "❌",
             kv: kvOk ? "✅" : "❌",
