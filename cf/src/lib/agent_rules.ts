@@ -148,7 +148,11 @@ export async function fireDueAgentRules(
       continue;
     }
     const sent = await delegateToGithub(env, instanceId, rule.task);
-    await markAgentTaskRunning(env, instanceId, sent.runId ?? "");
+    // Only mark the task "running" when dispatch actually succeeded. On failure
+    // the task stays "pending" so it stays visible/retryable in /tugas instead
+    // of being stuck "running" with no run_id for the 30-min expiry (mirrors
+    // the guarded call in telegram_webhook.ts).
+    if (!sent.error) await markAgentTaskRunning(env, instanceId, sent.runId ?? "");
     console.log(`[agent_rules] rule #${rule.id} fired instans #${instanceId} claimed=${claimed}`);
     if (sent.error) {
       failed++;

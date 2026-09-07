@@ -156,7 +156,7 @@ export default {
         ok: true,
         ts: Date.now(),
         env: env.APP_ENV ?? "unknown",
-        version: "m7-v7-c3d4e5f6",
+        version: "m8-v1-5f66b279",
       }));
     }
 
@@ -259,7 +259,7 @@ export default {
         return respond(Response.json({
           ok: true,
           ts: Date.now(),
-          version: "m7-v7-c3d4e5f6",
+          version: "m8-v1-5f66b279",
           systems: {
             d1: d1Ok ? "✅" : "❌",
             kv: kvOk ? "✅" : "❌",

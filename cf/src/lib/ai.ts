@@ -11,7 +11,7 @@
 // CPU is I/O-wait only). DuckDuckGo instant answer is plain fetch.
 //=====================================================================
 
-import { Env, recentContext, appendMemory, searchMemory, storeLearnedKnowledge, isTopicKnown } from "./db";
+import { Env, recentContext, searchMemory, storeLearnedKnowledge, isTopicKnown } from "./db";
 import { withResilience, fetchWithTimeout, logRequest, getBreakerState } from "./resilience";
 import { getAnswerBehaviorContext, reflectOnTurn } from "./evolution";
 import { isResearchClass, orchestrateResearch } from "./subagents";
@@ -1074,8 +1074,6 @@ export async function searchAndSynthesize(
     // returns null, fall through to single-pass (never burns budget twice).
     const sub = await orchestrateResearch(env, owner, userText, topic, followupAnchor);
     if (sub) {
-      await appendMemory(env, owner, "user", userText, topic);
-      await appendMemory(env, owner, "assistant", sub, topic);
       if (sub.length > 120) void reflectOnTurn(env, userText, sub, []).catch(() => {});
       return { reply: sub, source: "subagents" };
     }
@@ -1176,8 +1174,6 @@ export async function searchAndSynthesize(
     if (hits.length > 0 && !/sumber:|📚/i.test(formatted)) {
       formatted = `${formatted}\n\n📚 *Sumber:*\n${formatSourceList(hits, 4)}`;
     }
-    await appendMemory(env, owner, "user", userText, topic);
-    await appendMemory(env, owner, "assistant", formatted, topic);
     if (formatted.length > 120) {
       void reflectOnTurn(env, userText, formatted, []).catch(() => {});
     }
@@ -1194,14 +1190,10 @@ export async function searchAndSynthesize(
       "research",
       topicSentiment.sentiment,
     );
-    await appendMemory(env, owner, "user", userText, topic);
-    await appendMemory(env, owner, "assistant", formatted, topic);
     return { reply: formatted, source: "ddg" };
   }
   // Final fail-closed: canned reply.
   const canned = `Saya akan cari tentang *${topic}*, tapi belum bisa menghubungi mesin pencari saat ini. Coba lagi sebentar.`;
-  await appendMemory(env, owner, "user", userText, topic);
-  await appendMemory(env, owner, "assistant", canned, topic);
   return { reply: canned, source: "canned" };
 }
 

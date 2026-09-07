@@ -870,9 +870,12 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
       }
       const topic = extractTopic(text);
       if (topic) {
-        // Friendly info/query EXECUTE → real search + synthesis (searchAndSynthesize
-        // already persists user+assistant turns; do NOT append a duplicate here).
+        // Friendly info/query EXECUTE → real search + synthesis. This webhook
+        // path bypasses the brain's reflect stage, so user+assistant turns are
+        // persisted EXPLICITLY here (single writer for this legacy path).
         const r = await searchAndSynthesize(env, owner, text, topic);
+        await appendMemory(env, owner, "user", text, topic).catch(() => {});
+        await appendMemory(env, owner, "assistant", r.reply, topic).catch(() => {});
         // Observasi: user tertarik pada topik ini (untuk personalisasi di masa depan)
         saveObservation(env, owner, `User menanyakan tentang: ${topic}`, "interest").catch(() => {});
         await recordTaskCounters(env, "standard", owner);
@@ -920,6 +923,8 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
             }
           }
           const r = await searchAndSynthesize(env, owner, text, aTopic);
+          await appendMemory(env, owner, "user", text, aTopic).catch(() => {});
+          await appendMemory(env, owner, "assistant", r.reply, aTopic).catch(() => {});
           await recordTaskCounters(env, "standard", owner);
           await storeResearchAnchor(env, owner, aTopic, r.reply).catch(() => {});
           await fire(sendMessage(env, owner, r.reply));
