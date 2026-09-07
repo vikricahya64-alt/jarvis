@@ -118,6 +118,25 @@ const INDONESIAN_WORDS = new Set([
   "apa", "siapa", "dimana", "kapan", "kenapa", "bagaimana", "berapa",
   "ini", "itu", "dan", "atau", "tidak", "bisa", "ada", "adalah",
   "akan", "sudah", "belum", "sedang", "mau", "perlu", "harus",
+  // Kata FUNGSI formal — WAJIB dipertahankan verbatim (jangan pernah dikoreksi
+  // ejaan). Tanpa daftar ini, korektor edit-distance-1 meracuni makna:
+  // tanpa→tanya, minim→minum, dengan→dengar, bukan→buka, dari→cari,
+  // tapi→topi, untuk→(loss), sampai merusak intensi/peringatan (bug live:
+  // "riset ... tanpa skill minim modal" jadi "... tanya skill minum modal").
+  "tanpa", "dengan", "untuk", "bukan", "tetapi", "tapi", "dari", "pada",
+  "kepada", "bagi", "demi", "antara", "jadi", "maka", "lalu", "kalau",
+  "ketika", "saat", "agar", "supaya", "yakni", "yaitu", "dapat", "masih",
+  "serta", "setelah", "sebelum", "terhadap", "menurut", "seperti", "sebagai",
+  "tentang", "adapun", "sebab", "karena", "jika", "meski", "walaupun", "biar",
+  "dalam", "atas", "oleh", "melalui", "sehingga", "sampai", "hanya", "saja",
+  "juga", "apakah", "memang", "sebenarnya", "merupakan", "serta",
+  // kuantitas/minimizer yang sering tertukar dengan kata kerja
+  "minim", "minimal", "besar", "kecil", "sedikit", "banyak", "semua",
+  "cukup", "singkat", "panjang", "berat", "ringan", "murah", "mahal",
+  // kata frekuensi-tinggi lain yang rawan gagal koreksi (yang→uang, pasar→kasar)
+  "yang", "uang", "pasar", "nama", "waktu", "hari", "jam", "orang",
+  "tahun", "jumlah", "harga", "tempat", "kota", "negara", "daerah",
+  "wilayah", "bisnis", "usaha", "modal", "skill", "keuntungan", "omset",
   "tolong", "bantu", "cari", "info", "tentang", "analisis", "review",
   "bandingkan", "ringkas", "laporan", "terjemahkan", "translate",
   "halo", "hai", "pagi", "siang", "sore", "malam",
