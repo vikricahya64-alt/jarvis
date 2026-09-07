@@ -1051,15 +1051,15 @@ const VISION_MODELS = [
  *  with a long "Image Analysis:" bullet dump or CC-quote planning. Clamp to a
  *  short Bahasa Indonesia result; text that resolves to instructions gets
  *  quoted inline, never a multi-line English analysis. */
-const VISION_PROMPT =
-  "Jawab HANYA dalam Bahasa Indonesia. Beri TEPAT 1-2 kalimat pendek. " +
-  "Langsung terangkan isi foto/gambar (objek utama + teks/angka yang tertera). " +
-  "JANGAN menulis kata 'pengantar', 'analisis', 'deskripsi', atau semacamnya di depan. " +
-  "JANGAN mengulang atau menafsirkan isi pesanku sendiri. JANGAN berbahasa Inggris.";
+ const VISION_PROMPT =
+   "Jawab HANYA dalam Bahasa Indonesia. Beri 2-4 kalimat pendek RINGKAS yang merangkum isi foto/gambar secara utuh " +
+   "(apa yang tampak: objek utama, teks/judul/angka, dan jika layar satu kesimpulan singkat). " +
+   "JANGAN menulis kata 'pengantar', 'analisis', 'deskripsi', atau semacamnya di depan. " +
+   "JANGAN mengulang atau menafsirkan isi pesanku sendiri. JANGAN berbahasa Inggris.";
 
-const VISION_PROMPT_TASK =
-  "Jawab HANYA dalam Bahasa Indonesia. Kalau gambar berisi instruksi/pertanyaan tertulis, kutip langsung yang relevan. " +
-  "Langsung ke inti, TEPAT 1-2 kalimat pendek. JANGAN menganalisis gambar di luar konteks. JANGAN berbahasa Inggris.";
+ const VISION_PROMPT_TASK =
+   "Jawab HANYA dalam Bahasa Indonesia. Kalau gambar berisi instruksi/pertanyaan tertulis, kutip langsung yang relevan. " +
+   "Beri 2-4 kalimat pendek RINGKAS yang langsung ke inti gambar. JANGAN menganalisis gambar di luar konteks. JANGAN berbahasa Inggris.";
 
 /** Tidy a raw vision reply (M7 media-fix v3): Llama-3.2-vision leaks its own
  *  planning verbatim ("Drafting the description:", "I need to...") before the
@@ -1097,8 +1097,17 @@ export function tidyVisionReply(reply: string): string | null {
   // Content-based cut (D and any residual English planning): the Indonesian
   // answer commonly begins with one of these phrasings; keep the LAST such
   // sentence segment through the end.
-  const IDN_START = /\b(?:Gambar ini|Pada gambar|Dalam gambar|Di dalam gambar|Tampak|Terlihat|Terdapat|Menampilkan|Menunjukkan|Di gambar|Ini adalah gambar|Gambar tersebut|Screen ?shot ini)\b/i;
-  if (IDN_START.test(out0)) {
+  // Content-based cut (D and any residual English planning): the Indonesian
+  // answer commonly begins with one of these phrasings. ONLY fire when the raw
+  // reply actually carried English reasoning (a `<think` tag was present, or
+  // the surviving text opens with English planning) — NEVER when the whole
+  // answer is already Indonesian, or a generic word like "Terdapat" would
+  // wrongly truncate a normal multi-sentence Indonesian reply ("Di bagian
+  // bawah terdapat..." bug, M7 media-fix v7).
+  const hadThink = /<\s*\/?\s*think\b/i.test(out0) || /<\s*think\b/i.test(reply ?? "");
+  const EN_LEAD = /^\s*(?:the |an? |image analysis|analy[sz]e|based on|here(?:'s| is)|this is|the image shows|we|i(?:'| )\w+|to (?:provide|describe)|from the)/i;
+  const IDN_START = /\b(?:Gambar ini|Pada gambar|Dalam gambar|Di dalam gambar|Tampak|Terlihat|Menampilkan|Menunjukkan|Di gambar|Ini adalah gambar|Gambar tersebut|Screen ?shot ini)\b/i;
+  if ((hadThink || EN_LEAD.test(out0)) && IDN_START.test(out0)) {
     let best = -1;
     const segs = out0.split(/(?<=[.!?])\s+/);
     segs.forEach((seg, i) => { if (IDN_START.test(seg)) best = i; });
@@ -1173,7 +1182,7 @@ async function groqVisionDescribe(env: Env, model: string, dataUrl: string, prom
               { type: "image_url", image_url: { url: dataUrl } },
             ],
           }],
-          max_tokens: 250,
+          max_tokens: 400,
           temperature: 0.2,
           // M7 media-fix v6 (root cause): Groq's Qwen models default to
           // THINKING mode, so the raw content is `<think ... reasoning...
@@ -1262,7 +1271,7 @@ async function workersAiVisionDescribe(env: Env, bytes: Uint8Array, prompt?: str
     try {
       const res = await env.AI.run(
         "@cf/meta/llama-3.2-11b-vision-instruct",
-        { prompt: text, image: Array.from(bytes), max_tokens: 200 },
+        { prompt: text, image: Array.from(bytes), max_tokens: 300 },
       ) as never as { description?: string };
       const d = res?.description?.trim();
       if (d) { out = d; return { ok: true, status: 200 }; }
