@@ -84,10 +84,58 @@ async function call(
 
 const MAX_MSG_LEN = 4000;
 
-/** Sanitize Telegram Markdown special chars so unbalanced formatting never
- *  triggers a MalformedRequest error. Escapes, doesn't strip. */
-export function sanitizeTelegramMarkdown(text: string): string {
-  return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, (m) => (m === "*" ? "*" : `\\${m}`));
+/** Replace the markdown "`{n}`" placeholders (used to quarantine URLs while
+ *  the emphasis markers are being normalized) with their original text. */
+const URL_PLACEHOLDER_RE = /[\u{e000}][\d]+[\u{e001}]/gu;
+
+/**
+ * Strip any Telegram Markdown formatting the producers may emit so the send
+ * layer NEVER triggers a MalformedRequest parse error (400) and so literal
+ * `*`/`_`/backtick artifacts never surface in the chat.
+ *
+ * This is the single consumer-side contract: producers (lists, status, LLM
+ * replies) may keep writing `*bold*`, `[title](url)`, backticks — the send
+ * layer normalizes them all to clean, readable plain text. URLs are preserved
+ * (converted to "title (url)"); heading hashes and stray emphasis markers are
+ * removed entirely. Guaranteed parser-safe for every Telegram parse mode.
+ */
+export function stripTelegramMarkdown(text: string): string {
+  if (!text) return text;
+  const urls: string[] = [];
+  const PROTECT_RE = /(?<=\d)\*(?=\d)/g; // multiplication asterisks must survive
+  // Quarantine any bare/inside-link URLs so emphasis-normalization never
+  // distorts them (underscores/asterisks inside host/paths must survive).
+  let t = String(text).replace(/https?:\/\/[^\s<>)]+/g, (m) => {
+    urls.push(m);
+    return `\u{e000}${urls.length - 1}\u{e001}`;
+  });
+  // Protect digit-asterisk-digit (e.g. "10*5") from being read as emphasis.
+  t = t.replace(PROTECT_RE, "\u{e002}");
+
+  // Markdown links → "title (url)" (parenthesized plain text).
+  t = t.replace(/\[([^[\]\n]{1,200})]\(([^)\n]{0,300})\)/g, (_a, title, url) => `${title} (${url})`);
+  // Line-start bullets ("* item", "** item") are list markers, not emphasis.
+  t = t.replace(/^([ \t]*)\*+[ \t]+/gm, "$1");
+  // Emphasis: collapse `**x**`/`__x__` then single-char pairs. The inner text
+  // must start AND end with a non-space char so `*  100*` / `a * b *` stay
+  // literal instead of being swallowed as emphasis.
+  t = t.replace(/\*\*([^*\n]+?)\*\*/g, "$1");
+  t = t.replace(/__([^_\n]+?)__/g, "$1");
+  t = t.replace(/\*([^*\n\s][^*\n]*?[^*\n\s])\*/g, "$1");
+  t = t.replace(/_([^_\n\s][^_\n]*?[^_\n\s])_/g, "$1");
+  t = t.replace(/`([^`\n]+?)`/g, "$1");
+  // Any marker that didn't pair up is formatting noise → drop it.
+  t = t.replace(/[*_`[\]]+/g, "");
+  // Restore protected multiplication markers.
+  t = t.replace(/[\uE002]/g, "*");
+  // Heading hashes ("# Judul", "### Judul") are decorations → drop them.
+  t = t.replace(/^[ \t]*#{1,6}[ \t]+/gm, "");
+  // Restore quarantined URLs.
+  t = t.replace(URL_PLACEHOLDER_RE, (m) => {
+    const idx = Number(m.replace(/[\uE000\uE001]/g, ""));
+    return urls[idx] ?? m;
+  });
+  return t.replace(/ {2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** Truncate to Telegram's 4096 limit defensively (keep 4000 headroom). */
@@ -102,7 +150,8 @@ export async function sendMessage(
   text: string,
   extra: { replyMarkup?: { inline_keyboard: InlineButton[][] }; parseMode?: string } = {},
 ): Promise<unknown> {
-  const body: Record<string, unknown> = { chat_id: chatId, text: truncate(text) };
+  const clean = stripTelegramMarkdown(truncate(text));
+  const body: Record<string, unknown> = { chat_id: chatId, text: clean };
   if (extra.parseMode) body.parse_mode = extra.parseMode;
   if (extra.replyMarkup) body.reply_markup = extra.replyMarkup;
   return call(env, "sendMessage", body);
@@ -132,7 +181,7 @@ export async function sendPhoto(
   form.append("chat_id", String(chatId));
   const ext = mime === "image/jpeg" ? "jpg" : "png";
   form.append("photo", new Blob([buf as unknown as Blob], { type: mime }), `jarvis_image.${ext}`);
-  form.append("caption", truncate(caption));
+  form.append("caption", stripTelegramMarkdown(truncate(caption)));
   const res = await fetch(`${API}/bot${token(env)}/sendPhoto`, { method: "POST", body: form });
   const data = (await res.json()) as { ok: boolean; result?: unknown; description?: string };
   if (!res.ok || !data.ok) {
@@ -167,7 +216,7 @@ export async function sendVoice(
   const buf = audioBytes instanceof Uint8Array ? audioBytes : new Uint8Array(audioBytes);
   form.append("chat_id", String(chatId));
   form.append("voice", new Blob([buf as unknown as Blob], { type: mime }), "jarvis_voice.mp3");
-  if (caption) form.append("caption", truncate(caption));
+  if (caption) form.append("caption", stripTelegramMarkdown(truncate(caption)));
   const res = await fetch(`${API}/bot${token(env)}/sendVoice`, { method: "POST", body: form });
   const data = (await res.json()) as { ok: boolean; result?: unknown; description?: string };
   if (!res.ok || !data.ok) {

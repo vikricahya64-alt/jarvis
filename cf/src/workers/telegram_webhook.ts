@@ -10,7 +10,7 @@
 //=====================================================================
 
 import { Env, touchActivity, logConsent, getConsentRequestTs } from "../lib/db";
-import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById, addAgentTask, listAgentTasks, markAgentTaskRunning, getAgentTask, deleteAgentTask, addAgentRule, listAgentRules, deleteAgentRule, setAgentRuleActive } from "../lib/db";
+import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById, addAgentTask, listAgentTasks, markAgentTaskRunning, restartAgentTask, getAgentTask, deleteAgentTask, addAgentRule, listAgentRules, deleteAgentRule, setAgentRuleActive } from "../lib/db";
 import {
   addProduct, listProducts, getProduct, updateProduct, deleteProduct, adjustStock, lowStockProducts,
   addCustomer, listCustomers, searchCustomer,
@@ -31,7 +31,7 @@ import { continueAnalysis } from "../lib/ai";
 import { getWeatherText } from "../lib/weather";
 
 import { normalizeInput, isEmptyInput } from "../lib/normalize";
-import { saveSessionToKV, loadSessionFromKV } from "../lib/context_manager";
+import { saveSessionToKV, loadSessionFromKV, touchSession } from "../lib/context_manager";
 import { saveObservation } from "../lib/db";
 import { processMessage, type MessageContext } from "../lib/jarvis_core";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "../lib/identity";
@@ -184,8 +184,17 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // the user's message. Fire-and-forget; the reply path is independent.
   touchActivity(env, from, "telegram").catch(() => {});
 
-  // Load sesi dari KV setelah cold start (persistensi across restarts)
-  loadSessionFromKV(env, from).catch(() => {});
+  // Refresh the in-memory session clock on EVERY message (B2 fix): previously
+  // only the brain path wrote lastInteraction, so command-only traffic could
+  // let syncAllSessions prune the session and the KV snapshot age out — mood
+  // + summary buffer then silently vanished under otherwise-active usage.
+  touchSession(from);
+
+  // Load sesi dari KV setelah cold start (persistensi across restarts).
+  // AWAITED so the restore (setMoodState + in-place session restore) completes
+  // BEFORE perceive/act reads session & mood — previously fire-and-forget, so
+  // cold-start mood/trajectory restore was a scheduler race (B3 fix).
+  await loadSessionFromKV(env, from).catch(() => {});
 
   // ------------------------------------------------------------------
   // Documents (≤15 MiB) — become ONE-SHOT cloud tasks (B1 document
@@ -1014,10 +1023,15 @@ async function applyDefault(
   };
   // For general conversation, route through the jarvis_core conversation
   // pipeline so real questions get an actual AI answer — never a canned
-  // acknowledgement. System/emergency acks (priority 100/90) keep their
-  // short acknowledgement; everything else with meaningful text goes to AI.
+  // acknowledgement. Contract fix (M3/M5): EVERY EXECUTE leftover with real
+  // text goes to the brain, not just priority < 90. A heuristic "explicit
+  // command" (e.g. "stop iklan ya") used to short-circuit to the label
+  // "Sistem dijalankan." while nothing actually ran; routing it to the brain
+  // instead produces a real, truthful answer and aligns the webhook gate with
+  // the brain's own classifier. Genuine emergency slashes (/stop, /kill,
+  // /override) are intercepted earlier in handleUpdate and never reach here.
   const priority = res.decision.priority;
-  if (priority < 90 && rawText.length > 3) {
+  if (rawText.length > 3) {
     try {
       const ctx: MessageContext = { owner, text: rawText, source: "telegram" };
       const jarvisRes = await processMessage(env, ctx);
@@ -1181,7 +1195,7 @@ async function transcribeVoiceWithWorkersAi(env: Env, audioB64: string): Promise
 async function groqVisionDescribe(env: Env, model: string, dataUrl: string, prompt?: string): Promise<string | null> {
   if (!env.GROQ_API_KEY) return null;
   let out: string | null = null;
-  const ok = await withResilience(env, "groq", 0, async () => {
+  const ok = await withResilience(env, "groq", 0, async (timeoutMs) => {
     try {
       const text = (prompt ?? "").trim() || VISION_PROMPT;
       const res = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
@@ -1208,7 +1222,9 @@ async function groqVisionDescribe(env: Env, model: string, dataUrl: string, prom
           //  field — that's why it was rejected earlier.)
           reasoning_effort: "none",
         }),
-      }, 30000);
+        // Use the breaker's own timeout (same 15s window as text calls) instead
+        // of the hardcoded 30s — vision and text now honor one shared deadline.
+      }, timeoutMs);
       if (!res.ok) {
         // Surface WHY vision failed (M7 media-fix): decommissioned model ids,
         // rate limits, oversized image — visible in logs instead of silently
@@ -1819,6 +1835,12 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
     if (target.status === "pending") {
       await fire(sendMessage(env, from, `📦 Tugas #${retry[1]} masih mengantre — dispatch ulang…`));
     } else {
+      // Terminal (done/failed) → reset to 'pending' so the fresh run can
+      // transition again and its /agent/done report is ACCEPTED (previously
+      // the row stayed terminal and the new result was 409-dropped silently).
+      if (target.status === "done" || target.status === "failed") {
+        await restartAgentTask(env, target.id);
+      }
       await fire(sendMessage(env, from, `🔁 Tugas #${retry[1]} diluncurkan ulang ke eksekutor cloud…`));
     }
     const sent = await delegateToGithub(env, target.id, target.task);

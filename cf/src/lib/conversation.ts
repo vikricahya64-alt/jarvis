@@ -515,6 +515,10 @@ export async function buildConversationMessages(
     session?: ReturnType<typeof getSession>;
     mood?: MoodState;
     language?: Language;
+    /** True when the enrichedContext already ends with a user prompt, so the
+     *  trailing `userText` message must NOT be appended again (prevents the
+     *  same question being injected twice for sub-agent/pipeline prompts). */
+    skipUserMessage?: boolean;
   } = {},
 ): Promise<Array<{ role: "system" | "user" | "assistant"; content: string }>> {
   const intent = detectIntent(userText);
@@ -608,7 +612,9 @@ export async function buildConversationMessages(
   }
 
   // Add current user message
-  messages.push({ role: "user", content: userText });
+  if (!opts.skipUserMessage) {
+    messages.push({ role: "user", content: userText });
+  }
 
   return messages;
 }

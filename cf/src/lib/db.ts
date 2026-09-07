@@ -1053,6 +1053,21 @@ export async function markAgentTaskRunning(env: Env, id: number, runId = ""): Pr
   } catch { /* best-effort */ }
 }
 
+/** Reset a previously terminal task (done/failed) back to 'pending' so a
+ *  "/tugas lanjut <id>" re-dispatch can transition it again. Without this the
+ *  row stayed terminal and markAgentTaskRunning was a silent no-op — the fresh
+ *  GitHub run finished into a 409 "already terminal" at /agent/done and the
+ *  result was discarded without ever reaching the owner (contract mismatch). */
+export async function restartAgentTask(env: Env, id: number): Promise<void> {
+  try {
+    await env.DB.prepare(
+      `UPDATE agent_tasks SET status = 'pending', run_id = '', started_at = NULL,
+         finished_at = NULL, result = NULL, error = NULL, artifact_url = NULL
+       WHERE id = ? AND status IN ('done', 'failed')`,
+    ).bind(id).run();
+  } catch { /* best-effort */ }
+}
+
 /** Finish a task with the executor's report (done or failed). */
 export async function finishAgentTask(
   env: Env,

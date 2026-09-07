@@ -131,6 +131,16 @@ export function getSession(owner: number): SessionState {
   return s;
 }
 
+/** Refresh the in-memory session's interaction clock on ANY message (not only
+ *  brain turns). Previously lastInteraction was written only by updateSession
+ *  (brain path), so command-only traffic let syncAllSessions prune the session
+ *  and the KV snapshot age out to its 24h TTL — mood history + summary buffer
+ *  then silently vanished under otherwise-active usage. Cheap, RAM-only. */
+export function touchSession(owner: number): void {
+  const s = getSession(owner);
+  s.lastInteraction = Date.now();
+}
+
 /** Save session to KV for persistence across cold starts.
  *  Panggil setelah setiap turn untuk mengurangi kehilangan konteks. */
 export async function saveSessionToKV(env: Env, owner: number): Promise<void> {

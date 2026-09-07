@@ -199,7 +199,7 @@ export async function reflectOnTurn(
   let critique = "";
   let refined = output;
   let score = 0;
-  const g = await llmRespond(env, rubric, { context: [{ role: "assistant", content: turnText }] });
+  const g = await llmRespond(env, rubric, { context: [{ role: "assistant", content: turnText }], contextIsEnriched: true });
   if (g.reply) {
     const parsed = parseReflection(g.reply);
     score = parsed.score;

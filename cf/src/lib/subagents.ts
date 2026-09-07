@@ -491,7 +491,7 @@ async function runWriter(
   context.push({ role: "system", content: writerSystem(OWNER_SOVEREIGNTY) });
   context.push({ role: "user", content: prompt });
 
-  const g = await llmRespond(env, userText, { topic, context });
+  const g = await llmRespond(env, userText, { topic, context, contextIsEnriched: true, skipUserMessage: true });
   return g.reply;
 }
 

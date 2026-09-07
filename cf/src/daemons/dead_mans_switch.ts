@@ -16,7 +16,7 @@
 //=====================================================================
 
 import { Env, getActivity, getDmsState } from "../lib/db";
-import { sendMessage, sanitizeTelegramMarkdown } from "../lib/telegram";
+import { sendMessage } from "../lib/telegram";
 
 export type Stage = "idle" | "verify" | "stage2" | "executed";
 
@@ -163,7 +163,7 @@ export async function touchInteraction(env: Env, owner: number): Promise<void> {
 
 async function notify(env: Env, owner: number, text: string): Promise<void> {
   try {
-    await sendMessage(env, owner, sanitizeTelegramMarkdown(text), { parseMode: "Markdown" });
+    await sendMessage(env, owner, text);
   } catch (e) {
     // Non-fatal: the cron tick is cadenced every 6h, next tick re-alerts.
     console.error("[dms] notify failed", (e as Error).message);
