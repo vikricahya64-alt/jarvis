@@ -1046,6 +1046,21 @@ const VISION_MODELS = [
   "qwen/qwen3.8-27b",
 ];
 
+/** Default vision prompt — extremely prescriptive about LANGUAGE + FORMAT
+ *  (M7 media-fix v6): vision models (Gemini/Qwen) tended to respond in ENGLISH
+ *  with a long "Image Analysis:" bullet dump or CC-quote planning. Clamp to a
+ *  short Bahasa Indonesia result; text that resolves to instructions gets
+ *  quoted inline, never a multi-line English analysis. */
+const VISION_PROMPT =
+  "Jawab HANYA dalam Bahasa Indonesia. Beri TEPAT 1-2 kalimat pendek. " +
+  "Langsung terangkan isi foto/gambar (objek utama + teks/angka yang tertera). " +
+  "JANGAN menulis kata 'pengantar', 'analisis', 'deskripsi', atau semacamnya di depan. " +
+  "JANGAN mengulang atau menafsirkan isi pesanku sendiri. JANGAN berbahasa Inggris.";
+
+const VISION_PROMPT_TASK =
+  "Jawab HANYA dalam Bahasa Indonesia. Kalau gambar berisi instruksi/pertanyaan tertulis, kutip langsung yang relevan. " +
+  "Langsung ke inti, TEPAT 1-2 kalimat pendek. JANGAN menganalisis gambar di luar konteks. JANGAN berbahasa Inggris.";
+
 /** Tidy a raw vision reply (M7 media-fix v3): Llama-3.2-vision leaks its own
  *  planning verbatim ("Drafting the description:", "I need to...") before the
  *  real answer, doubles words ("dan dan") and truncates at max_tokens. Strip
@@ -1145,8 +1160,7 @@ async function groqVisionDescribe(env: Env, model: string, dataUrl: string, prom
   let out: string | null = null;
   const ok = await withResilience(env, "groq", 0, async () => {
     try {
-      const text = (prompt ?? "").trim() ||
-        "Deskripsikan foto/isi gambar ini dalam 1-2 kalimat Bahasa Indonesia. Sebutkan objek utama dan teks/angka yang tertera. Jika gambar berisi instruksi atau pertanyaan tertulis, kutip langsung.";
+      const text = (prompt ?? "").trim() || VISION_PROMPT;
       const res = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${env.GROQ_API_KEY}` },
@@ -1161,8 +1175,17 @@ async function groqVisionDescribe(env: Env, model: string, dataUrl: string, prom
           }],
           max_tokens: 250,
           temperature: 0.2,
+          // M7 media-fix v6 (root cause): Groq's Qwen models default to
+          // THINKING mode, so the raw content is `<think ... reasoning...
+          //  response` (English "Analyze the image", multiple drafts, often
+          //   truncated at max_tokens). Instruct/non-thinking mode via
+          //  reasoning_effort="none" returns a clean, direct Indonesian answer
+          //  without the reasoning block — fixing this at the source instead
+          //  of fragile post-hoc scrubbing. (enable_thinking is NOT a Groq
+          //  field — that's why it was rejected earlier.)
+          reasoning_effort: "none",
         }),
-      }, 20000);
+      }, 30000);
       if (!res.ok) {
         // Surface WHY vision failed (M7 media-fix): decommissioned model ids,
         // rate limits, oversized image — visible in logs instead of silently
@@ -1191,8 +1214,9 @@ async function geminiVisionDescribe(env: Env, mime: string, b64: string, prompt?
     (k): k is string => Boolean(k),
   );
   if (keys.length === 0) return null;
-  const text = (prompt ?? "").trim() ||
-    "Deskripsikan foto/isi gambar ini dalam 1-2 kalimat Bahasa Indonesia. Sebutkan objek utama dan teks/angka yang tertera. Jika gambar berisi instruksi atau pertanyaan tertulis, kutip langsung.";
+  // Gemini models tend to answer vision in ENGLISH/verbose "Image Analysis:"
+  // unless the prompt is maximally prescriptive about language + brevity.
+  const promptForGemini = (prompt ?? "").trim() || VISION_PROMPT_TASK;
   for (const apiKey of keys) {
     for (const model of GEMINI_VISION_MODELS) {
       let out: string | null = null;
@@ -1204,7 +1228,7 @@ async function geminiVisionDescribe(env: Env, mime: string, b64: string, prompt?
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                contents: [{ role: "user", parts: [{ text }, { inlineData: { mimeType: mime, data: b64 } }] }],
+                contents: [{ role: "user", parts: [{ text: promptForGemini }, { inlineData: { mimeType: mime, data: b64 } }] }],
                 generationConfig: { temperature: 0.2, maxOutputTokens: 400 },
               }),
             },
@@ -1232,14 +1256,13 @@ async function geminiVisionDescribe(env: Env, mime: string, b64: string, prompt?
  *  binding shim matches the existing Whisper `as never` pattern). */
 async function workersAiVisionDescribe(env: Env, bytes: Uint8Array, prompt?: string): Promise<string | null> {
   if (!env.AI) return null;
-  const text = (prompt ?? "").trim() ||
-    "Deskripsikan foto/isi gambar ini dalam 1-2 kalimat Bahasa Indonesia. Sebutkan objek utama dan teks/angka yang tertera.";
+  const text = (prompt ?? "").trim() || VISION_PROMPT;
   let out: string | null = null;
   const ok = await withResilience(env, "workers_ai", 0, async () => {
     try {
       const res = await env.AI.run(
         "@cf/meta/llama-3.2-11b-vision-instruct",
-        { prompt: text, image: Array.from(bytes), max_tokens: 600 },
+        { prompt: text, image: Array.from(bytes), max_tokens: 200 },
       ) as never as { description?: string };
       const d = res?.description?.trim();
       if (d) { out = d; return { ok: true, status: 200 }; }
