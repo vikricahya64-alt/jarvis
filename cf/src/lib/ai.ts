@@ -644,7 +644,7 @@ export async function workersAiRespond(
 export async function llmRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean } = {},
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; systemOverride?: string } = {},
 ): Promise<{ reply: string | null; source: "workers_ai" | "groq" | "openrouter" | "gemini" | "self_ref" | null }> {
   // SELF-REFERENTIAL INTERCEPT — the brain's first and most important guard.
   // If the input asks "who are you" or "what can you do", answer directly from
@@ -668,6 +668,11 @@ export async function llmRespond(
       ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
       : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined, skipUserMessage: opts.skipUserMessage },
   ).catch(() => buildFallbackMessages(context, userText));
+
+  if (opts.systemOverride) {
+    if (prebuiltMessages[0]?.role === "system") prebuiltMessages[0] = { role: "system", content: opts.systemOverride };
+    else prebuiltMessages.unshift({ role: "system", content: opts.systemOverride });
+  }
 
   const sharedOpts = { ...opts, prebuiltMessages };
 
