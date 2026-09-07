@@ -22,6 +22,7 @@ export interface Env {
   AGENT_TOKEN?: string;
   GITHUB_TOKEN?: string;
   GITHUB_REPO?: string;
+  WORKER_URL?: string;
   CLARITY_GATE?: string;
   RISK_CONSENT_THRESHOLD?: string;
   CONSENT_TIMEOUT_S?: string;
@@ -989,16 +990,28 @@ export interface AgentTaskItem {
   result: string | null;
   error: string | null;
   artifact_url: string | null;
+  rule_id: number | null;
+}
+
+export interface AgentTaskRule {
+  id: number;
+  owner_id: number;
+  task: string;
+  recur_spec: string;
+  next_fire_at: number;
+  last_fire_at: number | null;
+  active: number;
+  created_at: number;
 }
 
 /** Insert a delegation task. Returns its id, or 0 on failure/invalid input. */
-export async function addAgentTask(env: Env, owner: number, task: string): Promise<number> {
+export async function addAgentTask(env: Env, owner: number, task: string, ruleId?: number): Promise<number> {
   try {
     const clean = task.trim();
     if (!clean || clean.length < 3 || clean.length > 4000) return 0;
     const res = await env.DB.prepare(
-      `INSERT INTO agent_tasks (owner_id, task, executor, status, created_at) VALUES (?, ?, 'github', 'pending', ?)`,
-    ).bind(owner, clean, Date.now()).run();
+      `INSERT INTO agent_tasks (owner_id, task, executor, status, created_at, rule_id) VALUES (?, ?, 'github', 'pending', ?, ?)`,
+    ).bind(owner, clean, Date.now(), ruleId ?? null).run();
     return Number(res.meta.last_row_id ?? res.meta.changes ?? 0);
   } catch {
     return 0;
@@ -1081,11 +1094,109 @@ export async function pruneOldAgentTasks(
   }
 }
 
+// ---------------------------------------------------------------------
+// Recurring heavy-task rules (mig 0018). A row = repeating template; each
+// fire creates a real agent_tasks instance. All helpers fail-closed.
+// ---------------------------------------------------------------------
+
+/** Create a recurring rule. Returns its id, or 0 on failure/invalid input. */
+export async function addAgentRule(
+  env: Env,
+  owner: number,
+  task: string,
+  recurSpec: string,
+  nextFireAt: number,
+): Promise<number> {
+  try {
+    const clean = task.trim();
+    if (!clean || clean.length < 3 || clean.length > 4000) return 0;
+    if (!recurSpec.trim()) return 0;
+    const res = await env.DB.prepare(
+      `INSERT INTO agent_task_rules (owner_id, task, recur_spec, next_fire_at, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).bind(owner, clean, recurSpec.trim(), Math.max(Date.now(), nextFireAt), Date.now()).run();
+    return Number(res.meta.last_row_id ?? res.meta.changes ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+/** List the owner's rules, soonest-next first. */
+export async function listAgentRules(env: Env, owner: number): Promise<AgentTaskRule[]> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, owner_id, task, recur_spec, next_fire_at, last_fire_at, active, created_at
+       FROM agent_task_rules WHERE owner_id = ? ORDER BY next_fire_at ASC, id DESC`,
+    ).bind(owner).all<AgentTaskRule>();
+    return results ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Owner-scoped delete; returns true when a row was removed. */
+export async function deleteAgentRule(env: Env, owner: number, id: number): Promise<boolean> {
+  try {
+    const { meta } = await env.DB.prepare(
+      `DELETE FROM agent_task_rules WHERE id = ? AND owner_id = ?`,
+    ).bind(id, owner).run();
+    return Number(meta.changes ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Pause/resume a rule (owner-scoped). Returns true when a row changed. */
+export async function setAgentRuleActive(env: Env, owner: number, id: number, active: boolean): Promise<boolean> {
+  try {
+    const { meta } = await env.DB.prepare(
+      `UPDATE agent_task_rules SET active = ? WHERE id = ? AND owner_id = ?`,
+    ).bind(active ? 1 : 0, id, owner).run();
+    return Number(meta.changes ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Due rules (active, fire time passed, newest rules first). Bounded. */
+export async function getDueAgentRules(env: Env, now: number, limit = 3): Promise<AgentTaskRule[]> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, owner_id, task, recur_spec, next_fire_at, last_fire_at, active, created_at
+       FROM agent_task_rules
+       WHERE active = 1 AND next_fire_at <= ?
+       ORDER BY next_fire_at ASC
+       LIMIT ?`,
+    ).bind(now, Math.max(1, Math.min(10, limit))).all<AgentTaskRule>();
+    return results ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** After a fire: record when it ran and when the next run is due. */
+export async function updateAgentRuleFired(
+  env: Env,
+  id: number,
+  lastFireAt: number,
+  nextFireAt: number,
+): Promise<boolean> {
+  try {
+    const res = await env.DB.prepare(
+      `UPDATE agent_task_rules SET last_fire_at = ?, next_fire_at = ? WHERE id = ?`,
+    ).bind(lastFireAt, nextFireAt, id).run();
+    return (res.meta.changes ?? 0) > 0;
+  } catch (e) {
+    console.error("[agent_rules] updateAgentRuleFired FAILED", String(e).slice(0, 200));
+    return false;
+  }
+}
+
 /** Fetch one task row, or null. */
 export async function getAgentTask(env: Env, id: number): Promise<AgentTaskItem | null> {
   try {
     const row = await env.DB.prepare(
-      `SELECT id, owner_id, task, executor, status, run_id, created_at, started_at, finished_at, result, error, artifact_url
+      `SELECT id, owner_id, task, executor, status, run_id, created_at, started_at, finished_at, result, error, artifact_url, rule_id
        FROM agent_tasks WHERE id = ?`,
     ).bind(id).first<AgentTaskItem>();
     return row ?? null;
@@ -1098,7 +1209,7 @@ export async function getAgentTask(env: Env, id: number): Promise<AgentTaskItem 
 export async function listAgentTasks(env: Env, owner: number, limit = 20): Promise<AgentTaskItem[]> {
   try {
     const { results } = await env.DB.prepare(
-      `SELECT id, owner_id, task, executor, status, run_id, created_at, started_at, finished_at, result, error, artifact_url
+      `SELECT id, owner_id, task, executor, status, run_id, created_at, started_at, finished_at, result, error, artifact_url, rule_id
        FROM agent_tasks WHERE owner_id = ? ORDER BY id DESC LIMIT ?`,
     ).bind(owner, Math.max(1, Math.min(100, limit))).all<AgentTaskItem>();
     return results ?? [];

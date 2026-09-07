@@ -48,6 +48,30 @@ jobs:
           TASK: ${{ github.event.client_payload.task }}
         run: printf '%s' "$TASK" > /tmp/task.txt
 
+      # Lampiran (B1, dokumen): when the task embeds a <dlurl:...> marker, the
+      # file is pulled down into /tmp (Cloudflare's sandbox can't parse
+      # xlsx/pdf/docx well; the ephemeral VM can). The marker is stripped so
+      # its per-file secret never reaches prompts/logs, and the resolved path
+      # is appended so opencode knows exactly what to read.
+      - name: Download lampiran (if any)
+        run: |
+          URI="$(grep -o '<dlurl:[^>]*>' /tmp/task.txt | head -1 || true)"
+          if [ -n "$URI" ]; then
+            URL="${URI#<dlurl:}"; URL="${URL%>}"
+            EXT="$(cat /tmp/task.txt | sed -n 's/.*lampiran *"\([^"]*\.\([A-Za-z0-9]\{1,5\}\)\)".*/\2/p' | head -1)"
+            [ -n "$EXT" ] || EXT="bin"
+            echo "lampiran url=${URL:0:60}… ext=$EXT"
+            if curl -fsSL --max-time 60 "$URL" -o "/tmp/lampiran.$EXT"; then
+              sed -i 's#<dlurl:[^>]*>##' /tmp/task.txt
+              printf '\n[LAMPIRAN] Baca berkas /tmp/lampiran.'"$EXT"' — itulah lampiran yang harus dianalisis. Jangan hapus berkasnya.' >> /tmp/task.txt
+              echo "lampiran: /tmp/lampiran.$EXT ($(stat -c%s "/tmp/lampiran.$EXT") bytes)"
+            else
+              echo "warn: lampiran download gagal — lanjut tanpa file"
+            fi
+          else
+            echo "lampiran: none"
+          fi
+
       - name: Run opencode agent
         id: exec
         env:
