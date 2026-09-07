@@ -1036,14 +1036,14 @@ async function applyDefault(
 
 const VISION_MODELS = [
   // M7 media-fix: llama-3.2-11b-vision-preview is DECOMMISSIONED on Groq
-  // (model_decommissioned since ~2025-07) and "meta-llama/llama-3.2-11b-instruct"
-  // was never a valid Groq id — so every photo silently fell through to the
-  // "Kirim teks..." greeting. Only image-capable ids currently documented:
-  // qwen 3.6/3.8 27B (multimodal) + Llama-4 Scout (Groq's own recommended
-  // vision replacement).
+  // (model_decommissioned since ~2025-07) and other historical ids
+  // ("meta-llama/...instruct", llama-4-scout on free tier) return
+  // model_not_found — so every photo silently fell through to the
+  // "Kirim teks..." greeting. Only image-capable ids our account can reach:
+  // the Qwen 27B multimodal pair (may hit transient over-capacity; the
+  // Gemini + Workers AI vision fallbacks below cover that).
   "qwen/qwen3.6-27b",
   "qwen/qwen3.8-27b",
-  "meta-llama/llama-4-scout-17b-16e-instruct",
 ];
 
 /** Chunked bytes→base64 (avoids call-stack overflow on large media). */
@@ -1098,7 +1098,6 @@ async function groqVisionDescribe(env: Env, model: string, dataUrl: string, prom
           }],
           max_tokens: 250,
           temperature: 0.2,
-          enable_thinking: false,
         }),
       }, 20000);
       if (!res.ok) {
@@ -1113,6 +1112,77 @@ async function groqVisionDescribe(env: Env, model: string, dataUrl: string, prom
       const c = data.choices?.[0]?.message?.content?.trim();
       if (c) { out = c; return { ok: true, status: 200 }; }
     } catch { /* fail-closed */ }
+    return { ok: false, status: 0 };
+  });
+  return ok ? out : null;
+}
+
+/** Gemini vision fallback (M7 media-fix): Qwen on Groq is currently saturated
+ *  ("over capacity"), so photos need a second independent egress. Reuses the
+ *  existing Gemini key rotation; model ids must be image-capable (NOT the
+ *  text-only gemma fallback used by geminiRespond). Fail-closed: null when no
+ *  key / no model answers. */
+const GEMINI_VISION_MODELS = ["gemini-2.0-flash", "gemini-2.5-flash"];
+async function geminiVisionDescribe(env: Env, mime: string, b64: string, prompt?: string): Promise<string | null> {
+  const keys = [env.GEMINI_API_KEY, env.GEMINI_API_KEY_BACKUP, env.GEMINI_API_KEY_SECONDARY].filter(
+    (k): k is string => Boolean(k),
+  );
+  if (keys.length === 0) return null;
+  const text = (prompt ?? "").trim() ||
+    "Deskripsikan foto/isi gambar ini dalam 1-2 kalimat Bahasa Indonesia. Sebutkan objek utama dan teks/angka yang tertera. Jika gambar berisi instruksi atau pertanyaan tertulis, kutip langsung.";
+  for (const apiKey of keys) {
+    for (const model of GEMINI_VISION_MODELS) {
+      let out: string | null = null;
+      const ok = await withResilience(env, "gemini", 1, async (timeoutMs) => {
+        try {
+          const res = await fetchWithTimeout(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{ role: "user", parts: [{ text }, { inlineData: { mimeType: mime, data: b64 } }] }],
+                generationConfig: { temperature: 0.2, maxOutputTokens: 400 },
+              }),
+            },
+            timeoutMs,
+          );
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            console.warn(`vision:${model} HTTP ${res.status} ${body.slice(0, 140)}`);
+            return { ok: false, status: res.status };
+          }
+          const data = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }> };
+          const content = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("").trim() ?? "";
+          if (content) { out = content; return { ok: true, status: res.status }; }
+        } catch { /* fail-closed */ }
+        return { ok: false, status: 0 };
+      });
+      if (ok && out) return out;
+    }
+  }
+  return null;
+}
+
+/** Workers AI vision fallback (M7 media-fix): free, on-edge image captioner.
+ *  Last resort after Groq saturation / Gemini absence. Input is byte[] (the
+ *  binding shim matches the existing Whisper `as never` pattern). */
+async function workersAiVisionDescribe(env: Env, bytes: Uint8Array, prompt?: string): Promise<string | null> {
+  if (!env.AI) return null;
+  const text = (prompt ?? "").trim() ||
+    "Deskripsikan foto/isi gambar ini dalam 1-2 kalimat Bahasa Indonesia. Sebutkan objek utama dan teks/angka yang tertera.";
+  let out: string | null = null;
+  const ok = await withResilience(env, "workers_ai", 0, async () => {
+    try {
+      const res = await env.AI.run(
+        "@cf/meta/llama-3.2-11b-vision-instruct",
+        { prompt: text, image: Array.from(bytes), max_tokens: 250 },
+      ) as never as { description?: string };
+      const d = res?.description?.trim();
+      if (d) { out = d; return { ok: true, status: 200 }; }
+    } catch (e) {
+      console.warn("vision:workers_ai", String(e).slice(0, 140));
+    }
     return { ok: false, status: 0 };
   });
   return ok ? out : null;
@@ -1178,11 +1248,20 @@ async function understandMedia(env: Env, owner: number, msg: TelegramMessage): P
     if (!dl || !("bytes" in dl)) return null;
     const mime = dl.mime.toLowerCase().startsWith("image/") ? dl.mime : "image/jpeg";
     const dataUrl = `data:${mime};base64,${bytesToBase64(dl.bytes)}`;
+    const realMime = mime.split(";")[0] || "image/jpeg";
+    const b64 = bytesToBase64(dl.bytes);
     const prompt = caption && !mediaIsTaskIntent(caption) ? caption : undefined;
+    // M7 media-fix chain: Groq Qwen vision → Gemini vision → Workers AI
+    // (on-edge, always bound). Qwen is transiently over-capacity as of
+    // 2026-09, so a photo must NOT depend on any single egress.
     for (const model of VISION_MODELS) {
       const ans = await groqVisionDescribe(env, model, dataUrl, prompt);
       if (ans) return ans;
     }
+    const gem = await geminiVisionDescribe(env, realMime, b64, prompt);
+    if (gem) return gem;
+    const ai = await workersAiVisionDescribe(env, dl.bytes, prompt);
+    if (ai) return ai;
     // Vision unavailable: at least let the plain LLM hear the caption.
     if (caption) {
       const ctx: MessageContext = { owner, text: caption, source: "telegram" };
