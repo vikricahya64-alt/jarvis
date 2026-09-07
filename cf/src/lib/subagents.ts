@@ -323,21 +323,28 @@ function attributionSuffix(gathers: AngleGather[]): string {
 }
 /** Gather top-N findings for one angle (deterministic; no LLM call per angle).
  *  Every hit is untrusted and gets spotlighted by the caller before the writer. */
-async function gatherAngle(env: Env, angle: string): Promise<AngleGather> {
+async function gatherAngle(env: Env, angle: string, topicHint = ""): Promise<AngleGather> {
   const hits = await searchTopResults(env, angle, MAX_FINDINGS_PER_ANGLE);
-  const findings: Finding[] = hits.map((h) => ({
+  // Relevance rail: short phrase queries usually land well, but rotten engine
+  // output (dictionary entries, unrelated domains) must not poison the writer.
+  // Keep only hits sharing >=1 significant keyword with the angle/topic; never
+  // starve the pipeline — if nothing passes, carry the raw top results anyway.
+  const relevant = hits.filter((h) => scoreRelevance(h, `${topicHint} ${angle}`, angle) > 0);
+  const usable = relevant.length >= 2 ? relevant : hits;
+  const findings: Finding[] = usable.slice(0, MAX_FINDINGS_PER_ANGLE).map((h) => ({
     title: h.title.slice(0, 180),
     url: h.url.slice(0, 200),
     snippet: h.snippet.slice(0, 340),
   }));
   // Deep scrape: enrich the top hit with the actual page text (bounded) so the
   // writer synthesizes from real content, not just search snippets. Fail-closed:
-  // a page that can't be read simply leaves the snippet as-is.
+  // a page that can't be read simply leaves the snippet as-is. The page text
+  // stays behind the `|| ISI HALAMAN:` marker so the raw fallback can strip it.
   const top = findings[0];
   if (top?.url) {
-    const pageText = await deepReadPage(env, top.url, 1200).catch(() => null);
+    const pageText = await deepReadPage(env, top.url, 1000).catch(() => null);
     if (pageText) {
-      top.snippet = `${top.snippet} || ISI HALAMAN: ${pageText}`.slice(0, 1600);
+      top.snippet = `${top.snippet} || ISI HALAMAN: ${pageText}`.slice(0, 1300);
     }
   }
   return { angle, findings };
@@ -347,9 +354,29 @@ async function gatherAngle(env: Env, angle: string): Promise<AngleGather> {
  *  per the Anthropic parallelization pattern) to cut latency vs. sequential.
  *  Each angle is its own sub-agent worker with isolated results. Returns leans
  *  toward the angles that found evidence but keeps all for the writer. */
-async function gatherAllParallel(env: Env, angles: string[]): Promise<AngleGather[]> {
-  const results = await Promise.all(angles.slice(0, MAX_ANGLES).map((a) => gatherAngle(env, a)));
+async function gatherAllParallel(env: Env, angles: string[], topicHint = ""): Promise<AngleGather[]> {
+  const results = await Promise.all(angles.slice(0, MAX_ANGLES).map((a) => gatherAngle(env, a, topicHint)));
   return results;
+}
+
+// ---- angle sanitation (deterministic search rail) ----------------------
+// Researcher LLMs routinely emit long, multi-clause "angles" ("Pengaruh X
+// terhadap Y: analisis lama tentang A, B, dan C dibandingkan…"). DDG treats
+// the ENTIRE phrase as one query and phrase-match breaks: results degrade to
+// dictionary entries ("pengaruh", "evaluasi") or unrelated domains (law-court
+// dockets, cinema sites). Since angles are raw SEARCH QUERIES, they must be
+// boiled down deterministically to a short, keyword-ish phrase the engine can
+// actually match — never trust the LLM's formatting here (verified live).
+function shortenAngle(a: string): string {
+  let s = String(a ?? "").trim();
+  // First clause only: cut at common clause/annotation separators.
+  s = s.split(/[:;—–]+/)[0].trim();
+  // Drop trailing parenthetical (e.g. "(tak terverifikasi kuantitatif)").
+  s = s.replace(/\s*\([^)]*\)\s*$/g, "").trim();
+  // Search engines ignore long clause tails; keep at most 7 content words.
+  const words = s.split(/\s+/).filter(Boolean);
+  if (words.length > 7) s = words.slice(0, 7).join(" ");
+  return s.trim();
 }
 
 // ---- sub-agent system prompts (fresh context + constraint manifest) -----
@@ -424,7 +451,7 @@ async function runResearcher(
     topic,
     context: [{ role: "system", content: researcherSystem(OWNER_SOVEREIGNTY) }],
   });
-  if (!g.reply) return { angles: [topic] }; // no LLM -> single-angle fallback
+  if (!g.reply) return { angles: [shortenAngle(topic)] }; // no LLM -> single-angle fallback
   const plan = await parseStructured<ResearcherPlan>(g.reply, researcherValidator([1, MAX_ANGLES]), async (err) => {
     const again = await llmRespond(env, `${prompt}\n\nPerbaiki: ${err}. Kembalikan hanya JSON yang valid.`, {
       topic,
@@ -432,12 +459,12 @@ async function runResearcher(
     });
     return again?.reply ?? null;
   });
-  if (!plan) return { angles: [topic] };
+  if (!plan) return { angles: [shortenAngle(topic)] };
   const angles = plan.angles
-    .map((a) => cleanStr(a).slice(0, 120))
+    .map((a) => shortenAngle(cleanStr(a)))
     .filter(Boolean)
     .slice(0, MAX_ANGLES);
-  return { angles: angles.length ? angles : [topic] };
+  return { angles: angles.length ? angles : [shortenAngle(topic)] };
 }
 
 // ---- writer sub-agent (1 LLM call) --------------------------------------
@@ -449,6 +476,7 @@ async function runWriter(
   facts: ExtractedFact[],
   owner: number,
   priorDraft = "",
+  narrow = false,
 ): Promise<string | null> {
   const context = await recentContext(env, owner, 4);
   const mems = await searchMemory(env, topic, 4);
@@ -461,11 +489,16 @@ async function runWriter(
   const behaviorContext = await getAnswerBehaviorContext(env, topic);
   if (behaviorContext) context.push({ role: "user", content: behaviorContext });
 
+  const cleanSnippet = (s: string) => s.split(/\s*\|\|\s*ISI HALAMAN:\s*/)[0].trim();
   const spots = gathers
     .map((g) =>
       `${g.angle}:\n` +
       g.findings
-        .map((f) => spotlightUntrusted(g.angle, `${f.title}${f.url ? ` (${f.url})` : ""} - ${f.snippet}`))
+        // narrow (retry) mode drops the bounded page text and caps findings so
+        // a token-pressure failure on the first writer attempt can retry with a
+        // much smaller context instead of degrading to a raw dump.
+        .filter((_, i) => !narrow || i < 3)
+        .map((f) => spotlightUntrusted(g.angle, `${(f.title || "").slice(0, 90)}${f.url ? ` (${f.url.slice(0, 120)})` : ""} - ${narrow ? cleanSnippet(f.snippet) : f.snippet}`))
         .join("\n"),
     )
     .join("\n\n");
@@ -528,7 +561,7 @@ async function runCritic(
     satisfied: !!verdict.satisfied,
     gaps: (verdict.gaps || []).map((s) => cleanStr(s).slice(0, 120)).slice(0, MAX_ANGLES),
     followupAngles: (verdict.followupAngles || [])
-      .map((s) => cleanStr(s).slice(0, 120))
+      .map((s) => shortenAngle(cleanStr(s)))
       .filter(Boolean)
       .slice(0, MAX_ANGLES),
   };
@@ -575,7 +608,8 @@ export async function orchestrateResearch(
 
     // 2) Searcher (fan out ALL angles IN PARALLEL — deterministic DDG, no LLM
     //    each — so richer multi-finding evidence arrives with less latency).
-    const gathers = await gatherAllParallel(env, plan.angles);
+    //    topicHint feeds the relevance rail so garbage results are filtered.
+    const gathers = await gatherAllParallel(env, plan.angles, topic);
 
     // 3) Evidence Extractor (quarantined, Agentic RAG): fetch a bounded set of
     //    pages, strip to clean text, extract structured citable facts. The
@@ -587,17 +621,28 @@ export async function orchestrateResearch(
       if (calls > MAX_TOTAL_LLM_CALLS) return null;
     }
 
-    // 4) Writer (synthesize from verified facts + snippets)
+    // 4) Writer (synthesize from verified facts + snippets). On a null/empty
+    //    first attempt, RETRY in narrow mode (clean snippets only, ≤3 findings
+    //    per angle) — token-pressure failures resolve on a much smaller context.
     let reply = await runWriter(env, userText, topic, gathers, facts, owner);
+    if (!reply) {
+      calls += 1;
+      if (calls > MAX_TOTAL_LLM_CALLS) return null;
+      reply = await runWriter(env, userText, topic, gathers, facts, owner, "", true);
+    }
     calls += 1;
     // Partial preservation (Gloo/CometAPI 2026): if the writer fails but
     // search results exist, construct a snippet-based answer rather than
-    // discarding them entirely — the owner always gets SOMETHING.
+    // discarding them entirely — the owner always gets SOMETHING. Follow-ups
+    // (anchor present) instead return null so the caller's single-pass path can
+    // synthesize from the prior analysis — far better than a raw scrape dump.
     if (!reply) {
+      if (anchor) return null;
       const hasFindings = gathers.some((g) => g.findings.length > 0);
       if (hasFindings) {
+        const clean = (s: string) => s.split(/\s*\|\|\s*ISI HALAMAN:\s*/)[0].trim();
         const partial = gathers
-          .flatMap((g) => g.findings.map((f) => `• ${f.title}${f.url ? ` (${f.url})` : ""} — ${f.snippet}`))
+          .flatMap((g) => g.findings.map((f) => `• ${f.title.slice(0, 90)}${f.url ? ` (${f.url.slice(0, 120)})` : ""} — ${clean(f.snippet)}`))
           .slice(0, 9)
           .join("\n");
         reply = `Hasil riset tentang *${topic}* (ringkasan mentah — writer gagal, partial preservation):\n\n${partial}\n\n(J.A.R.V.I.S. partial fallback — tanpa sintesis LLM.)`;
@@ -620,7 +665,7 @@ export async function orchestrateResearch(
       if (!verdict.satisfied && followups.length > 0 && calls < MAX_TOTAL_LLM_CALLS) {
         // Deep pass: fan-out the critic's follow-up angles, then a fresh writer
         // synthesizes the first draft + new evidence into a deeper answer.
-        const deeper = await gatherAllParallel(env, followups);
+        const deeper = await gatherAllParallel(env, followups, topic);
         const deeperFacts = await runExtractor(env, deeper, topic);
         if (deeperFacts.length > 0) {
           calls += 1;
