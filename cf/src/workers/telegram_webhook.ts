@@ -264,6 +264,13 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
       await fire(sendMessage(env, from, mediaReply));
       return new Response("ok", { status: 200 });
     }
+    // M7 media-fix: the user SENT something but we couldn't understand it —
+    // owning it HONESTLY beats the old misleading "Kirim teks..." greeting
+    // (which pretended no input arrived at all).
+    await fire(sendMessage(env, from, msg.voice
+      ? "⚠️ Pesan suaramu belum bisa kupahami — coba ketik pesannya, atau kirim ulang."
+      : "⚠️ Foto itu belum bisa kubaca — coba kirim ulang, atau ketik deskripsinya."));
+    return new Response("ok", { status: 200 });
   }
   if (isEmptyInput(text)) {
     await fire(sendMessage(env, from,
@@ -1028,9 +1035,15 @@ async function applyDefault(
 // ---------------------------------------------------------------------
 
 const VISION_MODELS = [
-  "llama-3.2-11b-vision-preview",
-  "meta-llama/llama-3.2-11b-vision-instruct",
-  "llama-3.2-90b-vision-preview",
+  // M7 media-fix: llama-3.2-11b-vision-preview is DECOMMISSIONED on Groq
+  // (model_decommissioned since ~2025-07) and "meta-llama/llama-3.2-11b-instruct"
+  // was never a valid Groq id — so every photo silently fell through to the
+  // "Kirim teks..." greeting. Only image-capable ids currently documented:
+  // qwen 3.6/3.8 27B (multimodal) + Llama-4 Scout (Groq's own recommended
+  // vision replacement).
+  "qwen/qwen3.6-27b",
+  "qwen/qwen3.8-27b",
+  "meta-llama/llama-4-scout-17b-16e-instruct",
 ];
 
 /** Chunked bytes→base64 (avoids call-stack overflow on large media). */
@@ -1085,8 +1098,17 @@ async function groqVisionDescribe(env: Env, model: string, dataUrl: string, prom
           }],
           max_tokens: 250,
           temperature: 0.2,
+          enable_thinking: false,
         }),
       }, 20000);
+      if (!res.ok) {
+        // Surface WHY vision failed (M7 media-fix): decommissioned model ids,
+        // rate limits, oversized image — visible in logs instead of silently
+        // degrading into the empty-input greeting.
+        const body = await res.text().catch(() => "");
+        console.warn(`vision:${model} HTTP ${res.status} ${body.slice(0, 160)}`);
+        return { ok: false, status: res.status };
+      }
       const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
       const c = data.choices?.[0]?.message?.content?.trim();
       if (c) { out = c; return { ok: true, status: 200 }; }
