@@ -42,6 +42,7 @@ import {
   isResearchClass, orchestrateResearch,
   isDesignIntent,
 } from "./subagents";
+import { isPromptMasterRequest, writeExpertPrompt } from "./prompt_master";
 import { reflectOnTurn, getAnswerBehaviorContext } from "./evolution";
 import { buildFinalReply } from "./response_formatter";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
@@ -64,7 +65,7 @@ export interface Perception {
 
 /** Intent classification result. */
 export interface IntentResult {
-  type: "question" | "command" | "search" | "chat" | "emergency" | "translation" | "design" | "self_referential" | "understand";
+  type: "question" | "command" | "search" | "chat" | "emergency" | "translation" | "design" | "self_referential" | "understand" | "prompt_writer";
   urgency: "low" | "medium" | "high";
   formality: "casual" | "neutral" | "formal";
   confidence: number;
@@ -73,7 +74,7 @@ export interface IntentResult {
 
 /** Strategy decision — how the brain will handle this message. */
 export interface Strategy {
-  approach: "simple_llm" | "search_synthesize" | "orchestrate_research" | "orchestrate_design" | "translate" | "self_referential" | "understand_intent";
+  approach: "simple_llm" | "search_synthesize" | "orchestrate_research" | "orchestrate_design" | "translate" | "self_referential" | "understand_intent" | "prompt_master";
   depth: "shallow" | "medium" | "deep";
   providerPreference: "any" | "fast" | "thorough";
   riskLevel: "safe" | "caution" | "blocked";
@@ -222,6 +223,10 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
     return { type: "emergency", urgency: "high", formality: "formal", confidence: 0.9, entities: {} };
   }
 
+  if (isPromptMasterRequest(text)) {
+    return { type: "prompt_writer", urgency: "low", formality: "neutral", confidence: 0.85, entities: { topic: text.slice(0, 100) } };
+  }
+
   // Design engineering intent. Synonymous design keywords (video, film, clip,
   // reels, tiktok, dll.) also carry non-design meanings — so keep pure
   // recommendation/descriptive questions ("film apa yang bagus?") on the
@@ -305,6 +310,16 @@ export function decide(perception: Perception): Strategy {
       approach: "translate",
       depth: "shallow",
       providerPreference: "fast",
+      riskLevel: "safe",
+    };
+  }
+
+  // Prompt-engineering → expert prompt writer (prompt-master skill)
+  if (intent.type === "prompt_writer") {
+    return {
+      approach: "prompt_master",
+      depth: "medium",
+      providerPreference: "thorough",
       riskLevel: "safe",
     };
   }
@@ -471,6 +486,22 @@ export async function act(
         return { reply: fallback.reply, source: fallback.source ?? "llm" };
       }
       return { reply: "Maaf, saya belum memahami permintaan ini. Bisa jelaskan lagi dengan lebih detail?", source: "understand_fallback" };
+    }
+
+    case "prompt_master": {
+      const result = await writeExpertPrompt(env, text, enrichedContext);
+      if (result.ok && result.reply) {
+        return { reply: result.reply, source: "prompt_master" };
+      }
+      const fallback = await llmRespond(env, text, {
+        topic: topic ?? undefined,
+        context: enrichedContext,
+        contextIsEnriched: true,
+      });
+      if (fallback.reply) {
+        return { reply: fallback.reply, source: fallback.source ?? "llm" };
+      }
+      return { reply: "Maaf, saya belum bisa menyusun prompt itu sekarang. Coba lagi ya.", source: "prompt_master_fallback" };
     }
 
     case "simple_llm":
