@@ -14,7 +14,7 @@ import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinu
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
-import { isBareTodoVerb, parseReminder } from "../src/workers/telegram_webhook";
+import { isBareTodoVerb, parseReminder, tidyVisionReply } from "../src/workers/telegram_webhook";
 import { parseTranslate } from "../src/lib/ai";
 
 async function testPredictiveUrgencyRanking() {
@@ -502,6 +502,34 @@ function testTopicOverlap() {
     "shared 'kerajinan' token -> overlap");
 }
 
+function testTidyVisionReply() {
+  // M7 media-fix v3: strip Llama's planning preamble ("Drafting the description:",
+  // "I need to..."), collapse doubled words ("dan dan" → "dan"), trim a truncated
+  // tail missing sentence punctuation, and return null for unusable scraps.
+  const planning = [
+    "The user wants a description of the image in Indonesian.",
+    "I need to identify the main object and any text/numbers.",
+    "Drafting the description:",
+    "Gambar ini menampilkan tampilan layar aplikasi toko.",
+  ].join("\n");
+  assert.strictEqual(tidyVisionReply(planning), "Gambar ini menampilkan tampilan layar aplikasi toko.",
+    "leading planning lines stripped");
+
+  const doubled = "Toko ini menjual buku dan dan juga alat tulis dan dan juga makanan ringan.";
+  assert.strictEqual(tidyVisionReply(doubled), "Toko ini menjual buku dan juga alat tulis dan juga makanan ringan.",
+    "doubled words collapsed");
+
+  const truncated = "Gambar ini menampilkan tampilan layar aplikasi dengan fitur yang";
+  assert.strictEqual(tidyVisionReply(truncated), null,
+    "incomplete sentence (no terminal punctuation) dropped");
+
+  const shortJunk = "ok.";
+  assert.strictEqual(tidyVisionReply(shortJunk), null, "too-short reply (< 8 chars) dropped as unhelpful");
+
+  assert.strictEqual(tidyVisionReply(""), null, "empty reply -> null");
+  assert.strictEqual(tidyVisionReply("     "), null, "whitespace-only -> null");
+}
+
 function testBareTodoVerb() {
   assert.strictEqual(isBareTodoVerb("/hapus"), true);
   assert.strictEqual(isBareTodoVerb("hapus"), true);
@@ -632,6 +660,7 @@ async function main() {
   testFormatSourceList();
   testJunkSourceFilter();
   testTopicOverlap();
+  testTidyVisionReply();
   testM6Regressions();
   testResolveFollowUpAnchor();
   testFormalWordPreservation();

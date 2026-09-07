@@ -1046,6 +1046,32 @@ const VISION_MODELS = [
   "qwen/qwen3.8-27b",
 ];
 
+/** Tidy a raw vision reply (M7 media-fix v3): Llama-3.2-vision leaks its own
+ *  planning verbatim ("Drafting the description:", "I need to...") before the
+ *  real answer, doubles words ("dan dan") and truncates at max_tokens. Strip
+ *  planning/meta junk, collapse doubled words, drop a truncated tail — the
+ *  owner must see ONE clean paragraph, never model drafting. Returns null when
+ *  no usable sentence remains. */
+export function tidyVisionReply(reply: string): string | null {
+  let lines = (reply ?? "").trim().split("\n");
+  // Drop leading planning/meta lines (whatever the egress model emits).
+  const PLAN_RE = /^(?:the user|the image|the main|i need|let me|to (?:provide|describe)|based on|this is a (?:draft|preview)|drafting|prediction|step\s*\d+|the (?:screenshot|photo)|here(?:'s| is)(?: a)?\s*(?:draft|clean|the))/i;
+  while (lines.length && PLAN_RE.test(lines[0].trim())) lines.shift();
+  // Drop any remaining pure-planning fragments after the content too.
+  lines = lines.filter((l) => !PLAN_RE.test(l.trim()) || /\p{Script=Latin}/u.test(l) && /[A-Za-z]{2,}/.test(l) && !/^\s*(?:drafting|prediction|step\s*\d)/i.test(l.trim()));
+  let out = lines.join("\n").replace(/[*_#`>~]/g, "").replace(/\s+/g, " ").trim();
+  if (out.length < 8) return null;
+  out = out.replace(/\b([\wäöüß]+)\s+\1\b/gi, "$1"); // "dan dan" -> "dan"
+  // Truncation guard: a reply not ending in sentence punctuation is a cut
+  // tail — keep only the sentences that actually finished.
+  if (!/[.…!?]["')\]]?\s*$/.test(out)) {
+    const lastIdx = Math.max(out.lastIndexOf("."), out.lastIndexOf("!"), out.lastIndexOf("?"));
+    if (lastIdx > 8) out = out.slice(0, lastIdx + 1).trim();
+    else if (lastIdx < 0) return null; // no sentence-ending punctuation at all — pure fragment
+  }
+  return out.length >= 8 ? out : null;
+}
+
 /** Chunked bytes→base64 (avoids call-stack overflow on large media). */
 function bytesToBase64(bytes: Uint8Array): string {
   let bin = "";
@@ -1114,7 +1140,7 @@ async function groqVisionDescribe(env: Env, model: string, dataUrl: string, prom
     } catch { /* fail-closed */ }
     return { ok: false, status: 0 };
   });
-  return ok ? out : null;
+  return ok && out ? tidyVisionReply(out) : null;
 }
 
 /** Gemini vision fallback (M7 media-fix): Qwen on Groq is currently saturated
@@ -1158,7 +1184,7 @@ async function geminiVisionDescribe(env: Env, mime: string, b64: string, prompt?
         } catch { /* fail-closed */ }
         return { ok: false, status: 0 };
       });
-      if (ok && out) return out;
+      if (ok && out) return tidyVisionReply(out);
     }
   }
   return null;
@@ -1176,7 +1202,7 @@ async function workersAiVisionDescribe(env: Env, bytes: Uint8Array, prompt?: str
     try {
       const res = await env.AI.run(
         "@cf/meta/llama-3.2-11b-vision-instruct",
-        { prompt: text, image: Array.from(bytes), max_tokens: 250 },
+        { prompt: text, image: Array.from(bytes), max_tokens: 600 },
       ) as never as { description?: string };
       const d = res?.description?.trim();
       if (d) { out = d; return { ok: true, status: 200 }; }
@@ -1185,7 +1211,7 @@ async function workersAiVisionDescribe(env: Env, bytes: Uint8Array, prompt?: str
     }
     return { ok: false, status: 0 };
   });
-  return ok ? out : null;
+  return ok && out ? tidyVisionReply(out) : null;
 }
 
 /** Detect a delegation intent phrased as media ("tugas X" / "kerjakan X"). */
