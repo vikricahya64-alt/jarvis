@@ -203,10 +203,13 @@ export async function gatherSuggestionCandidates(
     .slice(0, MAX_OFFER_BATCH);
 }
 
-/** Load the set of source_keys already offered (for dedup). */
+/** Load the set of source_keys already offered (for dedup). NOTE: dismissed
+ *  keys MUST stay in the set — a dismissed suggestion is an explicit "never
+ *  again" for that key. Excluding dismissed here caused re-offers of items the
+ *  owner already rejected. */
 export async function offeredSourceKeys(env: Env, owner: number): Promise<Set<string>> {
   const { results } = await env.DB.prepare(
-    `SELECT source_key FROM suggestions WHERE owner_id = ? AND status != 'dismissed'`,
+    `SELECT source_key FROM suggestions WHERE owner_id = ?`,
   ).bind(owner).all<{ source_key: string }>();
   return new Set((results ?? []).map((r) => r.source_key).filter(Boolean));
 }

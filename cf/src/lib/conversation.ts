@@ -26,7 +26,7 @@
 //=====================================================================
 
 import { Env, recentContext, searchMemory } from "./db";
-import { detectEmotion, emotionToStyle, updateMood, getMoodState, moodSummary, inferEmotionFromContext, detectTopicSentiment, type MoodState, type EmotionSignal } from "./emotion";
+import { detectEmotion, emotionToStyle, getMoodState, moodSummary, inferEmotionFromContext, detectTopicSentiment, type MoodState, type EmotionSignal } from "./emotion";
 import {
   buildEnrichedContext, detectConversationMode, extractTopicLabel,
   getSession, buildContextSummary,
@@ -526,8 +526,10 @@ export async function buildConversationMessages(
   // Detect language (enhanced with cultural context)
   const language = opts.language ?? detectLanguage(userText);
 
-  // Update mood tracking (continuous across turns)
-  const mood = opts.mood ?? updateMood(owner, rawEmotion);
+  // Update mood tracking is owned by perceive() (single writer). This builder
+  // only READS current state so the EMA is not applied multiple times per turn
+  // (was 2x via llmRespond, plus 5-7x via subagent prompts on research turns).
+  const mood = opts.mood ?? getMoodState(owner);
   
   // L18: Context-based emotion inference for unknown topics
   // When direct detection is neutral/unknown, infer from mood trajectory + history
