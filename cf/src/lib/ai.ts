@@ -691,7 +691,7 @@ export async function llmRespond(
       console.error(`[llm] skipped ${cand.p}: breaker open`);
       continue;
     }
-    const r = await cand.fn();
+    const r = await cand.fn().catch(() => null);
     if (r) return { reply: r, source: cand.src };
   }
   return { reply: null, source: null };

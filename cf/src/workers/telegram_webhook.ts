@@ -178,7 +178,12 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     await fire(sendMessage(env, from, "Maaf, saya hanya melayani pemilik saya."));
     return new Response("ok", { status: 200 });
   }
-  if (await rateLimited(env, from)) return new Response("ok", { status: 200 });
+  if (await rateLimited(env, from)) {
+    // NEVER silently drop the owner's message — a sub-second burst of two
+    // legit messages must not look like a lost reply. Nudge visibly instead.
+    await fire(sendMessage(env, from, "⏳ Santai — aku proses satu per satu, kirim ulang sebentar ya."));
+    return new Response("ok", { status: 200 });
+  }
 
   // Best-effort activity touch — a transient D1 error must NEVER silently drop
   // the user's message. Fire-and-forget; the reply path is independent.
@@ -887,15 +892,23 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
         // path bypasses the brain's reflect stage, so user+assistant turns are
         // persisted EXPLICITLY here (single writer for this legacy path) and the
         // session is updated explicitly too (mood/turn/activeTopic parity).
-        const r = await searchAndSynthesize(env, owner, text, topic);
-        await appendMemory(env, owner, "user", text, topic).catch(() => {});
-        await appendMemory(env, owner, "assistant", r.reply, topic).catch(() => {});
-        // Observasi: user tertarik pada topik ini (untuk personalisasi di masa depan)
-        saveObservation(env, owner, `User menanyakan tentang: ${topic}`, "interest").catch(() => {});
-        updateSession(owner, text, r.reply, topic, "research");
-        await recordTaskCounters(env, "standard", owner);
-        await storeResearchAnchor(env, owner, topic, r.reply).catch(() => {});
-        await fire(sendMessage(env, owner, r.reply));
+        // Fail-closed: any exception in the LLM/search pipeline still yields a
+        // real message — a silent drop is never acceptable for the owner.
+        try {
+          const r = await searchAndSynthesize(env, owner, text, topic);
+          await appendMemory(env, owner, "user", text, topic).catch(() => {});
+          await appendMemory(env, owner, "assistant", r.reply, topic).catch(() => {});
+          // Observasi: user tertarik pada topik ini (untuk personalisasi di masa depan)
+          saveObservation(env, owner, `User menanyakan tentang: ${topic}`, "interest").catch(() => {});
+          updateSession(owner, text, r.reply, topic, "research");
+          await recordTaskCounters(env, "standard", owner);
+          await storeResearchAnchor(env, owner, topic, r.reply).catch(() => {});
+          await fire(sendMessage(env, owner, r.reply));
+        } catch (e) {
+          console.error("[webhook] search path failed", (e as Error).message);
+          await fire(sendMessage(env, owner,
+            `Maaf, pencarian tentang *${topic.slice(0, 60)}* sedang bermasalah — coba lagi sebentar.`));
+        }
         break;
       }
       // Level 15 FOLLOW-UP: an explicit follow-up request that carries no fresh
@@ -922,38 +935,45 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
           break;
         }
         if (prior && aTopic) {
-          // PURE continuation ("Lanjutkan") must EXTEND the last reply, never
-          // re-search a sentence fragment.
-          if (isPureContinuation(text)) {
-            const cont = await continueAnalysis(env, prior, text);
-            if (cont) {
-              await appendMemory(env, owner, "user", text, aTopic).catch(() => {});
-              await appendMemory(env, owner, "assistant", cont, aTopic).catch(() => {});
-              if (cont.length > 120) void reflectOnTurn(env, text, cont, []).catch(() => {});
-              updateSession(owner, text, cont, aTopic, "research");
-              await recordTaskCounters(env, "standard", owner);
-              await storeResearchAnchor(env, owner, aTopic, cont).catch(() => {});
-              await fire(sendMessage(env, owner, cont));
+          // Fail-closed: ANY exception in the follow-up deepen path must still
+          // deliver a real reply (inherit the anchor as best-effort).
+          try {
+            // PURE continuation ("Lanjutkan") must EXTEND the last reply, never
+            // re-search a sentence fragment.
+            if (isPureContinuation(text)) {
+              const cont = await continueAnalysis(env, prior, text);
+              if (cont) {
+                await appendMemory(env, owner, "user", text, aTopic).catch(() => {});
+                await appendMemory(env, owner, "assistant", cont, aTopic).catch(() => {});
+                if (cont.length > 120) void reflectOnTurn(env, text, cont, []).catch(() => {});
+                updateSession(owner, text, cont, aTopic, "research");
+                await recordTaskCounters(env, "standard", owner);
+                await storeResearchAnchor(env, owner, aTopic, cont).catch(() => {});
+                await fire(sendMessage(env, owner, cont));
+                break;
+              }
+              // LLM down (M2): don't burn budget re-searching the SAME anchored
+              // topic (would duplicate the previous answer). Echo the last
+              // analysis honestly instead — a reply still flows.
+              updateSession(owner, text, prior.slice(0, 600), aTopic, "research");
+              await fire(sendMessage(env, owner,
+                "⏳ Bagian lanjutan belum berhasil kususun (layanan model sedang sibuk). Ini analisis terakhir yang sudah kubuat:\n\n" +
+                prior.slice(0, 1200)));
               break;
             }
-            // LLM down (M2): don't burn budget re-searching the SAME anchored
-            // topic (would duplicate the previous answer). Echo the last
-            // analysis honestly instead — a reply still flows.
-            updateSession(owner, text, prior.slice(0, 600), aTopic, "research");
-            await fire(sendMessage(env, owner,
-              "⏳ Bagian lanjutan belum berhasil kususun (layanan model sedang sibuk). Ini analisis terakhir yang sudah kubuat:\n\n" +
-              prior.slice(0, 1200)));
-            break;
+            // Single-source anchor: the SAME `prior` used above is handed to
+            // searchAndSynthesize so it does not re-derive a different anchor.
+            const r = await searchAndSynthesize(env, owner, text, aTopic, { followupPrior: prior });
+            await appendMemory(env, owner, "user", text, aTopic).catch(() => {});
+            await appendMemory(env, owner, "assistant", r.reply, aTopic).catch(() => {});
+            updateSession(owner, text, r.reply, aTopic, "research");
+            await recordTaskCounters(env, "standard", owner);
+            await storeResearchAnchor(env, owner, aTopic, r.reply).catch(() => {});
+            await fire(sendMessage(env, owner, r.reply));
+          } catch (e) {
+            console.error("[webhook] follow-up path failed", (e as Error).message);
+            await fire(sendMessage(env, owner, prior.slice(0, 1200)));
           }
-          // Single-source anchor: the SAME `prior` used above is handed to
-          // searchAndSynthesize so it does not re-derive a different anchor.
-          const r = await searchAndSynthesize(env, owner, text, aTopic, { followupPrior: prior });
-          await appendMemory(env, owner, "user", text, aTopic).catch(() => {});
-          await appendMemory(env, owner, "assistant", r.reply, aTopic).catch(() => {});
-          updateSession(owner, text, r.reply, aTopic, "research");
-          await recordTaskCounters(env, "standard", owner);
-          await storeResearchAnchor(env, owner, aTopic, r.reply).catch(() => {});
-          await fire(sendMessage(env, owner, r.reply));
           break;
         }
       }
