@@ -26,7 +26,7 @@ import {
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus, recordTaskCounters, recentContext, appendMemory } from "../lib/db";
-import { searchAndSynthesize, extractTopic, parseTranslate, translateText, isFollowUpQuery, resolveFollowUpAnchor, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, isPureContinuation } from "../lib/ai";
+import { searchAndSynthesize, extractTopic, parseTranslate, translateText, isFollowUpQuery, resolveFollowUpAnchor, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, isPureContinuation, storeResearchAnchor, readResearchAnchor } from "../lib/ai";
 import { continueAnalysis } from "../lib/ai";
 import { getWeatherText } from "../lib/weather";
 
@@ -869,6 +869,7 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
         // Observasi: user tertarik pada topik ini (untuk personalisasi di masa depan)
         saveObservation(env, owner, `User menanyakan tentang: ${topic}`, "interest").catch(() => {});
         await recordTaskCounters(env, "standard", owner);
+        await storeResearchAnchor(env, owner, topic, r.reply).catch(() => {});
         await fire(sendMessage(env, owner, r.reply));
         break;
       }
@@ -880,23 +881,32 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
       if (isFollowUpQuery(text)) {
         const ctx = await recentContext(env, owner, 8).catch(() => []);
         const anchor = resolveFollowUpAnchor(ctx);
-        if (anchor) {
+        // Continuation must extend the LAST answer WE actually gave the owner.
+        // Prefer the persistent KV anchor (written right after each substantive
+        // reply) — immune to conversation_log ordering/pollution (M7 "kota
+        // Malang" cross-latch). Fall back to the context heuristic.
+        const kvAnchor = (await readResearchAnchor(env, owner).catch(() => null)) ?? undefined;
+        const prior = kvAnchor?.prior ?? anchor?.prior;
+        const aTopic = kvAnchor?.topic ?? anchor?.topic;
+        if (prior && aTopic) {
           // PURE continuation ("Lanjutkan") must EXTEND the last reply, never
           // re-search a sentence fragment. Fail-closed: if the LLM is down,
           // fall through to the search-based follow-up so a reply always flows.
           if (isPureContinuation(text)) {
-            const cont = await continueAnalysis(env, owner, anchor.prior, text);
+            const cont = await continueAnalysis(env, owner, prior, text);
             if (cont) {
-              await appendMemory(env, owner, "user", text, anchor.topic).catch(() => {});
-              await appendMemory(env, owner, "assistant", cont, anchor.topic).catch(() => {});
+              await appendMemory(env, owner, "user", text, aTopic).catch(() => {});
+              await appendMemory(env, owner, "assistant", cont, aTopic).catch(() => {});
               if (cont.length > 120) void reflectOnTurn(env, text, cont, []).catch(() => {});
               await recordTaskCounters(env, "standard", owner);
+              await storeResearchAnchor(env, owner, aTopic, cont).catch(() => {});
               await fire(sendMessage(env, owner, cont));
               break;
             }
           }
-          const r = await searchAndSynthesize(env, owner, text, anchor.topic);
+          const r = await searchAndSynthesize(env, owner, text, aTopic);
           await recordTaskCounters(env, "standard", owner);
+          await storeResearchAnchor(env, owner, aTopic, r.reply).catch(() => {});
           await fire(sendMessage(env, owner, r.reply));
           break;
         }
