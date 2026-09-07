@@ -1218,6 +1218,45 @@ export async function listAgentTasks(env: Env, owner: number, limit = 20): Promi
   }
 }
 
+/** Delete one of the owner's tasks (retryable rows only: pending/failed/done).
+ *  Running tasks can't be force-removed, so a runaway row isn't silently lost. */
+export async function deleteAgentTask(env: Env, owner: number, id: number): Promise<boolean> {
+  try {
+    const res = await env.DB.prepare(
+      `DELETE FROM agent_tasks WHERE id = ? AND owner_id = ? AND status IN ('pending','failed','done')`,
+    ).bind(id, owner).run();
+    return (res.meta.changes ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Recent executor activity (last `hours`), for the morning briefing. */
+export async function statAgentTasksRecent(
+  env: Env,
+  since: number,
+): Promise<{ done: number; failed: number; pending: number; latestArtifact: string }> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT status, COUNT(*) AS n, MAX(CASE WHEN artifact_url IS NOT NULL AND artifact_url <> '' THEN id ELSE 0 END) AS last_art_id
+       FROM agent_tasks WHERE created_at >= ? GROUP BY status`,
+    ).bind(since).all<{ status: string; n: number; last_art_id: number }>();
+    const rows = results ?? [];
+    const pick = (s: string) => rows.find((r) => r.status === s)?.n ?? 0;
+    let latestArtifact = "";
+    const lastId = Math.max(...rows.map((r) => r.last_art_id || 0));
+    if (lastId > 0) {
+      const row = await env.DB.prepare(
+        `SELECT artifact_url FROM agent_tasks WHERE id = ?`,
+      ).bind(lastId).first<{ artifact_url: string }>();
+      latestArtifact = row?.artifact_url ?? "";
+    }
+    return { done: pick("done"), failed: pick("failed"), pending: pick("pending"), latestArtifact };
+  } catch {
+    return { done: 0, failed: 0, pending: 0, latestArtifact: "" };
+  }
+}
+
 // ---------------------------------------------------------------------
 // Todo list (owner-only personal vault; D1 table `todos`, mig 0011).
 // All functions fail-closed: they return safe defaults / throw-able states

@@ -25,7 +25,7 @@
 // All 100% free tier: D1 + FTS5 (existing memories/memories_fts) + Groq/Gemini.
 //=====================================================================
 
-import { Env, searchMemory, rememberMemory } from "./db";
+import { Env, searchMemory, rememberMemory, statAgentTasksRecent } from "./db";
 import { llmRespond } from "./ai";
 
 // Evidence-warrant gate: an insight must rest on at least this many supporting
@@ -353,6 +353,17 @@ export async function generateMorningBriefing(env: Env, owner: number): Promise<
     // Drift detection (Pillar 8)
     const driftReport = await generateDriftReport(env);
     if (driftReport) lines.push(driftReport);
+
+    // Eksekutor cloud (B-series): activity from the last 24h belongs in the
+    // morning rundown — what got built, what slipped, and where to read it.
+    const exec = await statAgentTasksRecent(env, last24h);
+    if (exec.done > 0 || exec.failed > 0) {
+      const bits = [];
+      if (exec.done > 0) bits.push(`${exec.done} selesai`);
+      if (exec.failed > 0) bits.push(`${exec.failed} gagal`);
+      const art = exec.latestArtifact ? `\nArtefak terbaru: ${exec.latestArtifact}` : "";
+      lines.push(`📦 Eksekutor cloud: ${bits.join(", ")} dalam 24 jam terakhir.${art}`);
+    }
   } catch { /* availability: sing off */ }
   if (lines.length === 0) return null; // skip: nothing notable
   lines.unshift("🌅 *Pagi, Pemilik.* Ringkasan singkat J.A.R.V.I.S.:");

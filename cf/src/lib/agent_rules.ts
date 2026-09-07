@@ -18,7 +18,7 @@
 //   * WIB constant: JARVIS speaks with the owner in UTC+7 everywhere else.
 //=====================================================================
 
-import { Env, addAgentTask, getDueAgentRules, updateAgentRuleFired } from "./db";
+import { Env, addAgentTask, getDueAgentRules, updateAgentRuleFired, getDmsConfig } from "./db";
 import { delegateToGithub } from "./agent_executor";
 import { sendMessage } from "./telegram";
 
@@ -119,12 +119,20 @@ function toEpoch(wibBase: Date, wibDayOfWeek: number, minuteOfDay: number): numb
 export async function fireDueAgentRules(
   env: Env,
   limit = 3,
-): Promise<{ fired: number; failed: number }> {
+): Promise<{ fired: number; failed: number; paused: boolean }> {
   const now = Date.now();
   const due = await getDueAgentRules(env, now, limit);
   let fired = 0;
   let failed = 0;
+  let paused = false;
   for (const rule of due) {
+    // Global /pause overrides BOTH the maestro and the recurring heavy-task
+    // scheduler — a paused owner gets NO autonomous executor runs at all.
+    const cfg = await getDmsConfig(env, rule.owner_id);
+    if (cfg.autonomy_paused) {
+      paused = true;
+      continue;
+    }
     const next = computeNextFire(rule.recur_spec, now);
     const instanceId = await addAgentTask(env, rule.owner_id, rule.task, rule.id);
     if (!instanceId) {
@@ -143,7 +151,10 @@ export async function fireDueAgentRules(
         .catch(() => {});
     } else {
       fired++;
+      await sendMessage(env, rule.owner_id,
+        `🗓️ Jadwal *#${rule.id}* dijalankan — "_${rule.task.slice(0, 90)}…_" (tugas ${instanceId}). Hasil kubalas di sini.`)
+        .catch(() => {});
     }
   }
-  return { fired, failed };
+  return { fired, failed, paused };
 }
