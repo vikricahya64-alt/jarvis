@@ -10,7 +10,7 @@
 //=====================================================================
 
 import { Env, touchActivity, logConsent, getConsentRequestTs, getDmsConfig, writeDmsConfig } from "../lib/db";
-import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById, addAgentTask, listAgentTasks, markAgentTaskRunning, addAgentRule, listAgentRules, deleteAgentRule, setAgentRuleActive } from "../lib/db";
+import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById, addAgentTask, listAgentTasks, markAgentTaskRunning, getAgentTask, deleteAgentTask, addAgentRule, listAgentRules, deleteAgentRule, setAgentRuleActive } from "../lib/db";
 import {
   addProduct, listProducts, getProduct, updateProduct, deleteProduct, adjustStock, lowStockProducts,
   addCustomer, listCustomers, searchCustomer,
@@ -1406,6 +1406,44 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
       return `${state} #${r.id} ${fmtRecurSpec(r.recur_spec)} → ${hm} WIB · ${r.task.slice(0, 50)}`;
     });
     await fire(sendMessage(env, from, `🗓️ *Jadwal berulang*\n\n${lines.join("\n")}`));
+    return;
+  }
+
+  // --- Lanjut (retry): "/tugas lanjut 12" — re-dispatch a pending/failed task.
+  const retry = /^\/(?:tugas|delegasi)\s+(?:lanjut|ulang|retry)\s+#?(\d+)/i.exec(trimmed);
+  if (retry) {
+    const target = await getAgentTask(env, Number(retry[1]));
+    if (!target || target.owner_id !== from) {
+      await fire(sendMessage(env, from, "Tugas tidak ditemukan (atau bukan milikmu)."));
+      return;
+    }
+    if (target.status === "running") {
+      await fire(sendMessage(env, from, `⚠️ Tugas #${retry[1]} sedang berjalan di eksekutor — tunggu hasilnya.`));
+      return;
+    }
+    if (target.status === "pending") {
+      await fire(sendMessage(env, from, `📦 Tugas #${retry[1]} masih mengantre — dispatch ulang…`));
+    } else {
+      await fire(sendMessage(env, from, `🔁 Tugas #${retry[1]} diluncurkan ulang ke eksekutor cloud…`));
+    }
+    const sent = await delegateToGithub(env, target.id, target.task);
+    if (sent.error) {
+      await fire(sendMessage(env, from,
+        `⚠️ Gagal dispatch ulang (${sent.error}). Coba lagi sebentar.`));
+      return;
+    }
+    if (sent.runId) await markAgentTaskRunning(env, target.id, sent.runId);
+    await fire(sendMessage(env, from, "🧠 Berhasil — hasil kubalas di sini. `/tugas list` untuk status."));
+    return;
+  }
+
+  // --- Hapus: "/tugas hapus 12" — tidy the owner's own history.
+  const del = /^\/(?:tugas|delegasi)\s+hapus\s+#?(\d+)/i.exec(trimmed);
+  if (del) {
+    const ok = await deleteAgentTask(env, from, Number(del[1]));
+    await fire(sendMessage(env, from, ok
+      ? `🗑️ Tugas #${del[1]} dihapus dari riwayat.`
+      : "Tidak bisa dihapus — cek id-nya (`/tugas list`), atau tugas itu sedang berjalan."));
     return;
   }
 

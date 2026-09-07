@@ -8,7 +8,7 @@
 // the queue consumer, both bounded. All GOTCHA-free, no external SDK.
 //=====================================================================
 
-import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders, getAgentTask, finishAgentTask, listAgentTasks, failStaleAgentTasks, pruneOldAgentTasks } from "./lib/db";
+import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders, getAgentTask, finishAgentTask, listAgentTasks, failStaleAgentTasks, pruneOldAgentTasks, rememberMemory } from "./lib/db";
 import { sanitizeAgentReport, flagAgentReport } from "./lib/agent_executor";
 import { fireDueAgentRules } from "./lib/agent_rules";
 import { handleUpdate } from "./workers/telegram_webhook";
@@ -156,7 +156,7 @@ export default {
         ok: true,
         ts: Date.now(),
         env: env.APP_ENV ?? "unknown",
-        version: "1a2b3c4d",
+        version: "4b6fb2e0",
       }));
     }
 
@@ -259,7 +259,7 @@ export default {
         return respond(Response.json({
           ok: true,
           ts: Date.now(),
-          version: "1a2b3c4d",
+          version: "4b6fb2e0",
           systems: {
             d1: d1Ok ? "✅" : "❌",
             kv: kvOk ? "✅" : "❌",
@@ -387,6 +387,14 @@ export default {
       const artifact = sanitizeAgentReport(body?.artifact_url ?? "").slice(0, 400);
       const flagged = flagAgentReport(rawResult || rawError);
       await finishAgentTask(env, tid, st === "done" ? "done" : "failed", rawResult, rawError, artifact);
+      // Best-effort learning: a finished cloud task becomes an episodic memory
+      // so the nightly dream cycle can generalize patterns from real outcomes.
+      if (st === "done") {
+        const headline = (rawResult || task.task).replace(/\s+/g, " ").trim().slice(0, 140);
+        await rememberMemory(env, `Eksekusi cloud #${tid} berhasil: ${headline}`, {
+          type: "fact", tags: ["agent_task", "executor"], importance: 3, source: "agent_task",
+        }).catch(() => {});
+      }
       const prefix = st === "done"
         ? `✅ Tugas *#${tid}* selesai (eksekutor cloud)`
         : `❌ Tugas *#${tid}* gagal di eksekutor cloud`;
@@ -562,6 +570,8 @@ export default {
         const rules = await fireDueAgentRules(env);
         if (rules.fired > 0 || rules.failed > 0) {
           console.log(`[cron] agent_rules: fired=${rules.fired} failed=${rules.failed} (${Date.now() - start}ms)`);
+        } else if (rules.paused) {
+          console.log(`[cron] agent_rules: paused /pause aktif`);
         }
       }
     } catch (e) {
