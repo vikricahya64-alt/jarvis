@@ -39,6 +39,17 @@ export type PlutchikEmotion =
   | "disapproval" | "remorse" | "contempt" | "aggressiveness"
   | "neutral";
 
+/** Positive-valence emotion set (trajectory sign). */
+const POSITIVE_EMOTIONS = new Set<string>([
+  "joy", "trust", "anticipation", "love", "optimism", "awe",
+]);
+
+/** Negative-valence emotion set (trajectory sign). */
+const NEGATIVE_EMOTIONS = new Set<string>([
+  "fear", "sadness", "disgust", "anger", "submission",
+  "disapproval", "remorse", "contempt", "aggressiveness",
+]);
+
 /** Plutchik wheel mapping: word -> [emotion, intensity]. */
 const PLUTCHIK_LEXICON: Record<string, [PlutchikEmotion, number][]> = {
   // Joy
@@ -444,14 +455,20 @@ export function updateMood(owner: number, signal: EmotionSignal): MoodState {
   mood.history.push({ emotion, intensity: signal.intensity, ts: now });
   if (mood.history.length > 20) mood.history.shift();
 
-  // Detect trajectory (compare last 3 vs previous 3)
+  // Detect trajectory (compare last 3 vs previous 3).
+  // Contract fix: the axis must be VALENCE-signed intensity, not raw magnitude.
+  // The old code compared |intensity| averages, so an owner whose JOY was
+  // escalating triggered "declining" (magnitude rose) — emotionToStyle then
+  // answered rising happiness with grief-empathy. Signed value: positive
+  // emotions count up, negative count down, neutral counts zero.
   if (mood.history.length >= 6) {
     const recent = mood.history.slice(-3);
     const previous = mood.history.slice(-6, -3);
-    const recentAvg = recent.reduce((s, h) => s + h.intensity, 0) / recent.length;
-    const prevAvg = previous.reduce((s, h) => s + h.intensity, 0) / previous.length;
-    if (recentAvg > prevAvg + 0.15) mood.trajectory = "declining";
-    else if (recentAvg < prevAvg - 0.15) mood.trajectory = "improving";
+    const signed = (h: { emotion: string; intensity: number }) => h.intensity * (POSITIVE_EMOTIONS.has(h.emotion) ? 1 : NEGATIVE_EMOTIONS.has(h.emotion) ? -1 : 0);
+    const recentAvg = recent.reduce((s, h) => s + signed(h), 0) / recent.length;
+    const prevAvg = previous.reduce((s, h) => s + signed(h), 0) / previous.length;
+    if (recentAvg > prevAvg + 0.15) mood.trajectory = "improving";
+    else if (recentAvg < prevAvg - 0.15) mood.trajectory = "declining";
     else mood.trajectory = "stable";
   }
 

@@ -277,6 +277,16 @@ export function extractTopic(text: string): string | null {
   // ("apa kabar", "apa yang bisa kamu lakukan", "bisa kamu lakukan") — these
   // are NOT research topics, so the generic single-pass engine should handle them.
   if (/^(kabar|khabar|kabar baik|kabar gembira|halo|hai|naik|hoax|yang bisa|bisa kamu|kamu bisa|kamu lakukan|apa yang bisa|apa uang bisa)/i.test(topic)) return null;
+  // Guard: a residual "topic" that is really a FOLLOW-UP fragment (continuation
+  // of a prior analysis — "lebih detail", "saja", "lanjut", "tadi itu") must NOT
+  // become a fresh DDG search for that literal fragment. Hand these to the
+  // follow-up anchor path (webhook T5) instead, which continues the LAST answer.
+  // Only fragments whose EVERY word is a continuation/connector word are pure
+  // fragments — a topic that still carries a real subject ("detail cara memulai
+  // usaha kopi") keeps searching. Mirrors the vocabulary in FOLLOWUP_RE above.
+  const FRAG_WORD = /^(?:lebih|detail|lengkap|lanjut|lengkapi|perdalam|perinci|rinci|uraikan|tuntas|ceritain|terus|tadi|saja|dalam|lagi|banyak|jauh|jabarkan|sebutkan|maksud|yang|itu|apa|dari|soal|mengenai|tentang|dengan|saya|aku)$/i;
+  const fragWords = topic.split(/\s+/);
+  if (isFollowUpQuery(topic) && fragWords.length <= 4 && fragWords.every((w) => FRAG_WORD.test(w))) return null;
   return topic.length >= 3 ? topic.slice(0, 120) : null;
 }
 
@@ -396,7 +406,7 @@ export async function trackTokenUsage(env: Env, provider: string, inTokens: numb
 export async function groqRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
 ): Promise<string | null> {
   const key = env.GROQ_API_KEY;
   if (!key) return null;
@@ -407,8 +417,8 @@ export async function groqRespond(
     Number(env.OWNER_TELEGRAM_ID),
     userText,
     opts.contextIsEnriched && context.length > 0
-      ? { topic: opts.topic, enrichedContext: context }
-      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
+      ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
+      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined, skipUserMessage: opts.skipUserMessage },
   ).catch(() => buildFallbackMessages(context, userText));
 
   let reply: string | null = null;
@@ -449,7 +459,7 @@ export async function groqRespond(
 export async function openrouterRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
 ): Promise<string | null> {
   const key = env.OPENROUTER_API_KEY;
   if (!key) return null; // fail-open: not configured
@@ -460,8 +470,8 @@ export async function openrouterRespond(
     Number(env.OWNER_TELEGRAM_ID),
     userText,
     opts.contextIsEnriched && context.length > 0
-      ? { topic: opts.topic, enrichedContext: context }
-      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
+      ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
+      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined, skipUserMessage: opts.skipUserMessage },
   ).catch(() => buildFallbackMessages(context, userText));
 
   const model = env.OPENROUTER_MODEL || OPENROUTER_MODEL;
@@ -503,7 +513,7 @@ export async function openrouterRespond(
 export async function geminiRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
 ): Promise<string | null> {
   const keys = [env.GEMINI_API_KEY, env.GEMINI_API_KEY_BACKUP, env.GEMINI_API_KEY_SECONDARY].filter(
     (k): k is string => Boolean(k),
@@ -516,8 +526,8 @@ export async function geminiRespond(
     Number(env.OWNER_TELEGRAM_ID),
     userText,
     opts.contextIsEnriched && context.length > 0
-      ? { topic: opts.topic, enrichedContext: context }
-      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
+      ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
+      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined, skipUserMessage: opts.skipUserMessage },
   ).catch(() => buildFallbackMessages(context, userText));
 
   // Convert messages array to Gemini's single-prompt format
@@ -571,7 +581,7 @@ export async function geminiRespond(
 export async function workersAiRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
 ): Promise<string | null> {
   if (!env.AI) return null;
   const context = opts.context ?? [];
@@ -581,8 +591,8 @@ export async function workersAiRespond(
     Number(env.OWNER_TELEGRAM_ID),
     userText,
     opts.contextIsEnriched && context.length > 0
-      ? { topic: opts.topic, enrichedContext: context }
-      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
+      ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
+      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined, skipUserMessage: opts.skipUserMessage },
   ).catch(() => buildFallbackMessages(context, userText));
 
   // Workers AI model — use a good conversational model
@@ -634,7 +644,7 @@ export async function workersAiRespond(
 export async function llmRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean } = {},
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean } = {},
 ): Promise<{ reply: string | null; source: "workers_ai" | "groq" | "openrouter" | "gemini" | "self_ref" | null }> {
   // SELF-REFERENTIAL INTERCEPT — the brain's first and most important guard.
   // If the input asks "who are you" or "what can you do", answer directly from
@@ -655,8 +665,8 @@ export async function llmRespond(
     Number(env.OWNER_TELEGRAM_ID),
     userText,
     opts.contextIsEnriched && context.length > 0
-      ? { topic: opts.topic, enrichedContext: context }
-      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined },
+      ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
+      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined, skipUserMessage: opts.skipUserMessage },
   ).catch(() => buildFallbackMessages(context, userText));
 
   const sharedOpts = { ...opts, prebuiltMessages };
@@ -1149,7 +1159,7 @@ export async function searchAndSynthesize(
       content: "Pemilik minta VERSI SINGKAT: jawab maksimal ±60 kata, langsung ke inti, tanpa intro/markdown berlebihan.",
     });
   }
-  const g = await llmRespond(env, userText, { context, topic });
+  const g = await llmRespond(env, userText, { context, topic, contextIsEnriched: true });
   if (g.reply) {
     // SELF-LEARNING: Store the synthesized knowledge for future queries
     if (searchResult) {

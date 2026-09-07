@@ -177,7 +177,14 @@ export async function perceive(
 
   // Detect topic continuity
   const topicResult = detectTopicContinuity(text, enrichedContext);
-  const topic = topicResult.topic ?? text.slice(0, 80);
+  // Contract fix (M2): the brain's topic must use the SAME noun-phrase extractor
+  // as the webhook's search path — otherwise whole imperative sentences ("saya
+  // butuh analisis ini") became the DDG query. On a detected continuation with
+  // no fresh marker, prefer the session's activeTopic so follow-ups stay on the
+  // anchored subject instead of the raw sentence prefix.
+  const topic =
+    topicResult.topic ??
+    ((topicResult.isContinuation && session.activeTopic) || extractTopic(text) || text.slice(0, 80));
 
   // Classify intent (combines multiple signals)
   const intent = classifyIntent(text, topic);
