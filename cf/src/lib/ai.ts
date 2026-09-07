@@ -74,6 +74,32 @@ export function isFollowUpQuery(text: string): boolean {
   return FOLLOWUP_RE.test(low);
 }
 
+/** Stopwords/filler that must never count when comparing topic overlap. */
+const TOPIC_STOP = new Set([
+  "yang", "itu", "untuk", "dengan", "dari", "pada", "di", "ke", "dan", "atau",
+  "saya", "kamu", "anda", "apa", "berapa", "bagaimana", "bisnis", "cara", "dalam",
+  "pertama", "kali", "buka", "ok", "oke", "nah", "itu", "kalau", "karena", "juga",
+  "ya", "dong", "deh", "tolong", "lah", "sudah", "belum", "coba", "mau", "ingin",
+  "untuk", "ada", "dengan",
+]);
+
+/** Significant (non-stopword) lowercase tokens from a phrase — video-length
+ *  words only, so overlap is cheap and deterministic (no LLM). */
+function topicTokens(s: string): string[] {
+  return (s.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []).filter((t) => !TOPIC_STOP.has(t));
+}
+
+/** True when two topics share >=1 significant token — e.g. the KV anchor topic
+ *  "bisnis kerajinan tangan..." and the follow-up "minimal produksi untuk
+ *  pertama kali buka" share "produksi". Pure heuristics, zero budget. */
+export function topicOverlaps(a: string, b: string): boolean {
+  const ta = topicTokens(a);
+  const tb = topicTokens(b);
+  if (ta.length === 0 || tb.length === 0) return false;
+  const tbSet = new Set(tb);
+  return ta.some((t) => tbSet.has(t));
+}
+
 /** True when the message is a PURE continuation command ("Lanjutkan",
  *  "terus", "selanjutnya", "next") that must EXTEND the prior reply — NOT
  *  trigger a fresh web search. Strict: a following subject ("Lanjutkan riset
@@ -791,11 +817,46 @@ export async function ddgSearchHits(env: Env, query: string): Promise<SearchHit[
 /** Pure, deterministic source-citation list (markdown) for appending to replies.
  *  ECC deep-research parity: answers carry source attribution — real, DEDUPED
  *  by host, query-noise-free, never invented (fail-closed). */
+/** Hosts that are search venues / navigational noise, never useful citations
+ *  ("google.de", "bing.com"… — M7 source-noise bug: the last source block was
+ *  garbage like google.de + en.wikipedia.org/wiki/Google + ChatGPT_DAN repo).
+ *  Exact match (after www.-strip), lowercased. */
+const JUNK_SOURCE_HOSTS = new Set([
+  "google.com", "google.de", "google.co.id", "google.co.uk", "google.com.my", "google.ae",
+  "bing.com", "duckduckgo.com", "yahoo.com", "baidu.com", "sogou.com", "ask.com",
+  "aol.com", "yandex.com", "search.yahoo.com", "startpage.com", "ecosia.org",
+]);
+
+/** Disambiguation landing junk paths that carry no citable substance. */
+const DAN_SPAM_PATH = /(^|\/)(chatgpt[-_]?dan|chatgpt_dan|gpt_dan)/i;
+
+function isJunkSource(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "").toLowerCase();
+    if (JUNK_SOURCE_HOSTS.has(host)) return true;
+    if (/wikipedia\.org$/.test(host)) {
+      // Disambiguation pages are navigation, not substance.
+      if (/disambiguation/i.test(u.pathname)) return true;
+      // Single bare-word landing pages (en.wikipedia.org/wiki/Google —
+      // the M7 source-noise bug) are navigational noise for a queried topic,
+      // unlikely to be a real citable article re: craft business. Multi-word
+      // / disambiguated titles (wiki/Kopi_(minuman)) are kept.
+      const m = u.pathname.match(/\/wiki\/([^/]+)\.?$/);
+      const title = m?.[1] ?? "";
+      if (title && !title.includes("_") && /^[a-z]{2,8}$/i.test(title)) return true;
+    }
+    if (DAN_SPAM_PATH.test(u.pathname)) return true;
+  } catch { return true; }
+  return false;
+}
+
 export function formatSourceList(hits: SearchHit[], max = 4): string {
   const seen = new Set<string>();
   const rows: string[] = [];
   for (const h of hits) {
     if (!h?.url || !h?.title) continue;
+    if (isJunkSource(h.url)) continue;
     // Dedupe by host (keep the strongest first hit per site).
     let host = "";
     try { host = new URL(h.url).hostname.replace(/^www\./, ""); } catch { host = ""; }
@@ -995,6 +1056,16 @@ export async function searchAndSynthesize(
     const anchor = resolveFollowUpAnchor(ctx);
     if (anchor) followupAnchor = anchor.prior;
   }
+  // M7 (follow-up-numbers): a fresh-technical question about the SAME anchored
+  // topic ("Berapa minimal produksi untuk pertama kali buka" after a kerajinan
+  // analysis quoting BEP ~79 pcs) should WRITE CONSISTENTLY with our prior
+  // numbers — not guess from a blank search. If the query's significant tokens
+  // overlap the stored anchor topic, carry the prior analysis forward so the
+  // writer grounds the answer in our own earlier figures.
+  if (!followupAnchor) {
+    const kv = await readResearchAnchor(env, owner).catch(() => null);
+    if (kv && topicOverlaps(topic, kv.topic)) followupAnchor = kv.prior;
+  }
   if (isResearchClass(topic, userText)) {
     // Iron Man JARVIS: complex design/research queries go through the bounded
     // orchestrator pipeline (research + design outline). The separate video
@@ -1057,6 +1128,16 @@ export async function searchAndSynthesize(
   // framework logic or prompt.
   if (behaviorContext) {
     context.push({ role: "system", content: behaviorContext });
+  }
+  // M7 (follow-up-numbers): carry our own prior analysis forward when this is
+  // a follow-up of the SAME anchored topic, so figures we already told the
+  // owner (BEP, modal, harga jual…) stay CONSISTENT across turns — the LLM
+  // must refine/agree with them, never contradict or guess anew.
+  if (followupAnchor) {
+    context.push({
+      role: "system",
+      content: `Analisis yang sudah saya berikan sebelumnya pada sesi ini (gali angka & kesimpulannya sebagai acuan; konsisten, jangan bertentangan):\n${followupAnchor.slice(-1400)}`,
+    });
   }
   // ECC token-budget-advisor parity: when the owner explicitly asks for a
   // SHORT answer, inject a brevity constraint so the reply respects their

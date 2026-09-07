@@ -10,7 +10,7 @@
 
 import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
-import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic } from "../src/lib/ai";
+import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps } from "../src/lib/ai";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
@@ -463,6 +463,45 @@ function testFormatSourceList() {
   assert.strictEqual(formatSourceList([{ title: "", url: "", snippet: "" }]), "", "blank hit -> empty");
 }
 
+function testJunkSourceFilter() {
+  // M7 source-noise: search-engine hosts, wikipedia disambiguation pages, and
+  // jailbreak spam repos must never appear in a source block the owner sees.
+  const junkList = [
+    { title: "Google (google.de)", url: "https://google.de/search?q=x", snippet: "s" },
+    { title: "Bing", url: "https://bing.com/search", snippet: "s" },
+    { title: "Google - Wikipedia", url: "https://en.wikipedia.org/wiki/Google", snippet: "s" },
+    { title: "Wikipedia disambig", url: "https://en.wikipedia.org/wiki/Kopi_(disambiguation)", snippet: "s" },
+    { title: "ChatGPT DAN repo", url: "https://github.com/ChatGPT_DAN/test", snippet: "s" },
+  ];
+  assert.strictEqual(formatSourceList(junkList, 4), "", "all junk sources dropped");
+  const mixed = [
+    { title: "google.de", url: "https://google.de/search", snippet: "s" },
+    { title: "Kompas", url: "https://kompas.com/artikel", snippet: "s" },
+  ];
+  const out = formatSourceList(mixed, 4);
+  assert.ok(out.includes("kompas.com"), "valid source survives junk filter");
+  assert.ok(!out.includes("google.de"), "google.de excluded");
+  const disambig = formatSourceList([{ title: "Kopi disambig", url: "https://en.wikipedia.org/wiki/Kopi_(disambiguation)", snippet: "s" }], 4);
+  assert.strictEqual(disambig, "", "wikipedia disambiguation dropped");
+  const legitWiki = formatSourceList([{ title: "Kopi minuman", url: "https://en.wikipedia.org/wiki/Kopi_(minuman)", snippet: "s" }], 4);
+  assert.ok(legitWiki.includes("wikipedia.org"), "disambiguated wiki article KEPT");
+}
+
+function testTopicOverlap() {
+  // M7 follow-up-numbers: a fresh question on the SAME anchored topic reuses
+  // our prior figures; an unrelated query must not.
+  assert.strictEqual(topicOverlaps("minimal produksi untuk pertama kali buka", "bisnis kerajinan tangan modal keuntungan produksi"), true,
+    "shared token 'produksi' -> overlap");
+  assert.strictEqual(topicOverlaps("bagaimana cara menentukan harga jual", "bisnis kerajinan tangan perhitungan harga pokok produksi"), true,
+    "shared token 'harga' -> overlap");
+  assert.strictEqual(topicOverlaps("cuaca di malang hari ini", "bisnis kerajinan tangan modal keuntungan"), false,
+    "unrelated topic -> no overlap");
+  assert.strictEqual(topicOverlaps("apa itu bisnis", "bisnis kerajinan"), false,
+    "'bisnis' is a stopword -> empty token set -> NO overlap (avoids false-positive anchoring)");
+  assert.strictEqual(topicOverlaps("berbisnis kerajinan", "bisnis kerajinan tangan"), true,
+    "shared 'kerajinan' token -> overlap");
+}
+
 function testBareTodoVerb() {
   assert.strictEqual(isBareTodoVerb("/hapus"), true);
   assert.strictEqual(isBareTodoVerb("hapus"), true);
@@ -591,6 +630,8 @@ async function main() {
   await testFuzzyTodoDelete();
   testBareTodoVerb();
   testFormatSourceList();
+  testJunkSourceFilter();
+  testTopicOverlap();
   testM6Regressions();
   testResolveFollowUpAnchor();
   testFormalWordPreservation();
