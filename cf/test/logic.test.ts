@@ -526,6 +526,16 @@ function testTidyVisionReply() {
   const shortJunk = "ok.";
   assert.strictEqual(tidyVisionReply(shortJunk), null, "too-short reply (< 8 chars) dropped as unhelpful");
 
+  // M7 media-fix v4: a `<think>...` reasoning block (English planning) leaked
+  // into content by Qwen/Gemini must be stripped, leaving only the clean
+  // Indonesian answer.
+  const thinkBlock = "<think>The user wants a description of the image in Indonesian. I need to identify the main object.</think> Gambar ini menampilkan toko aplikasi.";
+  assert.strictEqual(tidyVisionReply(thinkBlock), "Gambar ini menampilkan toko aplikasi.",
+    "<think> reasoning block stripped, answer kept");
+  const bareThinking = "Thinking:\nIdentify the objects.\nGambar ini menampilkan daftar aplikasi.";
+  assert.strictEqual(tidyVisionReply(bareThinking), "Gambar ini menampilkan daftar aplikasi.",
+    "'Thinking:' preamble stripped");
+
   assert.strictEqual(tidyVisionReply(""), null, "empty reply -> null");
   assert.strictEqual(tidyVisionReply("     "), null, "whitespace-only -> null");
 }
