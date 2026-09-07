@@ -1567,6 +1567,16 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
     return;
   }
 
+  // Fail-closed schedule guard (M4): when the owner clearly wrote a schedule
+  // word ("setiap …") that our parser couldn't turn into a rule, DON'T silently
+  // create a one-shot task carrying the orphan "setiap …" text. Teach instead.
+  const scheduleLike = /(?:setiap|tiap)\s+(?:hari|pagi|siang|sore|malam|minggu|jam|senin|selasa|rabu|kamis|jumat|sabtu|minggu|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+  if (!parsed && scheduleLike.test(task)) {
+    await fire(sendMessage(env, from,
+      "🗓️ Kayaknya kamu ingin *menjadwalkan* tugas (ada \"setiap\"), tapi formatnya belum kupahami — jadi belum kubuat tugasnya.\n\nPola yang diterima:\n• `/tugas <kerjaan> setiap <hari> <HH:MM>` — contoh: `setiap Senin 09:00`\n• `/tugas <kerjaan> setiap hari <HH:MM>` — contoh: `setiap hari 07:30`\n\nContoh utuh: `/tugas riset berita keamanan minggu ini setiap Senin 08:00`.\nKalau bukan jadwal, balik kirim tanpa kata \"setiap\"."));
+    return;
+  }
+
   if (task.length < 10 || task.length > 4000) {
     await fire(sendMessage(env, from,
       "📦 `/tugas <pekerjaan>` (contoh: `/tugas riset kompetitor AI dan simpan laporan markdown`). Minimal 10 karakter."));
