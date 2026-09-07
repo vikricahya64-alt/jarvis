@@ -86,9 +86,10 @@ export function isPureContinuation(userText: string): boolean {
   return head.test(low);
 }
 
-/** Deterministic tidy for continuation output (defense-in-depth): a stray LLM
- *  deviation must never reproduce the "Baik, mari kita lanjutkan…?" bug —
- *  strip leading "Baik…" filler and any trailing "Apakah Anda ingin…?" ask. */
+/**
+ * Deterministic tidy for continuation output (defense-in-depth): a stray LLM
+ * deviation must never reproduce the "Baik, mari kita lanjutkan…?" bug —
+ * strip leading "Baik…" filler and any trailing "Apakah Anda ingin…?" ask. */
 export function tidyContinuation(reply: string): string {
   let out = (reply ?? "").trim();
   out = out
@@ -98,8 +99,45 @@ export function tidyContinuation(reply: string): string {
   return out;
 }
 
+/**
+ * Persistent research anchor (M7): the LAST substantive analysis we told the
+ * owner is stored in KV — NOT inferred from the fragile conversation_log
+ * order. Continuation ("Lanjutkan") reads THIS, so it can never latch onto an
+ * older, unrelated turn (the "kota Malang" cross-latch bug). Best-effort, TTL
+ * 15 min (matches resolveFollowUpAnchor freshness). Fail-closed on error. */
+export async function storeResearchAnchor(
+  env: Env,
+  owner: number,
+  topic: string,
+  reply: string,
+): Promise<void> {
+  if (!reply || !env.CONFIG_KV) return;
+  try {
+    await env.CONFIG_KV.put(
+      `anchor:${owner}`,
+      JSON.stringify({ ts: Date.now(), topic: (topic || reply).slice(0, 200), prior: reply.slice(0, 3000) }),
+      { expirationTtl: 900 },
+    );
+  } catch { /* best-effort */ }
+}
+
+/** Read the persistent research anchor for continuation/re-follow-up. Returns
+ *  null only when nothing valid is stored (or KV down) — caller falls back to
+ *  the resolveFollowUpAnchor heuristic on conversation_log. */
+export async function readResearchAnchor(
+  env: Env,
+  owner: number,
+): Promise<{ topic: string; prior: string } | null> {
+  try {
+    const raw = await env.CONFIG_KV?.get(`anchor:${owner}`, "json").catch<unknown>(() => null) as null | { ts?: number; topic?: string; prior?: string };
+    if (!raw || !raw.prior || !raw.topic) return null;
+    return { topic: String(raw.topic).slice(0, 200), prior: String(raw.prior).slice(0, 3000) };
+  } catch {
+    return null;
+  }
+}
+
 /** ECC continuation parity: extend the LAST assistant analysis without a new
- *  web search. The prior reply (already sourced) is the only input, so the
  *  continuation stays on the exact same topic/structure and NEVER degrades into
  *  a clarifying question ("kota Malang ..." bug — M7). Fail-closed: null when
  *  no provider answers, so the caller falls back to a fresh search reply. */
