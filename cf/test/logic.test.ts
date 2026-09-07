@@ -550,6 +550,12 @@ function testTidyVisionReply() {
   // Plain Indonesian caption with no image marker must survive untouched.
   assert.strictEqual(tidyVisionReply("Ini teks caption biasa tanpa marker gambar."),
     "Ini teks caption biasa tanpa marker gambar.", "non-vision Indonesian text passes through");
+  // M7 media-fix v7: a normal MULTI-sentence Indonesian answer must NOT be
+  // over-trimmed by the IDN content-cut (the word 'Terdapat' is generic and a
+  // pure-Indonesian reply would wrongly truncate to its last sentence).
+  const multiIdn = "Screenshot ini menampilkan halaman beranda toko aplikasi F-Droid dalam mode gelap. Terdapat daftar aplikasi seperti Clear SMS, Fluffy, dan SimpleX Chat. Di bagian bawah terdapat menu navigasi Terbaru, Kategori, Di Sekitar, Pembaruan, dan Pengaturan.";
+  assert.strictEqual(tidyVisionReply(multiIdn), multiIdn,
+    "pure-Indonesian multi-sentence answer preserved (gate: no EN pollution -> no cut)");
 
   assert.strictEqual(tidyVisionReply(""), null, "empty reply -> null");
   assert.strictEqual(tidyVisionReply("     "), null, "whitespace-only -> null");
