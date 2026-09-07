@@ -1053,9 +1053,18 @@ const VISION_MODELS = [
  *  owner must see ONE clean paragraph, never model drafting. Returns null when
  *  no usable sentence remains. */
 export function tidyVisionReply(reply: string): string | null {
-  let lines = (reply ?? "").trim().split("\n");
+  let out0 = (reply ?? "").trim();
+  // M7 media-fix v4: some Qwen/Gemini builds leak their REASONING inside the
+  // content as a `<think>...</think>` block (or a bare leading "Thinking:\n"
+  // paragraph). The thinking is ENGLISH planning; the actual answer is the
+  // Indonesian sentence after it. Strip the think block entirely, then feed
+  // what remains through the line cleaner below.
+  out0 = out0.replace(/<\s*think\s*>[\s\S]*?<\s*\/\s*think\s*>/gi, "")
+    .replace(/^Thinking:?\s*\n/i, "")
+    .replace(/^[ \t]*[—-]\s*Thinking:?[ \t]*\n/i, "").trim();
+  let lines = out0.split("\n");
   // Drop leading planning/meta lines (whatever the egress model emits).
-  const PLAN_RE = /^(?:the user|the image|the main|i need|let me|to (?:provide|describe)|based on|this is a (?:draft|preview)|drafting|prediction|step\s*\d+|the (?:screenshot|photo)|here(?:'s| is)(?: a)?\s*(?:draft|clean|the))/i;
+  const PLAN_RE = /^(?:the user|the image|the main|i need|let me|to (?:provide|describe)|based on|this is a (?:draft|preview)|drafting|prediction|step\s*\d+|the (?:screenshot|photo)|here(?:'s| is)(?: a)?\s*(?:draft|clean|the)|identify|describe|the description)/i;
   while (lines.length && PLAN_RE.test(lines[0].trim())) lines.shift();
   // Drop any remaining pure-planning fragments after the content too.
   lines = lines.filter((l) => !PLAN_RE.test(l.trim()) || /\p{Script=Latin}/u.test(l) && /[A-Za-z]{2,}/.test(l) && !/^\s*(?:drafting|prediction|step\s*\d)/i.test(l.trim()));
