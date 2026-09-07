@@ -29,7 +29,7 @@ import { detectLanguage, type Language } from "./jarvis_language";
 import {
   getSession, type SessionState,
   detectConversationMode, detectTopicContinuity,
-  updateSession, buildEnrichedContext,
+  updateSession, buildEnrichedContext, saveSessionToKV,
 } from "./context_manager";
 import { buildConversationMessages } from "./conversation";
 import {
@@ -511,6 +511,10 @@ export async function reflect(
 
   // Update session state
   updateSession(owner, text, reply, topic, perception.mode);
+  // H4: persist session (incl. moodState history) to KV after EVERY turn, not
+  // only on the periodic sync — a cold start between syncs no longer loses the
+  // latest turn's state.
+  await saveSessionToKV(env, owner).catch(() => {});
 }
 
 // ============================================================================

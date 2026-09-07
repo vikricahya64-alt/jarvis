@@ -211,6 +211,36 @@ export function getMoodState(owner: number): MoodState {
   return m;
 }
 
+/** Restore a persisted MoodState (from KV) after cold start. Keeps mood
+ *  trajectory (history) across restarts instead of resetting to neutral —
+ *  previously mood.history was never persisted, so trajectory detection
+ *  restarted from scratch on every cold start. Validates shape; ignores junk. */
+export function setMoodState(owner: number, raw: unknown): void {
+  if (!raw || typeof raw !== "object") return;
+  const s = raw as Record<string, unknown>;
+  const current = typeof s.current === "string" ? (s.current as MoodState["current"]) : "neutral";
+  const history = Array.isArray(s.history)
+    ? (s.history as MoodState["history"]).filter(
+        (h) => h && typeof h === "object" && typeof h.intensity === "number" && h.ts &&
+               (h.emotion === "joy" || h.emotion === "sadness" || h.emotion === "anger" ||
+                h.emotion === "fear" || h.emotion === "disgust" || h.emotion === "surprise" ||
+                h.emotion === "trust" || h.emotion === "anticipation" || h.emotion === "neutral"),
+      ).slice(-20)
+    : [];
+  const intensity = typeof s.intensity === "number" ? Math.max(0, Math.min(1, s.intensity)) : 0;
+  const trajectory = (typeof s.trajectory === "string" &&
+    (s.trajectory === "stable" || s.trajectory === "improving" || s.trajectory === "declining"))
+    ? (s.trajectory as MoodState["trajectory"])
+    : "stable";
+  moodCache.set(owner, {
+    current,
+    intensity,
+    trajectory,
+    history,
+    lastUpdate: typeof s.lastUpdate === "number" ? s.lastUpdate : Date.now(),
+  });
+}
+
 /** Extract emojis from text and classify their emotional signal. */
 function extractEmojiEmotions(text: string): Array<[PlutchikEmotion, number]> {
   const results: Array<[PlutchikEmotion, number]> = [];

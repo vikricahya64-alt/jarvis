@@ -22,7 +22,7 @@
 //=====================================================================
 
 import { Env, recentContext, appendMemory, searchMemory } from "./db";
-import { detectEmotion, updateMood, getMoodState, moodSummary, type MoodState } from "./emotion";
+import { detectEmotion, updateMood, getMoodState, setMoodState, moodSummary, type MoodState } from "./emotion";
 
 /** A single conversation turn. */
 export interface Turn {
@@ -137,12 +137,19 @@ export async function saveSessionToKV(env: Env, owner: number): Promise<void> {
   const s = sessions.get(owner);
   if (!s) return;
   try {
+    // MoodState (with history/trajectory) persisted so trajectory detection
+    // survives cold starts — previously only the string label was kept.
+    const moodState = (() => {
+      try { return getMoodState(owner); }
+      catch { return null; }
+    })();
     // Hanya simpan data ringkas (tidak perlu semua field)
     const snapshot = {
       activeTopic: s.activeTopic,
       turnCount: s.turnCount,
       recentTopics: s.recentTopics.slice(0, 5),
       mood: s.mood,
+      moodState,
       conversationMode: s.conversationMode,
       summaryBuffer: s.summaryBuffer.slice(0, 500),
       summarizedTurns: s.summarizedTurns,
@@ -182,6 +189,7 @@ export async function loadSessionFromKV(env: Env, owner: number): Promise<Sessio
       s.summaryBuffer = (typeof snap.summaryBuffer === "string" ? snap.summaryBuffer : "");
       s.summarizedTurns = (typeof snap.summarizedTurns === "number" ? snap.summarizedTurns : 0);
       s.sessionStart = (typeof snap.sessionStart === "number" ? snap.sessionStart : Date.now());
+      if (snap.moodState) setMoodState(owner, snap.moodState);
       if (snap.learnedStyle && typeof snap.learnedStyle === "object") {
         s.learnedStyle = snap.learnedStyle as SessionState["learnedStyle"];
       }
