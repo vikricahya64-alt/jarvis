@@ -40,6 +40,7 @@
 
 import { Env, pendingProposals } from "./db";
 import { listInsights, getActivePreferences } from "./evolution";
+import { isAutonomyPaused } from "./command_hierarchy";
 import { getScheduledTasks } from "./maestro";
 
 export interface Suggestion {
@@ -219,6 +220,9 @@ export async function offeredSourceKeys(env: Env, owner: number): Promise<Set<st
  */
 export async function offerSuggestions(env: Env, owner: number): Promise<string | null> {
   try {
+    // Global /pause gate: proactive suggestions are autonomous output — skipped
+    // while paused (M6 governance fix; previously fired irrespective of pause).
+    if (await isAutonomyPaused(env, owner).catch(() => true)) return null;
     const already = await offeredSourceKeys(env, owner);
     const candidates = await gatherSuggestionCandidates(env, owner, already);
     if (candidates.length === 0) return null; // skip: nothing actionable

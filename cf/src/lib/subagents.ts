@@ -298,6 +298,29 @@ interface AngleGather {
   angle: string;
   findings: Finding[];
 }
+
+/** ECC deep-research parity: a research answer MUST be tracible to its
+ *  gathered pages. If the writer hasn't already cited any URL, append a
+ *  compact source list (real gathered URLs only — never invented ones). */
+function attributionSuffix(gathers: AngleGather[]): string {
+  const seen = new Set<string>();
+  const rows: Array<{ title: string; url: string }> = [];
+  for (const g of gathers) {
+    for (const f of g.findings) {
+      const url = (f.url || "").trim();
+      if (!url || !/^https?:\/\//.test(url)) continue;
+      const key = url.replace(/\/+$/, "");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({ title: (f.title || "").trim(), url });
+    }
+  }
+  if (rows.length === 0) return "";
+  const cap = rows.slice(0, 6);
+  const lines = cap.map((r) => `- ${(r.title || r.url).slice(0, 90)} — ${r.url}`).join("\n");
+  const more = rows.length > 6 ? `\n- …dan ${rows.length - 6} sumber lain (lihat catatan lengkap).` : "";
+  return `\n\n📚 *Sumber:*\n${lines}${more}`;
+}
 /** Gather top-N findings for one angle (deterministic; no LLM call per angle).
  *  Every hit is untrusted and gets spotlighted by the caller before the writer. */
 async function gatherAngle(env: Env, angle: string): Promise<AngleGather> {
@@ -603,7 +626,7 @@ export async function orchestrateResearch(
           calls += 1;
           if (calls > MAX_TOTAL_LLM_CALLS) return reply;
         }
-        const refined = await runWriter(env, userText, topic, [...gathers, ...deeper], deeperFacts, owner, reply);
+        const refined = await runWriter(env, userText, topic, [...gathers, ...deeper], [...facts, ...deeperFacts], owner, reply);
         calls += 1;
         if (refined && refined.length > reply.length) reply = refined;
       }
@@ -611,15 +634,18 @@ export async function orchestrateResearch(
 
     // 6) Verifier (optional output rail) — only for non-trivial replies AND only
     //    when LLM-call headroom remains (deep research may have used the budget).
+    const att = attributionSuffix(gathers);
+    const finalReply = reply.trim() + (/\bhttps?:\/\//.test(reply) || !att ? "" : att);
     if (calls < MAX_TOTAL_LLM_CALLS && reply.length > MAX_VERIFIER_REPLY_LEN) {
       const verdict = await runVerifier(env, userText, reply);
       calls += 1;
       if (verdict) {
-        if (verdict.approved) return reply;
-        return verdict.safeReply?.trim() || reply; // fall back to original if no safe rewrite
+        if (verdict.approved) return finalReply;
+        const safe = (verdict.safeReply?.trim() || reply).trim();
+        return safe + (/\bhttps?:\/\//.test(safe) || !att ? "" : att); // fall back to original if no safe rewrite
       }
     }
-    return reply;
+    return finalReply;
   } catch (e) {
     console.error("[subagents] orchestration failed", (e as Error).message);
     return null;

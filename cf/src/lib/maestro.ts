@@ -64,7 +64,7 @@ export async function decomposeGoal(
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
     body: JSON.stringify({
-      model: "qwen/qwen3.6-27b",
+      model: "openai/gpt-oss-120b",
       temperature: 0.2,
       max_tokens: 1000,
       messages: [
@@ -350,6 +350,15 @@ export async function fireDueScheduledTasks(
   env: Env,
   owner: number,
 ): Promise<{ fired: number; pendingConsent: number }> {
+  // Global /pause gate — applies to ALL autonomous pathways, including this
+  // one (the "stops at the caller" comment was only true for fireDueAgentRules;
+  // fireDueScheduledTasks had NO gate of its own — M6 audit fix).
+  try {
+    const cfg = await getDmsConfig(env, owner);
+    if (cfg.autonomy_paused) return { fired: 0, pendingConsent: 0 };
+  } catch {
+    return { fired: 0, pendingConsent: 0 };
+  }
   const now = Date.now();
   try {
     const { results } = await env.DB.prepare(

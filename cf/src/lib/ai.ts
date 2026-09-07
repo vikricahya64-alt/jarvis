@@ -20,7 +20,14 @@ import { buildFinalReply } from "./response_formatter";
 import { detectEmotion as detectEmotionSig, inferEmotionFromContext, getMoodState, detectTopicSentiment } from "./emotion";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
 
-const GROQ_MODEL = "qwen/qwen3.6-27b";
+const GROQ_MODEL = "openai/gpt-oss-120b";
+
+/** Brief/max-depth control request (ECC token-budget-advisor pattern): the
+ *  owner explicitly asks for a SHORT answer — we honor it with a system hint
+ *  instead of dumping a wall of text (their budget, their call). Absent the
+ *  marker, behavior is 100% unchanged. */
+export const BRIEF_INTENT_RE =
+  /\b(?:ringkas|intisari|intisarikan|versi singkat|jawaban singkat|secara singkat|singkat saja|singkat aja|tl;?dr|short version|keep it short|brief)\b/i;
 // OpenRouter free-tier fallback. ":free" models rotate; pinned to a widely
 // available free model by default, overridable via OPENROUTER_MODEL env.
 const OPENROUTER_MODEL = "qwen/qwen3.6-27b";
@@ -109,16 +116,30 @@ export function resolveFollowUpAnchor(
  *  Fuzzy-tolerant: common misspellings/typo variants of each marker are included
  *  in the alternation (QueryStack fuzzy 2026; Kondrak n-gram LCS) — no LLM
  *  budget spent, zero dependency, deterministic. */
+//=====================================================================
+// regex-vs-LLM routing rule (ECC pattern, maintained — M7):
+//   1. DETERMINISTIC first: exact regex/heuristic wins when it matches
+//      cleanly (commands, markers, language, norms). Zero LLM cost, zero
+//      hallucination, fully testable (see test/logic.test.ts).
+//   2. LLM/Groq ONLY for the low-confidence boundary: when the heuristic is
+//      UNSURE (ambiguous phrasing, unknown entity), groqClassify picks the
+//      intent; parseStructured parses JSON-shaped facts.
+//   3. Contract: heuristics NEVER silently swallow text the LLM path also
+//      claims (see the "riset" fix — the marker had to exist in every layer).
+//   When touching intent classification, update BOTH comment + tests here.
+//=====================================================================
 export function extractTopic(text: string): string | null {
   const low = text.trim().toLowerCase();
   const m = low.match(
     /\b(?:cari|carii|cr|search|riset|reseach|research|studi|study|pelajari|mempelajari|meneliti|tentang|tenteng|tentan|tntg|ringkas|rangkum|summarize|artikel|topik|info|infp|informasi|analis\w*|laporan|laporn|report|review|riviu|perbandingan|bandingkan|perkembangan|ulasan|ulsn|kajian|menurut|menurutmu|bagaimana|gmn|bgmn|apa|apakah|siapa|kenapa|mengapa|kapan|berapa|dimana|di mana)\b(?:\s+(?:itu|apa|yang|kah|adalah|dengan|tentang|mengenai))?\s*[:\-]?\s*(.+)$/,
   );
   if (!m) return null;
-  let topic = m[1]
-    .replace(/^(bantu|tolong|buatkan|please|let me|lagi|dong|sudah|untuk|itu|apa|yang|kah|adalah|tentang|mengenai)\s+/i, "")
-    .replace(/[?.!,;:]+$/g, "")
-    .trim();
+  // Strip leading filler tokens repeatedly (a token cascade like
+  // "tolong buatkan tentang X" needs multiple passes, not a one-shot slice).
+  let topic = m[1].replace(/[?.!,;:]+$/g, "").trim();
+  const head = /^(?:bantu|tolong|buatkan|please|let me|lagi|dong|sudah|untuk|itu|apa|yang|kah|adalah|tentang|mengenai)\s+/i;
+  while (head.test(topic)) topic = topic.replace(head, "");
+  topic = topic.trim();
   if (!topic) return null;
   // Guard: phrases that look like research topics but are actually self-ref
   // ("apa kabar", "apa yang bisa kamu lakukan", "bisa kamu lakukan") — these
@@ -143,7 +164,7 @@ export function parseTranslate(text: string): { target: string | null; source: s
   // Detect an explicit target-language phrase at the head of the rest,
   // e.g. "ke bahasa Inggris", "Inggris", "to English", "English".
   const lang = rest.match(
-    /^(?:(?:ke\s+)?bahasa\s+|(?:\bin\b|to|into|ke)\s+)?(inggris|english|indonesia|indonesian|jepang|japanese|korea|korean|mandarin|china|chinese|arab|arabic|prancis|french|jerman|german|spanyol|spanish|italia|italian|portugis|portuguese|russia|russian|belanda|dutch|thai|hindi|india)\b\s*/i,
+    /^(?:(?:ke\s+)?(?:dalam\s+)?bahasa\s+|(?:\bin\b|to|into|ke|dalam)\s+)?(inggris|english|indonesia|indonesian|jepang|japanese|korea|korean|mandarin|china|chinese|arab|arabic|prancis|french|jerman|german|spanyol|spanish|italia|italian|portugis|portuguese|russia|russian|belanda|dutch|thai|hindi|india)\b\s*/i,
   );
   if (lang) {
     const target = normalizeLang(lang[1]);
@@ -215,6 +236,28 @@ export function repairTruncatedReply(reply: string): string {
   return `${out}\n\n📌 Jawaban saya terpotong oleh batas panjang — ketik \u201clanjut\u201d untuk bagian berikutnya.`;
 }
 
+/** Rough prompt/response token estimate (chars/4) for the free-tier cost
+ *  ledger. Cheap and never throws — precision is not the goal. */
+export function estimateTokens(text: string): number {
+  try { return Math.max(1, Math.ceil((text ?? "").length / 4)); } catch { return 1; }
+}
+
+/** Append an estimated usage event to a rolling cost ledger in CONFIG_KV
+ *  (`cost:<YYYY-MM>` → { provider: { used }}). ECC cost-aware-pipeline parity:
+ *  we must SEE our free-tier budget burn per provider before it surprises us.
+ *  100% best-effort + fire-and-forget — never adds latency/threats to replies. */
+export async function trackTokenUsage(env: Env, provider: string, inTokens: number, outTokens: number): Promise<void> {
+  try {
+    const d = new Date();
+    const key = `cost:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const prev = await env.CONFIG_KV.get(key).catch(() => null);
+    const cur = (prev ? JSON.parse(prev) : {}) as Record<string, { used?: number }>;
+    const used = (cur[provider]?.used ?? 0) + (inTokens || 0) + (outTokens || 0);
+    cur[provider] = { used };
+    await env.CONFIG_KV.put(key, JSON.stringify(cur), { expirationTtl: 370 * 86400 }).catch(() => {});
+  } catch { /* best-effort */ }
+}
+
 /** Try to produce a generative assistant reply via Groq, using recent
  *  conversation context as memory. Returns null on any failure so the
  *  caller falls back to the canned reply (fail-closed). */
@@ -252,10 +295,15 @@ export async function groqRespond(
       }),
     }, timeoutMs);
     if (!res.ok) return { ok: false, status: res.status };
-    const data = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[] };
+    const data = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
     const content = data.choices?.[0]?.message?.content?.trim() ?? "";
     if (!content) return { ok: false, status: res.status };
     reply = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(content) : content;
+    void trackTokenUsage(
+      env, "groq",
+      data.usage?.prompt_tokens ?? messages.reduce((a, m) => a + estimateTokens(m.content ?? ""), 0),
+      data.usage?.completion_tokens ?? estimateTokens(reply),
+    ).catch(() => {});
     return { ok: true, status: res.status };
   });
   return ok ? reply : null;
@@ -303,10 +351,15 @@ export async function openrouterRespond(
       }),
     }, timeoutMs);
     if (!res.ok) return { ok: false, status: res.status };
-    const data = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[] };
+    const data = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
     const content = data.choices?.[0]?.message?.content?.trim() ?? "";
     if (!content) return { ok: false, status: res.status };
     reply = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(content) : content;
+    void trackTokenUsage(
+      env, "openrouter",
+      data.usage?.prompt_tokens ?? messages.reduce((a, m) => a + estimateTokens(m.content ?? ""), 0),
+      data.usage?.completion_tokens ?? estimateTokens(reply),
+    ).catch(() => {});
     return { ok: true, status: res.status };
   });
   return ok ? reply : null;
@@ -360,10 +413,15 @@ export async function geminiRespond(
         timeoutMs,
       );
       if (!res.ok) return { ok: false, status: res.status };
-      const data = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }> };
+      const data = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>; usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number } };
       const content = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
       if (!content) return { ok: false, status: res.status };
       reply = data.candidates?.[0]?.finishReason === "MAX_TOKENS" ? repairTruncatedReply(content) : content;
+      void trackTokenUsage(
+        env, "gemini",
+        data.usageMetadata?.promptTokenCount ?? estimateTokens(prompt),
+        data.usageMetadata?.candidatesTokenCount ?? estimateTokens(reply),
+      ).catch(() => {});
       return { ok: true, status: res.status };
     });
     if (ok && reply) return reply;
@@ -407,9 +465,20 @@ export async function workersAiRespond(
       env.AI.run(model, { messages, max_tokens: 900, temperature: 0.6 })
         .then((res) => {
           clearTimeout(timer);
-          const r = (res as { response?: string }).response?.trim();
+          const r = (res as { response?: string; usage?: { input_tokens?: number; output_tokens?: number } }).response?.trim();
           if (r) {
-            reply = r;
+            // Workers AI reports no finish_reason — infer truncation from usage:
+            // output tokens pinned at the 900 budget ⇒ treat as "length" so the
+            // answer gets the same honest continuation hint as the other tiers
+            // (M7 cost-aware pipeline: silent 900-token cuts are a capability leak).
+            const outTok = (res as { usage?: { output_tokens?: number } }).usage?.output_tokens ?? estimateTokens(r);
+            reply = outTok >= 880 ? repairTruncatedReply(r) : r;
+            void trackTokenUsage(
+              env, "workers_ai",
+              (res as { usage?: { input_tokens?: number } }).usage?.input_tokens
+                ?? messages.reduce((a, m) => a + estimateTokens(m.content ?? ""), 0),
+              outTok,
+            ).catch(() => {});
             resolve({ ok: true, status: 200 });
           } else {
             resolve({ ok: false, status: 0 });
@@ -576,6 +645,61 @@ export interface SearchHit {
   title: string;
   url: string;
   snippet: string;
+}
+
+/** Structured search hits WITH URLs (used for citations). Fail-closed: always
+ *  returns an array; layers that can't produce a URL are skipped. Deduped by
+ *  host so the source list never feels like a link-farm. */
+export async function ddgSearchHits(env: Env, query: string): Promise<SearchHit[]> {
+  const hits: SearchHit[] = [];
+  try {
+    // 1) Official Instant Answer API — carries an AbstractURL.
+    const ia = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+    const res = await fetchWithTimeout(ia, { headers: { "Accept-Language": "id,id,en;q=0.8" } }, 10000);
+    if (res.ok) {
+      const d = (await res.json()) as { Heading?: string; AbstractURL?: string; AbstractText?: string };
+      if (d.AbstractURL && d.Heading) {
+        hits.push({ title: `${d.Heading}: ${(d.AbstractText ?? "").slice(0, 120)}`, url: d.AbstractURL, snippet: d.AbstractText ?? "" });
+      }
+    }
+  } catch { /* fail-closed */ }
+  // 2) SearXNG meta-search — structured title/url/snippet.
+  const searx = await searxngSearch(query).catch(() => [] as SearchHit[]);
+  for (const h of searx) hits.push(h);
+  // Dedupe by host (keep strongest first), cap at 6.
+  const seen = new Set<string>();
+  const out: SearchHit[] = [];
+  for (const h of hits) {
+    let host = "";
+    try { host = new URL(h.url).hostname.replace(/^www\./, ""); } catch { host = h.url.slice(0, 40); }
+    if (!host || seen.has(host)) continue;
+    seen.add(host);
+    out.push(h);
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
+/** Pure, deterministic source-citation list (markdown) for appending to replies.
+ *  ECC deep-research parity: answers carry source attribution — real, DEDUPED
+ *  by host, query-noise-free, never invented (fail-closed). */
+export function formatSourceList(hits: SearchHit[], max = 4): string {
+  const seen = new Set<string>();
+  const rows: string[] = [];
+  for (const h of hits) {
+    if (!h?.url || !h?.title) continue;
+    // Dedupe by host (keep the strongest first hit per site).
+    let host = "";
+    try { host = new URL(h.url).hostname.replace(/^www\./, ""); } catch { host = ""; }
+    if (host && seen.has(host)) continue;
+    if (host) seen.add(host);
+    const title = h.title.replace(/[\[\]()]/g, "").trim().slice(0, 70);
+    if (!title) continue;
+    const clean = h.url.split("?")[0]; // strip ALL utm/query noise
+    rows.push(`[${title}](${clean})`);
+    if (rows.length >= max) break;
+  }
+  return rows.length ? rows.map((r, i) => `${i + 1}. ${r}`).join("\n") : "";
 }
 
 /** SearXNG public meta-search (JSON), fail-closed. Aggregates multiple upstream
@@ -787,8 +911,9 @@ export async function searchAndSynthesize(
   // Run all independent pre-LLM I/O in parallel: web search + conversation
   // history + memory retrieval + answer-behavior context (each is a separate
   // D1 read / network call, so serializing them wastes latency on every query).
-  const [searchResult, context, mems, behaviorContext] = await Promise.all([
+  const [searchResult, hits, context, mems, behaviorContext] = await Promise.all([
     topicKnown ? Promise.resolve(null) : ddgSearch(env, topic), // Skip search if known
+    topicKnown ? Promise.resolve([] as SearchHit[]) : ddgSearchHits(env, topic),
     recentContext(env, owner, 4),
     searchMemory(env, topic, 4).catch(() => []),
     getAnswerBehaviorContext(env, topic).catch(() => null),
@@ -797,6 +922,21 @@ export async function searchAndSynthesize(
     context.push({
       role: "system",
       content: "Kenang-kenangan relevan: " + mems.map((m) => m.content).join(" | ").slice(0, 1200),
+    });
+  }
+  // ECC deep-research parity: the raw web result AND the citable sources are
+  // handed to the LLM as context, so single-pass answers are GROUNDED in real
+  // search output and cite only real URLs (never invented ones).
+  if (searchResult) {
+    context.push({
+      role: "system",
+      content: `Hasil penelusuran web untuk topik ini (gunakan sebagai dasar — JANGAN menambah tautan yang tidak ada di sumber):\n${searchResult.slice(0, 1600)}`,
+    });
+  }
+  if (hits.length > 0) {
+    context.push({
+      role: "system",
+      content: `Daftar sumber sah yang boleh disitasi:\n${formatSourceList(hits, 5)}`,
     });
   }
   // L13: inject accumulated insights + owner preferences into the reply
@@ -809,6 +949,15 @@ export async function searchAndSynthesize(
   // framework logic or prompt.
   if (behaviorContext) {
     context.push({ role: "system", content: behaviorContext });
+  }
+  // ECC token-budget-advisor parity: when the owner explicitly asks for a
+  // SHORT answer, inject a brevity constraint so the reply respects their
+  // budget. Absent the marker, nothing changes.
+  if (BRIEF_INTENT_RE.test(userText)) {
+    context.push({
+      role: "system",
+      content: "Pemilik minta VERSI SINGKAT: jawab maksimal ±60 kata, langsung ke inti, tanpa intro/markdown berlebihan.",
+    });
   }
   const g = await llmRespond(env, userText, { context, topic });
   if (g.reply) {
@@ -834,7 +983,10 @@ export async function searchAndSynthesize(
       : emotion.sentiment;
     
     // Format reply for natural conversation
-    const formatted = buildFinalReply(g.reply, "research", finalSentiment);
+    let formatted = buildFinalReply(g.reply, "research", finalSentiment);
+    if (hits.length > 0 && !/sumber:|📚/i.test(formatted)) {
+      formatted = `${formatted}\n\n📚 *Sumber:*\n${formatSourceList(hits, 4)}`;
+    }
     await appendMemory(env, owner, "user", userText, topic);
     await appendMemory(env, owner, "assistant", formatted, topic);
     if (formatted.length > 120) {
@@ -847,8 +999,9 @@ export async function searchAndSynthesize(
     await storeLearnedKnowledge(env, topic, searchResult, "web_search").catch(() => {});
     // Use topic sentiment for fallback formatting
     const topicSentiment = detectTopicSentiment(topic);
+    const sourceBlock = hits.length > 0 ? `\n\n📚 *Sumber:*\n${formatSourceList(hits, 4)}` : "";
     const formatted = buildFinalReply(
-      `Berikut hasil pencarian tentang *${topic}*:\n\n${searchResult}\n\n(J.A.R.V.I.S. edge — tanpa LLM generatif, tampilkan hasil mentah.)`,
+      `Berikut hasil pencarian tentang *${topic}*:\n\n${searchResult}\n\n(J.A.R.V.I.S. edge — tanpa LLM generatif, tampilkan hasil mentah.)${sourceBlock}`,
       "research",
       topicSentiment.sentiment,
     );

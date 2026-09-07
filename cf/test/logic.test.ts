@@ -10,11 +10,12 @@
 
 import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
-import { isFollowUpQuery } from "../src/lib/ai";
+import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor } from "../src/lib/ai";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
-import { isBareTodoVerb } from "../src/workers/telegram_webhook";
+import { isBareTodoVerb, parseReminder } from "../src/workers/telegram_webhook";
+import { parseTranslate } from "../src/lib/ai";
 
 async function testPredictiveUrgencyRanking() {
   // Deterministic ranking: approval (open/expiring proposals) must rank first,
@@ -119,15 +120,30 @@ function testRawCommandArgsPreserved() {
 }
 
 function testGroupPrefixStripping() {
-  // Telegram group bots often prepend "Username:" to messages. This prefix must
-  // be stripped so slash commands and search topics route correctly instead of
-  // falling to "Aksi ditangguhkan." (DEFER).
-  assert.strictEqual(normalizeInput("Vsco Bayu:/hapus"), "/hapus",
-    "group prefix stripped, slash command preserved");
-  assert.strictEqual(normalizeInput("Vsco Bayu:Reset todo"), "reset todo",
-    "group prefix stripped, plain text passes");
-  assert.strictEqual(normalizeInput("  John:/cari bisnis kopi"), "/cari bisnis kopi",
+  // Telegram group bots often prepend "Username: <msg>" to messages. This prefix
+  // must be stripped NOT ONLY for slash commands but ALSO for search topics so
+  // they route correctly instead of falling to "Aksi ditangguhkan." (DEFER).
+  // M6: only "Username<colon><SPACE>"-style prefixes are stripped — a bare
+  // "https://…MANY_URL…" or a time "15:30" must NEVER be mangled (the old
+  // `^[^:]+:\s` regex ate the scheme of any URL, killing /baca and /detail).
+  assert.strictEqual(normalizeInput("Vsco Bayu: /hapus"), "/hapus",
+    "group prefix (with space) stripped, slash command preserved");
+  assert.strictEqual(normalizeInput("Vsco Bayu: /cari bisnis kopi"), "/cari bisnis kopi",
+    "group prefix + command stripped");
+  assert.strictEqual(normalizeInput("Vsco Bayu: Reset todo"), "reset todo",
+    "group prefix stripped (plain text)");
+  assert.strictEqual(normalizeInput("  John: /cari bisnis kopi"), "/cari bisnis kopi",
     "leading whitespace + group prefix stripped");
+  assert.strictEqual(normalizeInput("John:/hapus"), "john:/hapus",
+    "colon WITHOUT space is preserved (URL/time safety; not stripped)");
+  // Critical M6 regressions: URLs and clock times must survive normalization
+  // byte-for-byte so /baca <url> and translate never break.
+  assert.strictEqual(normalizeInput("https://example.com/a b"), "https://example.com/a b",
+    "URL scheme must NOT be stripped");
+  assert.strictEqual(normalizeInput("/baca https://example.com/x"), "/baca https://example.com/x",
+    "/baca + URL intact (was broken by colon-strip bug)");
+  assert.strictEqual(normalizeInput("jam 15:30"), "jam 15:30",
+    "clock time must NOT be stripped");
   assert.strictEqual(normalizeInput("/cari topik"), "/cari topik",
     "no prefix → normal processing");
   assert.strictEqual(normalizeInput("cari bisnis"), "cari bisnis",
@@ -195,6 +211,12 @@ function testFuzzyExtractTopic() {
   assert.ok(extractTopic("info cuaca jakarta"), "standard 'info' marker");
   assert.ok(extractTopic("review hp terbaru"), "standard 'review' marker");
   assert.ok(extractTopic("bagaimana cara investasi"), "standard 'bagaimana' marker");
+  // M5 regression (live bug): "Riset …" fell through extractTopic → the brain
+  // kept looping "Apakah Anda ingin…". These MUST route to a REAL search.
+  assert.ok(extractTopic("riset bisnis jangka panjang tanpa skill minim modal"), "'riset' marker must route to search");
+  assert.ok(extractTopic("research kompetitor AI 2026"), "english 'research' marker");
+  assert.ok(extractTopic("studi pasar kopi di jawa"), "'studi' marker");
+  assert.strictEqual(extractTopic("saya belajar di kampus"), null, "'belajar' bukan marker riset");
   // Fuzzy misspelling variants.
   assert.ok(extractTopic("carii bisnis kopi"), "extra 'i' in 'carii'");
   assert.ok(extractTopic("tenteng ekonomi digital"), "'tenteng' variant of 'tentang'");
@@ -420,6 +442,27 @@ async function testFuzzyTodoDelete() {
   assert.strictEqual(await deleteTodoByText(env, 1, "hapus"), 0);
 }
 
+function testFormatSourceList() {
+  // ECC deep-research parity: single-pass research answers must end with a
+  // real, deduped, non-invented source list. Pure + fail-closed (empty).
+  const hits = [
+    { title: "Bisnis Tanpa Modal [2026] - Kompas", url: "https://kompas.com/artikel?a=1", snippet: "s" },
+    { title: "Side Hustle Tanpa Skill - Detik", url: "https://detik.com/bisnis", snippet: "s2" },
+    { title: "Kompas (dupe host)", url: "https://kompas.com/lain", snippet: "s3" },
+    { title: "", url: "https://empty.com", snippet: "s4" },
+    { title: "Edukasi", url: "https://edukasi.id/panduan?x=y&z=w", snippet: "s5" },
+  ];
+  const out = formatSourceList(hits, 4);
+  assert.ok(out.includes("kompas.com"), "first source host present");
+  assert.ok(out.includes("detik.com"), "deduped second source present");
+  assert.ok(out.includes("edukasi.id"), "third source present");
+  assert.ok(!out.includes("dupe host"), "duplicate host must be skipped");
+  assert.ok(!out.includes("&z=w"), "url query noise trimmed");
+  assert.ok(!/<[^>]+>/.test(out), "no stray html in markdown links");
+  assert.strictEqual(formatSourceList([]), "", "empty hits -> empty string");
+  assert.strictEqual(formatSourceList([{ title: "", url: "", snippet: "" }]), "", "blank hit -> empty");
+}
+
 function testBareTodoVerb() {
   assert.strictEqual(isBareTodoVerb("/hapus"), true);
   assert.strictEqual(isBareTodoVerb("hapus"), true);
@@ -430,6 +473,48 @@ function testBareTodoVerb() {
   assert.strictEqual(isBareTodoVerb("hapus todo telur"), false);
   assert.strictEqual(isBareTodoVerb("/hapus beli telur"), false);
   assert.strictEqual(isBareTodoVerb("hapus semua file"), false);
+}
+
+function testM6Regressions() {
+  // normalize: URL scheme + clock time must survive (was eaten by colon-strip).
+  assert.strictEqual(normalizeInput("/baca https://example.com/x"), "/baca https://example.com/x",
+    "M6: /baca + URL intact");
+  assert.strictEqual(normalizeInput("https://example.com/a b"), "https://example.com/a b",
+    "M6: bare URL scheme intact");
+  assert.strictEqual(normalizeInput("jam 15:30"), "jam 15:30",
+    "M6: clock time intact");
+  // parseTranslate: "dalam" as a language-intro phrase (M6 gap fix).
+  const tr = parseTranslate("terjemahkan dalam bahasa Inggris apa kabar");
+  assert.ok(tr && tr.target === "English" && tr.source === "apa kabar",
+    "M6: 'terjemahkan dalam bahasa Inggris …' parses language + source");
+  // parseReminder: recurring weekly/hourly WITHOUT a clock used to return null
+  // ("Pengingat tidak dikenali") — now scheduled from the current moment.
+  const weekly = parseReminder("ingatkan rapat tim setiap minggu");
+  assert.ok(weekly && weekly.repeat === "weekly", "M6: 'setiap minggu' tanpa jam");
+  const hourly = parseReminder("ingatkan istirahat mata setiap jam");
+  assert.ok(hourly && hourly.repeat === "hourly", "M6: 'setiap jam' tanpa jam");
+  // extractTopic: leading filler cascade stripped repeatedly (not one-shot).
+  const { extractTopic } = require("../src/lib/ai");
+  assert.strictEqual(extractTopic("cari tolong buatkan tentang kopi arabika"), "kopi arabika",
+    "M6: filler cascade stripped to a clean topic");
+}
+
+function testResolveFollowUpAnchor() {
+  const now = Date.now();
+  const rec = (content: string, ts?: number) => ({ role: "assistant", content, ts: ts ?? now });
+  const anchor = resolveFollowUpAnchor([rec("Ringkasan riset: kopi arabika Sumatra paling unggul dalam market niche premium tahun 2026 dengan margin 38%.")]);
+  assert.ok(anchor && anchor.topic.length > 0 && anchor.prior.length > 0,
+    "iterative-retrieval: fresh substantive assistant answer becomes anchor");
+  assert.ok(anchor!.topic.length <= 120 && anchor!.prior.length <= 3000,
+    "iterative-retrieval: anchor bounded to topic/prior caps");
+  assert.strictEqual(resolveFollowUpAnchor([]), null, "empty context → no anchor");
+  assert.strictEqual(resolveFollowUpAnchor([{ role: "user", content: "cari gaji", ts: now }]), null,
+    "no assistant message → no anchor");
+  assert.strictEqual(resolveFollowUpAnchor([rec("halo.", now)]), null, "short answer → no anchor");
+  assert.strictEqual(resolveFollowUpAnchor([rec("Apakah maksud anda lebih dalam soal budidaya kopi yang mana?", now)]), null,
+    "clarify question → excluded from anchor");
+  assert.strictEqual(resolveFollowUpAnchor([rec("Topik riset: kopi arabika premium.", now - 60 * 60 * 1000)]), null,
+    "stale (>15m) answer → no anchor (freshness gate)");
 }
 
 async function main() {
@@ -450,6 +535,9 @@ async function main() {
   testNormAndKey();
   await testFuzzyTodoDelete();
   testBareTodoVerb();
+  testFormatSourceList();
+  testM6Regressions();
+  testResolveFollowUpAnchor();
   console.log("LOGIC TESTS PASSED");
 }
 

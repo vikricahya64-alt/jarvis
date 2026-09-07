@@ -206,8 +206,12 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
     return { type: "self_referential", urgency: "low", formality: "neutral", confidence: 0.95, entities: {} };
   }
 
-  // Emergency (standalone markers only, not inside search phrases)
-  if (/(?:^|\s)(?:stop|kill|override|darurat|emergency|urgent)(?:\s|$|[.,!])|\b(?:sekarang|now)\s*!/i.test(low)) {
+  // Emergency — STANDALONE markers only, i.e. the marker starts the message
+  // (optional leading prompt word) or is emphatic (ends with "!"); a marker
+  // buried mid-sentence ("cari urgent care…", "emergency plan") is a DESCRIBED
+  // topic, not an order — old regex fired emergency for any whitespace-separated
+  // occurrence (M6 false-positive fix, e.g. "urgent care").
+  if (/^(?:(?:tolong|mohon|hey|hei|woi|coba|bisa)\s+)?(?:stop|kill|override|darurat|emergency|urgent)(?:\s|$|[.,!])|\b(?:sekarang|now)\s+!/i.test(low)) {
     return { type: "emergency", urgency: "high", formality: "formal", confidence: 0.9, entities: {} };
   }
 

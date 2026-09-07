@@ -267,9 +267,9 @@ export async function saveInsight(
   try {
     const res = await env.DB.prepare(
       `INSERT INTO insights (rule_text, category, evidence_ids, evidence_count, confidence, created_at, last_validated_at, disabled)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+       VALUES (?, ?, ?, ?, ?, ?, 0, 0)`,
     ).bind(rule, category, JSON.stringify(evidenceIds.slice(0, 20)),
-      evidenceIds.length, confidence, now, now).run();
+      evidenceIds.length, confidence, now).run();
     const id = res.meta.last_row_id;
     return typeof id === "number" ? id : null;
   } catch {
@@ -422,6 +422,104 @@ export async function decayPreferences(env: Env, now = Date.now()): Promise<numb
   } catch {
     return 0;
   }
+}
+
+// ---------------------------------------------------------------------
+// ECC continuous-learning-v2 parity ("instinct lifecycle"): a learned rule is
+// an INSTINCT that (a) gets VALIDATED when its answer-behavior category shows
+// repeated clean reflections (no corrections), then (b) is PROMOTED into an
+// active owner preference so it keeps steering replies. Fail-closed: any DB
+// hiccup = skip this cycle, never crash the cron.
+// ---------------------------------------------------------------------
+
+/** Count recent corrections (reflected=1) and approvals (reflected=0) per
+ *  answer-behavior category from reflection_log (bounded window, cheap query). */
+async function categoryReflectionSignals(
+  env: Env,
+  now: number,
+): Promise<Map<string, { corrections: number; approvals: number }>> {
+  const out = new Map<string, { corrections: number; approvals: number }>();
+  try {
+    const windowStart = now - 14 * 86400_000;
+    const { results } = await env.DB.prepare(
+      `SELECT category, reflected, COUNT(*) AS n FROM reflection_log
+       WHERE created_at >= ?
+       GROUP BY category, reflected
+       LIMIT 300`,
+    ).bind(windowStart).all<{ category: string; reflected: number; n: number }>();
+    for (const r of results ?? []) {
+      const cur = out.get(r.category ?? "behavior") ?? { corrections: 0, approvals: 0 };
+      if (r.reflected === 1) cur.corrections += r.n;
+      if (r.reflected === 0) cur.approvals += r.n;
+      out.set(r.category ?? "behavior", cur);
+    }
+  } catch { /* fail-closed: empty map */ }
+  return out;
+}
+
+/** Mark unvalidated, warrant-backed insights as VALIDATED when their category
+ *  shows stability (>=2 approvals, zero corrections) in the last 14 days —
+ *  the ed-to-correct negative signal would otherwise decay them. Returns how
+ *  many insights got validated. */
+export async function validateInsightsViaStability(env: Env, now = Date.now()): Promise<number> {
+  try {
+    const signals = await categoryReflectionSignals(env, now);
+    const { results } = await env.DB.prepare(
+      `SELECT id, category FROM insights WHERE disabled = 0 AND last_validated_at = 0 LIMIT 200`,
+    ).bind().all<{ id: number; category: string }>();
+    let validated = 0;
+    for (const r of results ?? []) {
+      const sig = signals.get(r?.category ?? "behavior");
+      if (!sig) continue;
+      if (sig.approvals >= 2 && sig.corrections === 0 && validated < 50) {
+        await env.DB.prepare(`UPDATE insights SET last_validated_at=? WHERE id=?`).bind(now, r.id).run();
+        validated++;
+      }
+    }
+    return validated;
+  } catch {
+    return 0;
+  }
+}
+
+/** Promote validated, high-confidence insights into ACTIVE owner preferences
+ *  (key `insight:<id>`, value = rule text). Prevents junk patterns from ever
+ *  being promoted. Bounded per run (10) so preference growth stays on a leash.
+ *  ON CONFLICT keeps the first promotion (no dup key spam). */
+export async function promoteInsightsToPreferences(env: Env, now = Date.now()): Promise<number> {
+  const BUG_PATTERNS = /uang bisa kamu|uang dapat digunakan|apa uang bisa/i;
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, rule_text, category, evidence_count, confidence
+       FROM insights
+       WHERE disabled = 0 AND last_validated_at > 0 AND confidence >= 0.75
+       LIMIT 10`,
+    ).bind().all<{ id: number; rule_text: string; category: string; evidence_count: number; confidence: number }>();
+    let promoted = 0;
+    for (const r of results ?? []) {
+      if (!r?.rule_text || BUG_PATTERNS.test(r.rule_text)) continue;
+      const key = `insight:${r.id}`;
+      await env.DB.prepare(
+        `INSERT INTO owner_preferences (key, value, source, confidence, evidence_count, last_validated_at, disabled, created_at, updated_at)
+         VALUES (?, ?, 'inferred', ?, ?, ?, 0, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+      ).bind(
+        key, r.rule_text.slice(0, 300), r.confidence ?? 0.7, r.evidence_count ?? 1, now, now, now,
+      ).run();
+      promoted++;
+    }
+    return promoted;
+  } catch {
+    return 0;
+  }
+}
+
+/** Full instinct lifecycle for the nightly cron: validate then promote.
+ *  Returns a compact summary for observability. */
+export async function runInsightLifecycle(env: Env, now = Date.now()): Promise<{ validated: number; promoted: number }> {
+  const validated = await validateInsightsViaStability(env, now);
+  const promoted = await promoteInsightsToPreferences(env, now);
+  return { validated, promoted };
 }
 
 export async function getActivePreferences(env: Env): Promise<OwnerPreference[]> {
