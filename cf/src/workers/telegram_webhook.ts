@@ -1403,9 +1403,11 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
         : t.status === "failed" ? "❌"
         : "⏳";
       const when = new Date(t.created_at + 7 * 3600 * 1000).toISOString().slice(11, 16);
-      return `${st} #${t.id} [${t.status}] ${t.task.slice(0, 70)} (${when} WIB)`;
+      const art = t.artifact_url ? `\n    📄 ${t.artifact_url}` : "";
+      return `${st} #${t.id} [${t.status}] ${t.task.slice(0, 70)} (${when} WIB)${art}`;
     });
-    await fire(sendMessage(env, from, `📦 *Tugas serverless (terbaru)*\n\n${lines.slice(0, 10).join("\n")}`));
+    await fire(sendMessage(env, from,
+      `📦 *Tugas serverless (terbaru)*\n\n${lines.slice(0, 10).join("\n")}\n\n💡 Baca hasilnya langsung (link di atas) atau tanya balik: \`/tugas tanya <id> <soal>\`.`));
     return;
   }
 

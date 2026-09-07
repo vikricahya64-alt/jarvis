@@ -27,6 +27,7 @@
 
 import { Env, searchMemory, rememberMemory, statAgentTasksRecent } from "./db";
 import { llmRespond } from "./ai";
+import { isAutonomyPaused } from "./command_hierarchy";
 
 // Evidence-warrant gate: an insight must rest on at least this many supporting
 // episodic memories before the agent may act on it (phantom-guardrail guard).
@@ -333,6 +334,10 @@ export async function generateMorningBriefing(env: Env, owner: number): Promise<
   const now = Date.now();
   const last24h = now - 24 * 3600_000;
   const lines: string[] = [];
+  // Autonomy guard (M1): when /pause is on, the morning rundown must NOT
+  // imply new autonomous execution is happening. Same single gate the
+  // fireDueAgentRules path uses — closing the briefing↔pause open loop.
+  const paused = await isAutonomyPaused(env, owner).catch(() => false);
   try {
     const recentIterations = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM dream_cycles WHERE ran_at >= ? AND insights_extracted > 0`,
@@ -356,8 +361,10 @@ export async function generateMorningBriefing(env: Env, owner: number): Promise<
 
     // Eksekutor cloud (B-series): activity from the last 24h belongs in the
     // morning rundown — what got built, what slipped, and where to read it.
-    const exec = await statAgentTasksRecent(env, last24h);
-    if (exec.done > 0 || exec.failed > 0) {
+    // While autonomy is paused: skip the (stale) executor stats; the drop
+    // line below replaces them.
+    const exec = paused ? null : await statAgentTasksRecent(env, last24h);
+    if (exec && (exec.done > 0 || exec.failed > 0)) {
       const bits = [];
       if (exec.done > 0) bits.push(`${exec.done} selesai`);
       if (exec.failed > 0) bits.push(`${exec.failed} gagal`);
@@ -365,7 +372,8 @@ export async function generateMorningBriefing(env: Env, owner: number): Promise<
       lines.push(`📦 Eksekutor cloud: ${bits.join(", ")} dalam 24 jam terakhir.${art}`);
     }
   } catch { /* availability: sing off */ }
-  if (lines.length === 0) return null; // skip: nothing notable
+  if (paused) lines.unshift("⏸️ Otonomi sedang dijeda (/pause) — tidak ada gerakan eksekutor otomatis sampai /resume.");
+  if (!paused && lines.length === 0) return null; // skip: nothing notable
   lines.unshift("🌅 *Pagi, Pemilik.* Ringkasan singkat J.A.R.V.I.S.:");
   return lines.join("\n");
 }
