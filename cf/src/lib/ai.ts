@@ -56,22 +56,21 @@ function buildFallbackMessages(
 // ---- Level 15 follow-up resolution --------------------------------------
 // A follow-up query continues a PRIOR research answer in the same session even
 // when it carries no fresh topic/search marker (e.g. "lebih dalam", "yang tadi",
-// "terus, kan?") — we anchor it to the most recent assistant analysis instead of
-// wrongly replying "Ok." or "Aksi ditangguhkan.".
+// "terus, kan?", "itu maksudnya apa") — we anchor it to the most recent
+// assistant analysis instead of wrongly replying "Ok." or "Aksi ditangguhkan.".
+// SINGLE canonical classifier: every continuation token lives HERE. The old
+// separate short-branch in isFollowUpQuery was dead redundancy (its tokens were
+// already matched here) and silently dropped "itu maksudnya apa" (M3).
 const FOLLOWUP_RE =
-  /\b(lebih dalam|lebih dalam lagi|lebih detail|lebih lanjut|lanjutkan|lanjut|lengkapin|lengkapi|perdalam|perinci|detail|detailin|terus(?:,|kan)?|yang tadi|yg tadi|tadi itu|tambahin|tambahkan|expand|go deeper|jelasin lebih|jelaskan lebih|sampe? tuntas|ceritain lebih|info lebih|maksud saya|maksudku|bukan\s+[^?!.,]{1,40}\s+tapi)\b/i;
+  /\b(lebih dalam|lebih dalam lagi|lebih detail|lebih lanjut|lanjutkan|lanjut|lengkapin|lengkapi|perdalam|perinci|detail|detailin|terus(?:,|kan)?|yang tadi|yg tadi|tadi itu|tambahin|tambahkan|expand|go deeper|jelasin lebih|jelaskan lebih|sampe? tuntas|ceritain lebih|info lebih|maksud\w*|maksudnya apa|apa maksudnya|bukan\s+[^?!.,]{1,40}\s+tapi)\b/i;
 
 /** True if the (already normalized) message is a follow-up request that extends
- *  a prior answer rather than starting a brand-new topic. Read-only. */
+ *  a prior answer rather than starting a brand-new topic. Read-only. Single
+ *  canonical regex — the short-form list is intentionally GONE (it duplicated
+ *  tokens already in FOLLOWUP_RE above and hid a length-cap dead entry). */
 export function isFollowUpQuery(text: string): boolean {
   if (!text) return false;
-  const low = text.trim();
-  // Very short follow-ups ("lanjut", "terus", "lebih dalam") are almost always
-  // conversational continuations, not new topics.
-  if (low.length <= 12 && /^(lanjut|terus|lebih dalam|lebih detail|lebih lanjut|expand|go deeper|yang tadi|yg tadi|itu maksudnya apa)\b/i.test(low)) {
-    return true;
-  }
-  return FOLLOWUP_RE.test(low);
+  return FOLLOWUP_RE.test(text.trim());
 }
 
 /** Stopwords/filler that must never count when comparing topic overlap. */
@@ -170,7 +169,6 @@ export async function readResearchAnchor(
  *  no provider answers, so the caller falls back to a fresh search reply. */
 export async function continueAnalysis(
   env: Env,
-  _owner: number,
   prior: string,
   userText: string,
 ): Promise<string | null> {
@@ -1032,6 +1030,7 @@ export async function searchAndSynthesize(
   owner: number,
   userText: string,
   topic: string,
+  opts: { followupPrior?: string } = {},
 ): Promise<{ reply: string; source: string }> {
   // SELF-REFERENTIAL GUARD — if a self-referential question somehow reaches the
   // search path, answer directly from identity instead of searching/hallucinating.
@@ -1050,8 +1049,12 @@ export async function searchAndSynthesize(
   // Level 15: FOLLOW-UP queries (that carry the research-class markers but
   // extend a prior answer) are anchored to the most recent assistant analysis
   // so the researcher DEEPENS it instead of searching a fresh topic.
-  let followupAnchor = "";
-  if (isFollowUpQuery(userText)) {
+  // SINGLE-SOURCE anchor: a caller that already resolved the anchor (webhook
+  // follow-up branch) passes it via opts.followupPrior. Otherwise resolve here
+  // exactly once (context heuristic, then KV anchor) — the two algorithms must
+  // never run independently on the same query (was H2 double-anchor).
+  let followupAnchor = opts.followupPrior ?? "";
+  if (!followupAnchor && isFollowUpQuery(userText)) {
     const ctx = await recentContext(env, owner, 8).catch(() => []);
     const anchor = resolveFollowUpAnchor(ctx);
     if (anchor) followupAnchor = anchor.prior;

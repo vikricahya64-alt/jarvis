@@ -305,15 +305,23 @@ export async function amendConstitution(
   contentMd: string,
   opts: { rationale?: string; editedBy?: string } = {},
 ): Promise<number> {
-  const cur = await getConstitution(env, owner);
-  const version = (cur?.version ?? 0) + 1;
+  // Version computed ATOMICALLY inside D1 (MAX(version)+1 evaluated during the
+  // insert, serialized by SQLite's write lock). The old app-side
+  // read→increment→write RMW could hand two concurrent amendments the SAME
+  // version number (config_json overwrite + duplicate version rows).
+  const now = Date.now();
   await env.DB.prepare(
     `INSERT INTO personal_constitution
      (owner_id, version, content_md, amended_at, amendment_rationale, edited_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(owner, version, contentMd, Date.now(),
-    opts.rationale ?? "", opts.editedBy ?? "system", Date.now()).run();
+     SELECT ?, COALESCE(MAX(version), 0) + 1, ?, ?, ?, ?, ?
+     FROM personal_constitution WHERE owner_id = ?`,
+  ).bind(owner, contentMd, now, opts.rationale ?? "", opts.editedBy ?? "system", now, owner).run();
+  const row = await env.DB.prepare(
+    `SELECT version FROM personal_constitution WHERE owner_id = ? ORDER BY version DESC LIMIT 1`,
+  ).bind(owner).first<{ version: number }>();
+  const version = row?.version ?? 1;
   // Keep the active version in sync with what the fail-closed guard reads.
+  // Re-read config AFTER the insert so we never persist a pre-insert snapshot.
   const cfg = await getDmsConfig(env, owner);
   cfg.constitution = { content_md: contentMd, version };
   await writeDmsConfig(env, owner, cfg);
@@ -426,6 +434,14 @@ export async function getEmotionalPatterns(
   try {
     const tail = topic.trim().replace(/[^\w\s-]/g, " ").slice(0, 60);
     if (!tail) return [];
+    // Build an explicit AND query with each token QUOTED. A bare tail string is
+    // unsafe as an FTS5 query — a user topic containing operator tokens
+    // ("OR", "AND", "NOT") changes semantics or errors out, and an unquoted
+    // multi-token string's implicit operator is tokenizer-dependent. Quoting +
+    // explicit AND makes the match deterministic.
+    const tokens = tail.split(/\s+/).filter(Boolean);
+    const q = tokens.map((t) => `"${t}"`).join(" AND ");
+    if (!q) return [];
     const { results } = await env.DB.prepare(
       `SELECT m.content
        FROM memories_fts
@@ -433,7 +449,7 @@ export async function getEmotionalPatterns(
        WHERE memories_fts MATCH ? AND m.source = 'emotional_learning'
        ORDER BY bm25(memories_fts, 10.0, 5.0, 2.0) ASC
        LIMIT 3`,
-    ).bind(tail).all<{ content: string }>();
+    ).bind(q).all<{ content: string }>();
     
     return (results ?? []).map(r => {
       const match = r.content.match(/Detected: (.+?) \| Tone: (.+?) \| Success: (true|false)/);
@@ -747,12 +763,16 @@ export async function decayMemories(
   let removed = 0;
 
   try {
-    // Decay: kurangi importance untuk memori yang sudah tua dan tidak diakses
+    // Decay: kurangi importance untuk memori yang sudah tua. Memori yang BARU
+    // diakses (last_retrieved dalam 14 hari) tidak decay; yang tak pernah atau
+    // lama tak diakses (>14 hari) tetap decay — sebelumnya syarat
+    // `last_retrieved = 0/NULL` saja membuat memori yang pernah diakses sekali
+    // tak pernah melupakan pentingnya (M6).
     const stale = await env.DB.prepare(
       `SELECT rowid, importance, last_retrieved, created_at FROM memories
-       WHERE importance > 0.5 AND (last_retrieved = 0 OR last_retrieved IS NULL)
-       AND created_at < ?`,
-    ).bind(now - 7 * 86400_000).all<{
+       WHERE importance > 0.5 AND created_at < ?
+       AND (last_retrieved = 0 OR last_retrieved IS NULL OR last_retrieved < ?)`,
+    ).bind(now - 7 * 86400_000, now - 14 * 86400_000).all<{
       rowid: number; importance: number; last_retrieved: number; created_at: number;
     }>();
 
@@ -848,12 +868,10 @@ export async function consolidateMemories(
     // 2) Sweep expired memories (TTL-based)
     result.swept = await sweepExpiredMemories(env, now);
 
-    // 3) Cleanup: remove low-value, never-accessed, old memories
-    const cleanup = await env.DB.prepare(
-      `DELETE FROM memories WHERE importance <= 0.5 AND access_count = 0
-       AND created_at < ? AND (expires_at = 0 OR expires_at IS NULL)`,
-    ).bind(now - 60 * 86400_000).run();
-    result.cleaned = cleanup.meta.changes ?? 0;
+    // 3) Cleanup of low-value never-accessed memories already happens INSIDE
+    //    decayMemories (it deletes the same rows and reports them as `removed`).
+    //    A second DELETE here was a redundant pass on every cron tick.
+    result.cleaned = decay.removed;
 
     // 4) Compact old observations: merge similar observations into summary
     const oldObs = await env.DB.prepare(

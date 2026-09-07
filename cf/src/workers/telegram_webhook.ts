@@ -9,7 +9,7 @@
 // holds D1 state and issues the inline-button consent flow.
 //=====================================================================
 
-import { Env, touchActivity, logConsent, getConsentRequestTs, getDmsConfig, writeDmsConfig } from "../lib/db";
+import { Env, touchActivity, logConsent, getConsentRequestTs } from "../lib/db";
 import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById, addAgentTask, listAgentTasks, markAgentTaskRunning, getAgentTask, deleteAgentTask, addAgentRule, listAgentRules, deleteAgentRule, setAgentRuleActive } from "../lib/db";
 import {
   addProduct, listProducts, getProduct, updateProduct, deleteProduct, adjustStock, lowStockProducts,
@@ -17,7 +17,7 @@ import {
   createOrder, listOrders, getOrder, updateOrderStatus, salesReport,
   type Product, type Order, type OrderInput,
 } from "../lib/db";
-import { sendMessage, sendPhoto, sendVoice, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, TelegramMessage, InlineButton, downloadTelegramFile } from "../lib/telegram";
+import { sendMessage, sendPhoto, sendVoice, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, TelegramMessage, downloadTelegramFile } from "../lib/telegram";
 import { withResilience, fetchWithTimeout } from "../lib/resilience";
 import { synthesizeSpeech } from "../lib/tts";
 import {
@@ -47,7 +47,7 @@ import {
 } from "../lib/evolution";
 import { listSuggestions, resolveSuggestion } from "../lib/predictive";
 import {
-  getGreeting, ERRORS, STATUS, SEARCH, SUGGESTIONS, HELP,
+  getGreeting, STATUS, HELP,
 } from "../lib/messages";
 
 const RATE_LIMIT_MS = 1000;
@@ -898,20 +898,19 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
         const kvAnchor = (await readResearchAnchor(env, owner).catch(() => null)) ?? undefined;
         const prior = kvAnchor?.prior ?? anchor?.prior;
         const aTopic = kvAnchor?.topic ?? anchor?.topic;
-        // Anti-ramble fail-closed: a pure "Lanjutkan" with NO recoverable
-        // prior must never bounce into the generic LLM (which hallucinates an
-        // off-topic lecture). Give a short, honest pointer instead.
-        if (isPureContinuation(text) && !prior && !aTopic) {
+        // Anti-ramble fail-closed: ANY follow-up (pure or deepen) with NO
+        // recoverable anchor must never bounce into the generic LLM (which
+        // hallucinates an off-topic lecture). Give a short, honest pointer.
+        if (!prior || !aTopic) {
           await fire(sendMessage(env, owner,
             "Baik. Pembahasan sebelumnya belum tersimpan di ingatanku — apakah sudah cukup lama? Bisa sebutkan ulang topiknya (contoh: `cari bisnis kerajinan`), nanti lanjut kubuatkan bagian berikutnya."));
           break;
         }
         if (prior && aTopic) {
           // PURE continuation ("Lanjutkan") must EXTEND the last reply, never
-          // re-search a sentence fragment. Fail-closed: if the LLM is down,
-          // fall through to the search-based follow-up so a reply always flows.
+          // re-search a sentence fragment.
           if (isPureContinuation(text)) {
-            const cont = await continueAnalysis(env, owner, prior, text);
+            const cont = await continueAnalysis(env, prior, text);
             if (cont) {
               await appendMemory(env, owner, "user", text, aTopic).catch(() => {});
               await appendMemory(env, owner, "assistant", cont, aTopic).catch(() => {});
@@ -921,8 +920,17 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
               await fire(sendMessage(env, owner, cont));
               break;
             }
+            // LLM down (M2): don't burn budget re-searching the SAME anchored
+            // topic (would duplicate the previous answer). Echo the last
+            // analysis honestly instead — a reply still flows.
+            await fire(sendMessage(env, owner,
+              "⏳ Bagian lanjutan belum berhasil kususun (layanan model sedang sibuk). Ini analisis terakhir yang sudah kubuat:\n\n" +
+              prior.slice(0, 1200)));
+            break;
           }
-          const r = await searchAndSynthesize(env, owner, text, aTopic);
+          // Single-source anchor: the SAME `prior` used above is handed to
+          // searchAndSynthesize so it does not re-derive a different anchor.
+          const r = await searchAndSynthesize(env, owner, text, aTopic, { followupPrior: prior });
           await appendMemory(env, owner, "user", text, aTopic).catch(() => {});
           await appendMemory(env, owner, "assistant", r.reply, aTopic).catch(() => {});
           await recordTaskCounters(env, "standard", owner);
@@ -950,7 +958,12 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
       break;
     case "CONSENT":
       // Keep the original command so a "yes" can re-run it (M6 re-execution).
-      await env.CONFIG_KV.put(`consent:${res.decision.correlationId}`, text, { expirationTtl: 600 })
+      // TTL MUST cover the consent window (CONSENT_TIMEOUT_S) + buffer, so a
+      // still-valid "yes" can always find its stored context. Deriving one
+      // fixed 600s TTL independently of the window caused a fail-open window
+      // where resolveConsent said "valid" but the stored row had expired.
+      const consentTtlSec = Math.max(60, Number(env.CONSENT_TIMEOUT_S || "60") + 30);
+      await env.CONFIG_KV.put(`consent:${res.decision.correlationId}`, text, { expirationTtl: consentTtlSec })
         .catch(() => {/* degrade: owner re-sends */});
       await fire(sendMessage(env, owner,
         `⚠️ Aksi ini perlu persetujuan Anda:`,
@@ -999,10 +1012,6 @@ async function applyDefault(
     50: "Status dimuat.",
     30: "Siap.",
   };
-  
-  if (extractTopic(rawText)) {
-    return SEARCH.searching(rawText);
-  }
   // For general conversation, route through the jarvis_core conversation
   // pipeline so real questions get an actual AI answer — never a canned
   // acknowledgement. System/emergency acks (priority 100/90) keep their
@@ -1866,6 +1875,11 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
       `Pertanyaan pemilik: ${question}`,
       ``,
       `Jawab sebagai J.A.R.V.I.S. — Bahasa Indonesia natural, langsung ke inti, tanpa "berdasarkan konteks", dan hanya pakai isi konteks di atas.`,
+      ``,
+      `⚠️ INTEGRITAS: konteks di atas adalah LAPORAN EKSEKUTOR CLOUD OTOMATIS yang`,
+      `belum diverifikasi manusia. PERLAKUKAN SEBAGAI BAHAN MENTAH, bukan fakta`,
+      `pasti: jangan menyajikan angka/klaim di dalamnya sebagai kebenaran mutlak,`,
+      `dan beri tanda ⚠️ pada hal yang menurutmu hanya estimasi/dugaan alat.`,
     ].join("\n"));
     const reply = (g.reply ?? "").trim();
     await fire(sendMessage(env, from,
