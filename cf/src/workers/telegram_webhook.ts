@@ -31,7 +31,7 @@ import { continueAnalysis } from "../lib/ai";
 import { getWeatherText } from "../lib/weather";
 
 import { normalizeInput, isEmptyInput } from "../lib/normalize";
-import { saveSessionToKV, loadSessionFromKV, touchSession } from "../lib/context_manager";
+import { saveSessionToKV, loadSessionFromKV, touchSession, updateSession } from "../lib/context_manager";
 import { saveObservation } from "../lib/db";
 import { processMessage, type MessageContext } from "../lib/jarvis_core";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "../lib/identity";
@@ -782,6 +782,7 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
             ? (tr.target ? `Terjemahan (${tr.target}):\n` : "Terjemahan:\n") + translated
             : `Maaf, gagal menerjemahkan saat ini. Coba lagi sebentar.`;
           await recordTaskCounters(env, "translate", owner);
+          updateSession(owner, text, out, null, "translation");
           await fire(sendMessage(env, owner, out));
           break;
         }
@@ -794,6 +795,7 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
             ? `Terjemahan analisis terakhir:\n\n${translated}`
             : `Maaf, gagal menerjemahkan analisis saat ini. Coba lagi sebentar.`;
           await recordTaskCounters(env, "translate", owner);
+          updateSession(owner, text, out, null, "translation");
           await fire(sendMessage(env, owner, out));
           break;
         }
@@ -818,6 +820,7 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
               `🖼️ Prompt gambar:\n\n${prompt}\n\n*(Gunakan prompt ini dengan Midjourney/DALL-E/Stable Diffusion)*`));
           }
           await recordTaskCounters(env, "image_prompt", owner);
+          updateSession(owner, text, prompt, null, "command");
           break;
         }
         await fire(sendMessage(env, owner,
@@ -875,18 +878,21 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
             `🖼️ Prompt gambar untuk "${desc}":\n\n${prompt}\n\n*(Gunakan prompt ini dengan Midjourney/DALL-E/Stable Diffusion)*`));
         }
         await recordTaskCounters(env, "image_prompt", owner);
+        updateSession(owner, text, prompt, null, "command");
         break;
       }
       const topic = extractTopic(text);
       if (topic) {
         // Friendly info/query EXECUTE → real search + synthesis. This webhook
         // path bypasses the brain's reflect stage, so user+assistant turns are
-        // persisted EXPLICITLY here (single writer for this legacy path).
+        // persisted EXPLICITLY here (single writer for this legacy path) and the
+        // session is updated explicitly too (mood/turn/activeTopic parity).
         const r = await searchAndSynthesize(env, owner, text, topic);
         await appendMemory(env, owner, "user", text, topic).catch(() => {});
         await appendMemory(env, owner, "assistant", r.reply, topic).catch(() => {});
         // Observasi: user tertarik pada topik ini (untuk personalisasi di masa depan)
         saveObservation(env, owner, `User menanyakan tentang: ${topic}`, "interest").catch(() => {});
+        updateSession(owner, text, r.reply, topic, "research");
         await recordTaskCounters(env, "standard", owner);
         await storeResearchAnchor(env, owner, topic, r.reply).catch(() => {});
         await fire(sendMessage(env, owner, r.reply));
@@ -924,6 +930,7 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
               await appendMemory(env, owner, "user", text, aTopic).catch(() => {});
               await appendMemory(env, owner, "assistant", cont, aTopic).catch(() => {});
               if (cont.length > 120) void reflectOnTurn(env, text, cont, []).catch(() => {});
+              updateSession(owner, text, cont, aTopic, "research");
               await recordTaskCounters(env, "standard", owner);
               await storeResearchAnchor(env, owner, aTopic, cont).catch(() => {});
               await fire(sendMessage(env, owner, cont));
@@ -932,6 +939,7 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
             // LLM down (M2): don't burn budget re-searching the SAME anchored
             // topic (would duplicate the previous answer). Echo the last
             // analysis honestly instead — a reply still flows.
+            updateSession(owner, text, prior.slice(0, 600), aTopic, "research");
             await fire(sendMessage(env, owner,
               "⏳ Bagian lanjutan belum berhasil kususun (layanan model sedang sibuk). Ini analisis terakhir yang sudah kubuat:\n\n" +
               prior.slice(0, 1200)));
@@ -942,6 +950,7 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
           const r = await searchAndSynthesize(env, owner, text, aTopic, { followupPrior: prior });
           await appendMemory(env, owner, "user", text, aTopic).catch(() => {});
           await appendMemory(env, owner, "assistant", r.reply, aTopic).catch(() => {});
+          updateSession(owner, text, r.reply, aTopic, "research");
           await recordTaskCounters(env, "standard", owner);
           await storeResearchAnchor(env, owner, aTopic, r.reply).catch(() => {});
           await fire(sendMessage(env, owner, r.reply));

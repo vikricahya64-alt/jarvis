@@ -1064,9 +1064,14 @@ export async function searchAndSynthesize(
   // exactly once (context heuristic, then KV anchor) — the two algorithms must
   // never run independently on the same query (was H2 double-anchor).
   let followupAnchor = opts.followupPrior ?? "";
+  // Single-source anchor: if the caller already resolved it (webhook follow-up
+  // branch), reuse it. Otherwise fetch history ONCE (n=8) — the same array is
+  // later sliced to the last 4 for the LLM context, so follow-up queries never
+  // pay two D1 reads for conversation history.
+  let anchorCtx: Array<{ role: string; content: string; ts?: number }> | null = null;
   if (!followupAnchor && isFollowUpQuery(userText)) {
-    const ctx = await recentContext(env, owner, 8).catch(() => []);
-    const anchor = resolveFollowUpAnchor(ctx);
+    anchorCtx = await recentContext(env, owner, 8).catch(() => null);
+    const anchor = resolveFollowUpAnchor(anchorCtx ?? []);
     if (anchor) followupAnchor = anchor.prior;
   }
   // M7 (follow-up-numbers): a fresh-technical question about the SAME anchored
@@ -1104,7 +1109,7 @@ export async function searchAndSynthesize(
   const [searchResult, hits, context, mems, behaviorContext] = await Promise.all([
     topicKnown ? Promise.resolve(null) : ddgSearch(env, topic), // Skip search if known
     topicKnown ? Promise.resolve([] as SearchHit[]) : ddgSearchHits(env, topic),
-    recentContext(env, owner, 4),
+    followupAnchor && anchorCtx ? Promise.resolve(anchorCtx.slice(-4)) : recentContext(env, owner, 4),
     searchMemory(env, topic, 4).catch(() => []),
     getAnswerBehaviorContext(env, topic).catch(() => null),
   ]);
