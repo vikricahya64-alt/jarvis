@@ -1054,14 +1054,42 @@ const VISION_MODELS = [
  *  no usable sentence remains. */
 export function tidyVisionReply(reply: string): string | null {
   let out0 = (reply ?? "").trim();
-  // M7 media-fix v4: some Qwen/Gemini builds leak their REASONING inside the
-  // content as a `<think>...</think>` block (or a bare leading "Thinking:\n"
-  // paragraph). The thinking is ENGLISH planning; the actual answer is the
-  // Indonesian sentence after it. Strip the think block entirely, then feed
-  // what remains through the line cleaner below.
-  out0 = out0.replace(/<\s*think\s*>[\s\S]*?<\s*\/\s*think\s*>/gi, "")
-    .replace(/^Thinking:?\s*\n/i, "")
-    .replace(/^[ \t]*[—-]\s*Thinking:?[ \t]*\n/i, "").trim();
+  // M7 media-fix v4/v5: Qwen/Gemini build variants leak their REASONING
+  // (ENGLISH planning) inside `content` in several shapes:
+  //   A) `<think ...>   ` with a closing tag
+  //   B) `<think The user wants ...\n\nGambar ini...`  (blank-line split)
+  //   C) `<think The user wants ...\nGambar ini...`    (single-newline split)
+  //   D) `<think The user wants ... Gambar ini...`     (NO separator at all —
+  //      the Indonesian answer is the last sentence of the English planning)
+  // The robust, delimiter-agnostic rule: the thinking is ENGLISH prose and the
+  // actual answer is the INDONESIAN tail. Drop any `<think` intro, then keep
+  // only from the LAST Indonesian answer marker onward (cutting any leading
+  // English planning that survived). Fail-open: no Indonesian marker found →
+  // pass the (already think-stripped) text through untouched.
+  out0 = out0
+    // A: full `<think ...  response` block (closing tag present) → drop block.
+    .replace(/<\s*think\b[\s\S]*?<\s*\/\s*think\s*>/gi, " ")
+    // B/C: UNPAIRED opening `<think ...` handling — stop at first newline so a
+    // blank-line/single-newline answer survives (reasoning is one continuous
+    // English block up to the newline that precedes the Indonesian line). Only
+    // applied when a newline actually exists; shape D (answer on same line, no
+    // newline) leaves everything intact for the content-based IDN cut below.
+    .replace(/<\s*think\b[^\r\n]*?(?=\r?\n)/i, "")
+    .replace(/<\s*think\b/i, "")                                // D: bare opening tag
+    .replace(/^\s*Thinking:?[ \t]*\n?/i, "")
+    .replace(/^[ \t]*[—-]\s*Thinking:?[ \t]*\n?/i, "")
+    .trim();
+  // Content-based cut (D and any residual English planning): the Indonesian
+  // answer commonly begins with one of these phrasings; keep the LAST such
+  // sentence segment through the end.
+  const IDN_START = /\b(?:Gambar ini|Pada gambar|Dalam gambar|Di dalam gambar|Tampak|Terlihat|Terdapat|Menampilkan|Menunjukkan|Di gambar|Ini adalah gambar|Gambar tersebut|Screen ?shot ini)\b/i;
+  if (IDN_START.test(out0)) {
+    let best = -1;
+    const segs = out0.split(/(?<=[.!?])\s+/);
+    segs.forEach((seg, i) => { if (IDN_START.test(seg)) best = i; });
+    if (best >= 0) out0 = segs.slice(best).join(" ");
+  }
+  out0 = out0.trim();
   let lines = out0.split("\n");
   // Drop leading planning/meta lines (whatever the egress model emits).
   const PLAN_RE = /^(?:the user|the image|the main|i need|let me|to (?:provide|describe)|based on|this is a (?:draft|preview)|drafting|prediction|step\s*\d+|the (?:screenshot|photo)|here(?:'s| is)(?: a)?\s*(?:draft|clean|the)|identify|describe|the description)/i;

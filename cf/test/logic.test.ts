@@ -531,10 +531,25 @@ function testTidyVisionReply() {
   // Indonesian answer.
   const thinkBlock = "<think>The user wants a description of the image in Indonesian. I need to identify the main object.</think> Gambar ini menampilkan toko aplikasi.";
   assert.strictEqual(tidyVisionReply(thinkBlock), "Gambar ini menampilkan toko aplikasi.",
-    "<think> reasoning block stripped, answer kept");
+    " thinking reasoning block stripped, answer kept");
+  // M7 media-fix v5: an UNPAIRED opening think tag, with the answer on the
+  // next line after a blank separator, must still drop the thinking.
+  const thinkUnpairedBlank = String.fromCharCode(60) + "think The user wants a description of the image.\n\nGambar ini menampilkan daftar aplikasi toko.";
+  assert.strictEqual(tidyVisionReply(thinkUnpairedBlank), "Gambar ini menampilkan daftar aplikasi toko.",
+    "UNPAIRED think + blank-line split: leading answer kept");
   const bareThinking = "Thinking:\nIdentify the objects.\nGambar ini menampilkan daftar aplikasi.";
   assert.strictEqual(tidyVisionReply(bareThinking), "Gambar ini menampilkan daftar aplikasi.",
     "'Thinking:' preamble stripped");
+  // M7 media-fix v5 (shape D): EN no-separator run-on — the Indonesian answer
+  // is the last sentence of the English planning. Content-based cut keeps only
+  // the Indonesian tail.
+  const noSep = String.fromCharCode(60) + "think The user wants a description of the image. The image is a mobile app store. Battery is 77%. Gambar ini menampilkan tampilan antarmuka toko aplikasi (kemungkinan F-Droid).";
+  const rNoSep = tidyVisionReply(noSep);
+  assert.strictEqual(rNoSep, "Gambar ini menampilkan tampilan antarmuka toko aplikasi (kemungkinan F-Droid).",
+    "run-on EN planning + IDN tail: content-based cut keeps Indonesian answer");
+  // Plain Indonesian caption with no image marker must survive untouched.
+  assert.strictEqual(tidyVisionReply("Ini teks caption biasa tanpa marker gambar."),
+    "Ini teks caption biasa tanpa marker gambar.", "non-vision Indonesian text passes through");
 
   assert.strictEqual(tidyVisionReply(""), null, "empty reply -> null");
   assert.strictEqual(tidyVisionReply("     "), null, "whitespace-only -> null");
