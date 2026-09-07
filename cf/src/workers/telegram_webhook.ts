@@ -10,7 +10,7 @@
 //=====================================================================
 
 import { Env, touchActivity, logConsent, getConsentRequestTs, getDmsConfig, writeDmsConfig } from "../lib/db";
-import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById, addAgentTask, listAgentTasks, markAgentTaskRunning } from "../lib/db";
+import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById, addAgentTask, listAgentTasks, markAgentTaskRunning, addAgentRule, listAgentRules, deleteAgentRule, setAgentRuleActive } from "../lib/db";
 import {
   addProduct, listProducts, getProduct, updateProduct, deleteProduct, adjustStock, lowStockProducts,
   addCustomer, listCustomers, searchCustomer,
@@ -39,6 +39,7 @@ import { identityStatusText } from "../lib/identity_anchor";
 import { getPlans, getScheduledTasks } from "../lib/maestro";
 import { getDegradationStatus } from "../lib/degradation";
 import { delegateToGithub } from "../lib/agent_executor";
+import { parseRecurSpec } from "../lib/agent_rules";
 import {
   listInsights, setPreference, disablePreference, getActivePreferences,
   auditPhantomRules, reflectOnTurn,
@@ -184,6 +185,57 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
 
   // Load sesi dari KV setelah cold start (persistensi across restarts)
   loadSessionFromKV(env, from).catch(() => {});
+
+  // ------------------------------------------------------------------
+  // Documents (≤15 MiB) — become ONE-SHOT cloud tasks (B1 document
+  // analysis). We relay the bytes through CONFIG_KV under a random uuid +
+  // per-file secret with a 30-min TTL; the executor fetches /dl/<uuid> and
+  // opens the file locally (free sandbox can't parse xlsx/pdf/docx well).
+  // Fail-closed: any hiccup → gentle nudge, nothing stored.
+  // ------------------------------------------------------------------
+  const doc = msg.document;
+  if (doc && (!doc.file_size || doc.file_size <= 15 * 1024 * 1024)) {
+    const label = doc.file_name || doc.mime_type || "dokumen";
+    const dl = await downloadTelegramFile(env, doc.file_id);
+    if (!dl || !dl.bytes.byteLength) {
+      await fire(sendMessage(env, from,
+        `📎 Gagal mengunduh lampiran *${label.slice(0, 60)}* dari Telegram (periksa kembali, mungkin file rusak).`));
+      return new Response("ok", { status: 200 });
+    }
+    const instruction =
+      (msg.caption || "Analisis dokumen ini dan buat ringkasan terstruktur dalam Bahasa Indonesia.").trim();
+    if (instruction.length > 1500) {
+      await fire(sendMessage(env, from,
+        "⚠️ Caption telalu panjang (maks 1500 karakter) untuk tipe lampiran-analisis. Perpendek, lalu kirim ulang."));
+      return new Response("ok", { status: 200 });
+    }
+    const base64 = bytesToBase64(dl.bytes);
+    const uuid = crypto.randomUUID().replace(/-/g, "");
+    const dlSecret = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+    try {
+      await env.CONFIG_KV.put(`dl:${uuid}`, JSON.stringify({ mime: dl.mime, b64: base64, s: dlSecret }), { expirationTtl: 1800 });
+    } catch {
+      await fire(sendMessage(env, from, "⚠️ Penyimpanan lampiran gagal (KV). Coba lagi."));
+      return new Response("ok", { status: 200 });
+    }
+    const dlUrl = `${env.WORKER_URL ?? "https://jarvis-sovereign.vikricahya64.workers.dev"}/dl/${uuid}?s=${dlSecret}`;
+    const text = `Analisis lampiran "${label}". ${instruction} <dlurl:${dlUrl}>`;
+    const id = await addAgentTask(env, from, text);
+    if (!id) {
+      await fire(sendMessage(env, from, "⚠️ Gagal membuat tugas analisis lampiran (D1). Coba lagi."));
+      return new Response("ok", { status: 200 });
+    }
+    await fire(sendMessage(env, from,
+      `📎 Lampiran *${label.slice(0, 60)}* (${(dl.bytes.byteLength / 1024).toFixed(0)} KB) diterima.\n` +
+      `Tugas #${id}: analisis dikirim ke eksekutor cloud — hasil kubalas di sini.`));
+    const sent = await delegateToGithub(env, id, text);
+    if (!sent.error && sent.runId) await markAgentTaskRunning(env, id, sent.runId);
+    if (sent.error) {
+      await fire(sendMessage(env, from,
+        `⚠️ Tugas #${id} tersimpan tapi gagal dispatch (${sent.error}). Status tetap ⏳; cek /tugas list.`));
+    }
+    return new Response("ok", { status: 200 });
+  }
 
   // Non-text payloads (sticker/photo/gif/voice) or text with no meaningful
   // content (pure emoji/punctuation) get a helpful nudge, never a dead "Ok.".
@@ -1280,6 +1332,16 @@ function isAgentCommand(trimmed: string, raw: string): boolean {
   return /^(?:kerjakan|jalankan)\b.*\bopencode\b/i.test(raw);
 }
 
+/** Human label for a stored recur spec: "daily;HH:MM" / "weekly;D;HH:MM". */
+function fmtRecurSpec(spec: string): string {
+  const [kind, dayPart, timePart] = spec.split(";");
+  const hm = timePart ?? "??:??";
+  if (kind === "daily") return `setiap hari ${hm}`;
+  const names = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+  const d = Number(dayPart);
+  return `setiap ${names[d >= 0 && d <= 6 ? d : 0]} ${hm}`;
+}
+
 /** Execute /tugas: store task → dispatch to GitHub → acknowledge. */
 async function handleAgentCommand(env: Env, from: number, raw: string): Promise<void> {
   const trimmed = raw.trim();
@@ -1305,6 +1367,48 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
     return;
   }
 
+  // --- Jadwal (recurring heavy tasks): list / hapus / pause / resume ---
+  const schedDel = /^\/(?:tugas|delegasi)\s+hapus\s+jadwal\s+(\d+)/i.exec(trimmed);
+  if (schedDel) {
+    const ok = await deleteAgentRule(env, from, Number(schedDel[1]));
+    await fire(sendMessage(env, from, ok
+      ? `🗑️ Jadwal #${schedDel[1]} dihapus.`
+      : "Jadwal tidak ditemukan (atau bukan milikmu)."));
+    return;
+  }
+  const schedPause = /^\/(?:tugas|delegasi)\s+(?:pause|jeda)\s+jadwal\s+(\d+)/i.exec(trimmed);
+  if (schedPause) {
+    const ok = await setAgentRuleActive(env, from, Number(schedPause[1]), false);
+    await fire(sendMessage(env, from, ok
+      ? `⏸️ Jadwal #${schedPause[1]} dijeda. (Lanjutkan: /tugas resume jadwal ${schedPause[1]})`
+      : "Jadwal tidak ditemukan."));
+    return;
+  }
+  const schedResume = /^\/(?:tugas|delegasi)\s+(?:resume|lanjut)\s+jadwal\s+(\d+)/i.exec(trimmed);
+  if (schedResume) {
+    const ok = await setAgentRuleActive(env, from, Number(schedResume[1]), true);
+    await fire(sendMessage(env, from, ok
+      ? `▶️ Jadwal #${schedResume[1]} dilanjutkan.`
+      : "Jadwal tidak ditemukan."));
+    return;
+  }
+  if (/^\/(?:tugas|delegasi)\s+(jadwal|schedule)\b/i.test(trimmed)) {
+    const rules = await listAgentRules(env, from);
+    if (!rules.length) {
+      await fire(sendMessage(env, from,
+        "🗓️ *Jadwal berulang*\n\nBelum ada. Buat dengan: `/tugas <pekerjaan> setiap <hari> <HH:MM>` (mis. `/tugas riset pasar crypto setiap Senin 09:05`) atau `setiap hari <HH:MM>`. Perintah: `/tugas jadwal`, `/tugas hapus jadwal <id>`, `/tugas pause jadwal <id>`."));
+      return;
+    }
+    const lines = rules.map((r) => {
+      const wib = new Date(r.next_fire_at + 7 * 3600 * 1000);
+      const hm = wib.toISOString().slice(11, 16);
+      const state = r.active ? "▶️" : "⏸️";
+      return `${state} #${r.id} ${fmtRecurSpec(r.recur_spec)} → ${hm} WIB · ${r.task.slice(0, 50)}`;
+    });
+    await fire(sendMessage(env, from, `🗓️ *Jadwal berulang*\n\n${lines.join("\n")}`));
+    return;
+  }
+
   // --- Add ---
   const task = trimmed
     .replace(/^\/(?:tugas|delegasi|delegate)\s*/i, "")
@@ -1312,14 +1416,35 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
     .replace(/^(?:kerjakan|jalankan)\b.*\bopencode\b\s*/i, "")
     .replace(/^ke\s+opencode\s*/i, "")
     .trim();
-  if (task.length < 10 || task.length > 4000) {
-    await fire(sendMessage(env, from,
-      "📦 `/tugas <pekerjaan>` (contoh: `/tugas riset kompetitor AI dan simpan laporan markdown`). Minimal 10 karakter."));
-    return;
-  }
   if (!env.AGENT_TOKEN || !env.GITHUB_TOKEN || !env.GITHUB_REPO) {
     await fire(sendMessage(env, from,
       "⚙️ Eksekutor cloud belum dikonfigurasi (AGENT_TOKEN, GITHUB_TOKEN, GITHUB_REPO). Set dahulu, lalu ulangi."));
+    return;
+  }
+
+  // Scheduled (recurring) variant: "… setiap Senin 09:05" → create a rule.
+  const parsed = parseRecurSpec(task);
+  if (parsed) {
+    const clean = parsed.cleanTask;
+    if (clean.length < 10) {
+      await fire(sendMessage(env, from,
+        "📦 Untuk jadwal: `/tugas <pekerjaan> setiap <hari> <HH:MM>`. Pekerjaannya minimal 10 karakter."));
+      return;
+    }
+    const rid = await addAgentRule(env, from, clean, parsed.recur.spec, parsed.recur.nextFireAt);
+    if (!rid) {
+      await fire(sendMessage(env, from, "Gagal menyimpan jadwal (error D1). Coba lagi."));
+      return;
+    }
+    const first = new Date(parsed.recur.nextFireAt + 7 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " ");
+    await fire(sendMessage(env, from,
+      `🗓️ Jadwal *#${rid}* tersimpan: _${clean.slice(0, 150)}_\nBerulang *${fmtRecurSpec(parsed.recur.spec)}* (WIB, eksekutor cloud). Pertama: *${first} WIB*.\nKelola: /tugas jadwal · hapus/pause/resume jadwal ${rid}`));
+    return;
+  }
+
+  if (task.length < 10 || task.length > 4000) {
+    await fire(sendMessage(env, from,
+      "📦 `/tugas <pekerjaan>` (contoh: `/tugas riset kompetitor AI dan simpan laporan markdown`). Minimal 10 karakter."));
     return;
   }
   const id = await addAgentTask(env, from, task);

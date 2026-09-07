@@ -10,6 +10,7 @@
 
 import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders, getAgentTask, finishAgentTask, listAgentTasks, failStaleAgentTasks, pruneOldAgentTasks } from "./lib/db";
 import { sanitizeAgentReport, flagAgentReport } from "./lib/agent_executor";
+import { fireDueAgentRules } from "./lib/agent_rules";
 import { handleUpdate } from "./workers/telegram_webhook";
 import { setWebhook, sendMessage, getWebhookInfo, getMe, setMyCommands } from "./lib/telegram";
 import { runDms } from "./daemons/dead_mans_switch";
@@ -155,7 +156,7 @@ export default {
         ok: true,
         ts: Date.now(),
         env: env.APP_ENV ?? "unknown",
-        version: "f3b8d24c",
+        version: "1a2b3c4d",
       }));
     }
 
@@ -258,7 +259,7 @@ export default {
         return respond(Response.json({
           ok: true,
           ts: Date.now(),
-          version: "f3b8d24c",
+          version: "1a2b3c4d",
           systems: {
             d1: d1Ok ? "✅" : "❌",
             kv: kvOk ? "✅" : "❌",
@@ -444,6 +445,28 @@ export default {
       return respond(new Response("bad mode", { status: 400 }));
     }
 
+    // /dl/:uuid — one-time-ish temp file for the executor (B1 document
+    // analysis). The webhook stores the (≤15 MiB) document under a random
+    // uuid in CONFIG_KV with a 30-min TTL; the runner downloads it here.
+    // Unguessable uuid + short TTL is the free-tier-safe trade-off.
+    if (path.startsWith("/dl/")) {
+      const uuid = decodeURIComponent(path.slice(4));
+      const stored = await env.CONFIG_KV.get(`dl:${uuid}`).catch(() => null);
+      if (!stored) return respond(new Response("not found", { status: 404 }));
+      try {
+        const rec = JSON.parse(stored) as { mime?: string; b64?: string; s?: string };
+        if (!rec.b64) return respond(new Response("not found", { status: 404 }));
+        const q = new URL(url).searchParams;
+        if (rec.s && q.get("s") !== rec.s) return respond(new Response("forbidden", { status: 403 }));
+        const bytes = Uint8Array.from(atob(rec.b64), (c) => c.charCodeAt(0));
+        return respond(new Response(bytes, {
+          headers: { "Content-Type": rec.mime ?? "application/octet-stream" },
+        }));
+      } catch {
+        return respond(new Response("bad payload", { status: 400 }));
+      }
+    }
+
     //------------------------------------------------------------------
     // CATCH-ALL
     //------------------------------------------------------------------
@@ -534,6 +557,11 @@ export default {
           ].filter(Boolean);
           await sendMessage(env, owner, lines.join("\n") + "\n(_sementara berhenti: /pause_)").catch(() => {});
           console.log(`[cron] autonomy: plans=${auto.plans} tasks=${auto.tasksFired} consent=${auto.pendingConsent} (${Date.now() - start}ms)`);
+        }
+        // Recurring heavy tasks: create instances for due rules + dispatch.
+        const rules = await fireDueAgentRules(env);
+        if (rules.fired > 0 || rules.failed > 0) {
+          console.log(`[cron] agent_rules: fired=${rules.fired} failed=${rules.failed} (${Date.now() - start}ms)`);
         }
       }
     } catch (e) {
