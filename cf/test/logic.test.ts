@@ -10,7 +10,7 @@
 
 import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
-import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation } from "../src/lib/ai";
+import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation } from "../src/lib/ai";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
@@ -553,6 +553,15 @@ function testPureContinuation() {
   assert.ok(anchor2 && anchor2.topic.length <= 90 && !anchor2.topic.endsWith("dan"), "long anchor clipped at word bound");
 }
 
+function testTidyContinuation() {
+  const clean = tidyContinuation("**Kelebihan Bisnis Kerajinan**\n1. Margin tinggi. Apakah Anda ingin tahu lebih lanjut?");
+  assert.ok(clean.startsWith("**Kelebihan"), "leading content preserved");
+  assert.ok(!/apakah anda ingin tahu/i.test(clean), "trailing ask stripped");
+  const noLeadingGuff = tidyContinuation("Baik, mari kita lanjutkan membahas tentang kota Malang\n**Strategi**");
+  assert.ok(noLeadingGuff.startsWith("**Strategi"), "leading 'Baik, mari kita…' filler stripped");
+  assert.strictEqual(tidyContinuation("  Berikut detail lengkapnya.  "), "Berikut detail lengkapnya.", "plain reply trimmed");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -576,6 +585,7 @@ async function main() {
   testResolveFollowUpAnchor();
   testFormalWordPreservation();
   testPureContinuation();
+  testTidyContinuation();
   console.log("LOGIC TESTS PASSED");
 }
 

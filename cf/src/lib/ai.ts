@@ -86,6 +86,18 @@ export function isPureContinuation(userText: string): boolean {
   return head.test(low);
 }
 
+/** Deterministic tidy for continuation output (defense-in-depth): a stray LLM
+ *  deviation must never reproduce the "Baik, mari kita lanjutkan…?" bug —
+ *  strip leading "Baik…" filler and any trailing "Apakah Anda ingin…?" ask. */
+export function tidyContinuation(reply: string): string {
+  let out = (reply ?? "").trim();
+  out = out
+    .replace(/^(?:baik|ok|oke|baiklah|siap|baik,\s*baik)\b[^:\n]{0,90}(?:\n|[:.])\s*/i, "")
+    .replace(/\s*(?:apakah\s+(?:anda|kamu)\s+ingin\s+tahu[^?!.]*[?!.]*)\s*$/i, "")
+    .trim();
+  return out;
+}
+
 /** ECC continuation parity: extend the LAST assistant analysis without a new
  *  web search. The prior reply (already sourced) is the only input, so the
  *  continuation stays on the exact same topic/structure and NEVER degrades into
@@ -113,8 +125,9 @@ export async function continueAnalysis(
   ];
   try {
     const groq = await groqRespond(env, step, { prebuiltMessages: messages, topic: "continuation" });
-    if (groq) return groq;
-    return await openrouterRespond(env, step, { prebuiltMessages: messages, topic: "continuation" });
+    if (groq) return tidyContinuation(groq);
+    const or = await openrouterRespond(env, step, { prebuiltMessages: messages, topic: "continuation" });
+    return or ? tidyContinuation(or) : null;
   } catch {
     return null;
   }
