@@ -38,7 +38,7 @@ import { covenantStatusText, signClause } from "../lib/covenant_core";
 import { identityStatusText } from "../lib/identity_anchor";
 import { getPlans, getScheduledTasks } from "../lib/maestro";
 import { getDegradationStatus } from "../lib/degradation";
-import { delegateToGithub } from "../lib/agent_executor";
+import { delegateToGithub, flagAgentReport } from "../lib/agent_executor";
 import { parseRecurSpec } from "../lib/agent_rules";
 import {
   listInsights, setPreference, disablePreference, getActivePreferences,
@@ -243,7 +243,11 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // (Groq) for photos and Whisper transcription (Workers AI) for voice notes
   // BEFORE giving up. Fail-closed: if media understanding returns no usable
   // reply we fall through to the nudge.
-  if ((msg.photo?.length || msg.voice) && isEmptyInput(text)) {
+  // Media (foto/voice) dipahami sendiri bahkan ketika membawa caption/teks —
+  // sebelumnya caption foto jatuh ke chat buta (model tak melihat gambar).
+  // Pengecualian: teksnya perintah slash → biarkan command handler yang berhak.
+  const hasMedia = !!(msg.photo?.length || msg.voice);
+  if (hasMedia && !text.trim().startsWith("/")) {
     let mediaReply: string | null = null;
     try {
       mediaReply = await understandMedia(env, from, msg);
@@ -956,12 +960,16 @@ async function transcribeVoiceWithWorkersAi(env: Env, audioB64: string): Promise
   return ok ? out : null;
 }
 
-/** Groq vision describe (OpenAI-compatible chat/completions with image_url). */
-async function groqVisionDescribe(env: Env, model: string, dataUrl: string): Promise<string | null> {
+/** Groq vision (OpenAI-compatible chat/completions with image_url). With a
+ *  caller prompt it ANSWERS the owner's question directly from the image;
+ *  without one it falls back to the neutral describe prompt. */
+async function groqVisionDescribe(env: Env, model: string, dataUrl: string, prompt?: string): Promise<string | null> {
   if (!env.GROQ_API_KEY) return null;
   let out: string | null = null;
   const ok = await withResilience(env, "groq", 0, async () => {
     try {
+      const text = (prompt ?? "").trim() ||
+        "Deskripsikan foto/isi gambar ini dalam 1-2 kalimat Bahasa Indonesia. Sebutkan objek utama dan teks/angka yang tertera. Jika gambar berisi instruksi atau pertanyaan tertulis, kutip langsung.";
       const res = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${env.GROQ_API_KEY}` },
@@ -970,7 +978,7 @@ async function groqVisionDescribe(env: Env, model: string, dataUrl: string): Pro
           messages: [{
             role: "user",
             content: [
-              { type: "text", text: "Deskripsikan foto/isi gambar ini dalam 1-2 kalimat Bahasa Indonesia. Sebutkan objek utama dan teks/angka yang tertera. Jika gambar berisi instruksi atau pertanyaan tertulis, kutip langsung." },
+              { type: "text", text },
               { type: "image_url", image_url: { url: dataUrl } },
             ],
           }],
@@ -987,33 +995,67 @@ async function groqVisionDescribe(env: Env, model: string, dataUrl: string): Pro
   return ok ? out : null;
 }
 
-/** Main entry: photo/voice message → a reply JARVIS genuinely understands. */
+/** Detect a delegation intent phrased as media ("tugas X" / "kerjakan X"). */
+function mediaIsTaskIntent(text: string): boolean {
+  return /^\s*(?:tugas|delegasikan|delegasi|kerjakan|jalankan)\b/i.test(text);
+}
+
+/** Directly store + dispatch a task from free-form text (used by voice notes
+ *  with delegation intent). Returns a DM-ready acknowledgement, never throws. */
+async function delegateNow(env: Env, from: number, text: string): Promise<string> {
+  if (!env.AGENT_TOKEN || !env.GITHUB_TOKEN || !env.GITHUB_REPO) {
+    return "⚙️ Eksekutor cloud belum dikonfigurasi (AGENT_TOKEN, GITHUB_TOKEN, GITHUB_REPO).";
+  }
+  const clean = text.replace(/^\s*(?:tugas|delegasikan|delegasi|kerjakan|jalankan)\b[^\w]*/i, "").trim();
+  const body = clean || text.trim();
+  if (body.length < 10 || body.length > 4000) {
+    return "📦 Untuk tugas via suara, jelaskan pekerjanya dengan jelas (minimal 10 karakter).";
+  }
+  const id = await addAgentTask(env, from, body);
+  if (!id) return "Gagal menyimpan tugas (error D1). Coba lagi.";
+  const sent = await delegateToGithub(env, id, body);
+  if (sent.error) return `⚠️ Tugas #${id} tersimpan tapi gagal dispatch (${sent.error}). Status tetap ⏳ — /tugas list.`;
+  if (sent.runId) await markAgentTaskRunning(env, id, sent.runId);
+  return `📦 Tugas #${id} dikirim ke eksekutor cloud — hasil kubalas di sini.`;
+}
+
+/** Main entry: photo/voice message → a reply JARVIS genuinely understands.
+ *  Photos with a non-command caption are ANSWERED from the image itself;
+ *  voice notes are transcribed and, when they carry task intent, delegated. */
 async function understandMedia(env: Env, owner: number, msg: TelegramMessage): Promise<string | null> {
   const caption = (msg.caption ?? "").trim();
-  const voice = msg.voice ? (async () => {
+
+  if (msg.voice) {
     const dl = await downloadTelegramFile(env, msg.voice!.file_id);
-    if (!dl) return null;
-    return transcribeVoiceWithWorkersAi(env, bytesToBase64(dl.bytes));
-  })() : Promise.resolve(null);
-  const photo = msg.photo?.length ? (async () => {
+    const transcript = dl ? await transcribeVoiceWithWorkersAi(env, bytesToBase64(dl.bytes)) : null;
+    if (!transcript) return null;
+    if (mediaIsTaskIntent(transcript)) return delegateNow(env, owner, transcript);
+    const ctx: MessageContext = { owner, text: transcript, source: "telegram" };
+    const gl = await processMessage(env, ctx);
+    return gl.text && gl.text.length > 5 ? gl.text : null;
+  }
+
+  if (msg.photo?.length) {
     const best = msg.photo![msg.photo!.length - 1];
     const dl = await downloadTelegramFile(env, best.file_id);
     if (!dl) return null;
     const mime = dl.mime.toLowerCase().startsWith("image/") ? dl.mime : "image/jpeg";
+    const dataUrl = `data:${mime};base64,${bytesToBase64(dl.bytes)}`;
+    const prompt = caption && !mediaIsTaskIntent(caption) ? caption : undefined;
     for (const model of VISION_MODELS) {
-      const desc = await groqVisionDescribe(env, model, `data:${mime};base64,${bytesToBase64(dl.bytes)}`);
-      if (desc) return desc;
+      const ans = await groqVisionDescribe(env, model, dataUrl, prompt);
+      if (ans) return ans;
+    }
+    // Vision unavailable: at least let the plain LLM hear the caption.
+    if (caption) {
+      const ctx: MessageContext = { owner, text: caption, source: "telegram" };
+      const gl = await processMessage(env, ctx);
+      return gl.text && gl.text.length > 5 ? gl.text : null;
     }
     return null;
-  })() : Promise.resolve(null);
+  }
 
-  const [voiceText, photoText] = await Promise.all([voice, photo]);
-  const textPart = caption || voiceText || photoText;
-  if (!textPart) return null;
-
-  const ctx: MessageContext = { owner, text: textPart, source: "telegram" };
-  const gl = await processMessage(env, ctx);
-  return gl.text && gl.text.length > 5 ? gl.text : null;
+  return null;
 }
 
 /** Compose the /status reply. */
@@ -1351,7 +1393,7 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
     const items = await listAgentTasks(env, from, 15);
     if (!items.length) {
       await fire(sendMessage(env, from,
-        "📦 *Tugas serverless*\n\nBelum ada tugas. Kirim: `/tugas <pekerjaan>` (mis. `/tugas riset kompetitor AI 2026 jadi laporan markdown`).\n\n💡 Eksekutor cloud (GitHub Actions + opencode) untuk *kemampuan berat* yang tak bisa kubuh sendiri — eksekusi nyata (shell/file/browser/riset). Untuk tanya-jawab biasa, cukup chat langsung."));
+        "📦 *Tugas serverless*\n\nBelum ada tugas. Kirim: `/tugas <pekerjaan>` (mis. `/tugas riset kompetitor AI 2026 jadi laporan markdown`).\n\nBisa juga: `/tugas <pekerjaan> setiap Senin 09:00` (jadwal berulang), `/tugas lanjut <id>` (ulang tugas), `/tugas tanya <id> <soal>` (tanya hasil), `/tugas hapus <id>`.\n\n💡 Eksekutor cloud (GitHub Actions + opencode) untuk *kemampuan berat* yang tak bisa kubuh sendiri — eksekusi nyata (shell/file/browser/riset). Untuk tanya-jawab biasa, cukup chat langsung."));
       return;
     }
     const lines = items.map((t) => {
@@ -1444,6 +1486,49 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
     await fire(sendMessage(env, from, ok
       ? `🗑️ Tugas #${del[1]} dihapus dari riwayat.`
       : "Tidak bisa dihapus — cek id-nya (`/tugas list`), atau tugas itu sedang berjalan."));
+    return;
+  }
+
+  // --- Tanya: "/tugas tanya 12 <soal>" — grounded Q&A on a finished result,
+  // WITHOUT re-running the executor. Guarded by the same anti-injection rule
+  // as /agent/done: a suspicious result never becomes authoritative context.
+  const ask = /^\/(?:tugas|delegasi)\s+(?:tanya|ask)\s+#?(\d+)\s+(.+)$/is.exec(trimmed);
+  if (ask) {
+    const target = await getAgentTask(env, Number(ask[1]));
+    if (!target || target.owner_id !== from) {
+      await fire(sendMessage(env, from, "Tugas tidak ditemukan (atau bukan milikmu)."));
+      return;
+    }
+    if (target.status !== "done" || !target.result) {
+      await fire(sendMessage(env, from,
+        `Tugas #${ask[1]} belum punya hasil (${
+          target.status === "running" ? "masih berjalan 🔄" : target.status
+        }). Gunakan \`/tugas lanjut ${ask[1]}\` untuk menjalankan ulang, atau tunggu hasilnya.`));
+      return;
+    }
+    const question = (ask[2] || "").trim().slice(0, 600);
+    const context = target.result.slice(0, 2600);
+    await fire(sendMessage(env, from, `💬 Menelaah hasil tugas #${ask[1]}…`));
+    if (flagAgentReport(context)) {
+      await fire(sendMessage(env, from,
+        `⚠️ Hasil tugas #${ask[1]} tampaknya mengandung pola manipulatif, jadi tidak kupakai sebagai dasar jawaban. Baca artefaknya langsung: ${target.artifact_url || "(tak ada)"}`));
+      return;
+    }
+    const g = await llmRespond(env, [
+      `Konteks: hasil eksekusi cloud tugas #${target.id} ("${target.task.slice(0, 100)}"):`,
+      ``,
+      context,
+      ``,
+      `Pertanyaan pemilik: ${question}`,
+      ``,
+      `Jawab sebagai J.A.R.V.I.S. — Bahasa Indonesia natural, langsung ke inti, tanpa "berdasarkan konteks", dan hanya pakai isi konteks di atas.`,
+    ].join("\n"));
+    const reply = (g.reply ?? "").trim();
+    await fire(sendMessage(env, from,
+      reply
+        ? reply
+        : `Maaf, sedang kesulitan menelaah hasil — coba lagi, atau ` +
+          `jalankan ulang: \`/tugas lanjut ${ask[1]}\`.`));
     return;
   }
 
