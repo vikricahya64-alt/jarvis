@@ -43,7 +43,7 @@ export function detectIntent(text: string): {
   if (/^\/|^(?:lakukan|jalankan|hapus|tambah|set|atur|buka|tutup|kirim|lihat)/i.test(low)) {
     return { intent: "command", confidence: 0.9, entities: {} };
   }
-  if (/\b(?:cari|search|info|tentang|analisis|review|bandingkan|ringkas)\b/i.test(low)) {
+  if (/\b(?:cari|search|riset|reseach|research|studi|study|pelajari|mempelajari|meneliti|info|tentang|analisis|review|bandingkan|ringkas|laporan|kajian)\b/i.test(low)) {
     return { intent: "research", confidence: 0.8, entities: { topic: text.slice(0, 100) } };
   }
   if (/\b(?:terjemahkan|translate|arti|mean)\b/i.test(low)) {

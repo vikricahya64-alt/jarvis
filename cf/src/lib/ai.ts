@@ -112,7 +112,7 @@ export function resolveFollowUpAnchor(
 export function extractTopic(text: string): string | null {
   const low = text.trim().toLowerCase();
   const m = low.match(
-    /\b(?:cari|carii|cr|search|tentang|tenteng|tentan|tntg|ringkas|rangkum|summarize|artikel|topik|info|infp|informasi|analis\w*|laporan|laporn|report|review|riviu|perbandingan|bandingkan|perkembangan|ulasan|ulsn|kajian|menurut|menurutmu|bagaimana|gmn|bgmn|apa|apakah|siapa|kenapa|mengapa|kapan|berapa|dimana|di mana)\b(?:\s+(?:itu|apa|yang|kah|adalah|dengan|tentang|mengenai))?\s*[:\-]?\s*(.+)$/,
+    /\b(?:cari|carii|cr|search|riset|reseach|research|studi|study|pelajari|mempelajari|meneliti|tentang|tenteng|tentan|tntg|ringkas|rangkum|summarize|artikel|topik|info|infp|informasi|analis\w*|laporan|laporn|report|review|riviu|perbandingan|bandingkan|perkembangan|ulasan|ulsn|kajian|menurut|menurutmu|bagaimana|gmn|bgmn|apa|apakah|siapa|kenapa|mengapa|kapan|berapa|dimana|di mana)\b(?:\s+(?:itu|apa|yang|kah|adalah|dengan|tentang|mengenai))?\s*[:\-]?\s*(.+)$/,
   );
   if (!m) return null;
   let topic = m[1]

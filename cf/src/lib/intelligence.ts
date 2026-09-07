@@ -233,7 +233,7 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
   }
 
   // Search / research
-  if (/\b(?:cari|search|info|tentang|analisis|review|bandingkan|ringkas|laporan)\b/i.test(low)) {
+  if (/\b(?:cari|search|riset|reseach|research|studi|study|pelajari|mempelajari|meneliti|info|tentang|analisis|review|bandingkan|ringkas|laporan|kajian)\b/i.test(low)) {
     return { type: "search", urgency: "medium", formality: "neutral", confidence: 0.8, entities: { topic: text.slice(0, 100) } };
   }
 
