@@ -888,6 +888,14 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
         const kvAnchor = (await readResearchAnchor(env, owner).catch(() => null)) ?? undefined;
         const prior = kvAnchor?.prior ?? anchor?.prior;
         const aTopic = kvAnchor?.topic ?? anchor?.topic;
+        // Anti-ramble fail-closed: a pure "Lanjutkan" with NO recoverable
+        // prior must never bounce into the generic LLM (which hallucinates an
+        // off-topic lecture). Give a short, honest pointer instead.
+        if (isPureContinuation(text) && !prior && !aTopic) {
+          await fire(sendMessage(env, owner,
+            "Baik. Pembahasan sebelumnya belum tersimpan di ingatanku — apakah sudah cukup lama? Bisa sebutkan ulang topiknya (contoh: `cari bisnis kerajinan`), nanti lanjut kubuatkan bagian berikutnya."));
+          break;
+        }
         if (prior && aTopic) {
           // PURE continuation ("Lanjutkan") must EXTEND the last reply, never
           // re-search a sentence fragment. Fail-closed: if the LLM is down,
@@ -993,6 +1001,9 @@ async function applyDefault(
       const ctx: MessageContext = { owner, text: rawText, source: "telegram" };
       const jarvisRes = await processMessage(env, ctx);
       if (jarvisRes.text && jarvisRes.text.length > 5) {
+        // Anchor ANY substantive LLM reply too (not only search results) so a
+        // later "Lanjutkan" can always continue it deterministically.
+        await storeResearchAnchor(env, owner, extractTopic(rawText) ?? rawText, jarvisRes.text).catch(() => {});
         // Best-effort: deliver the flux image produced by the design/outline
         // path alongside its text reply. Fail-closed to text only.
         if (jarvisRes.image && jarvisRes.image.bytes.length > 0) {

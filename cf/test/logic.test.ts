@@ -10,7 +10,7 @@
 
 import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
-import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation } from "../src/lib/ai";
+import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic } from "../src/lib/ai";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
@@ -562,6 +562,16 @@ function testTidyContinuation() {
   assert.strictEqual(tidyContinuation("  Berikut detail lengkapnya.  "), "Berikut detail lengkapnya.", "plain reply trimmed");
 }
 
+function testDetailTopicMarker() {
+  assert.strictEqual(extractTopic("Berikan detail bisnis kerajinan"), "bisnis kerajinan",
+    "'detail' marker routes to a clean search topic");
+  assert.strictEqual(extractTopic("berikan rincian tentang bisnis kerajinan"), "bisnis kerajinan",
+    "'rincian tentang' marker routes to search topic");
+  assert.ok(extractTopic("jelaskan detail cara memulai usaha kopi")?.includes("usaha kopi"),
+    "'jelaskan detail' keeps the subject");
+  assert.strictEqual(extractTopic("Lanjutkan"), null, "pure continuation is NOT a search topic");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -586,6 +596,7 @@ async function main() {
   testFormalWordPreservation();
   testPureContinuation();
   testTidyContinuation();
+  testDetailTopicMarker();
   console.log("LOGIC TESTS PASSED");
 }
 

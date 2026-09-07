@@ -138,6 +138,7 @@ export async function readResearchAnchor(
 }
 
 /** ECC continuation parity: extend the LAST assistant analysis without a new
+ *  web search. The prior reply (already sourced) is the only input, so the
  *  continuation stays on the exact same topic/structure and NEVER degrades into
  *  a clarifying question ("kota Malang ..." bug — M7). Fail-closed: null when
  *  no provider answers, so the caller falls back to a fresh search reply. */
@@ -238,7 +239,7 @@ export function resolveFollowUpAnchor(
 export function extractTopic(text: string): string | null {
   const low = text.trim().toLowerCase();
   const m = low.match(
-    /\b(?:cari|carii|cr|search|riset|reseach|research|studi|study|pelajari|mempelajari|meneliti|tentang|tenteng|tentan|tntg|ringkas|rangkum|summarize|artikel|topik|info|infp|informasi|analis\w*|laporan|laporn|report|review|riviu|perbandingan|bandingkan|perkembangan|ulasan|ulsn|kajian|menurut|menurutmu|bagaimana|gmn|bgmn|apa|apakah|siapa|kenapa|mengapa|kapan|berapa|dimana|di mana)\b(?:\s+(?:itu|apa|yang|kah|adalah|dengan|tentang|mengenai))?\s*[:\-]?\s*(.+)$/,
+    /\b(?:cari|carii|cr|search|riset|reseach|research|studi|study|pelajari|mempelajari|meneliti|tentang|tenteng|tentan|tntg|ringkas|rangkum|summarize|artikel|topik|info|infp|informasi|analis\w*|laporan|laporn|report|review|riviu|perbandingan|bandingkan|perkembangan|ulasan|ulsn|kajian|menurut|menurutmu|bagaimana|gmn|bgmn|apa|apakah|siapa|kenapa|mengapa|kapan|berapa|dimana|di mana|detail|detailin|rinci|rincikan|perinci|perincian|uraikan|jelaskan|lebih detail)\b(?:\s+(?:itu|apa|yang|kah|adalah|dengan|tentang|mengenai))?\s*[:\-]?\s*(.+)$/,
   );
   if (!m) return null;
   // Strip leading filler tokens repeatedly (a token cascade like
