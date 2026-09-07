@@ -59,7 +59,7 @@ function buildFallbackMessages(
 // "terus, kan?") — we anchor it to the most recent assistant analysis instead of
 // wrongly replying "Ok." or "Aksi ditangguhkan.".
 const FOLLOWUP_RE =
-  /\b(lebih dalam|lebih dalam lagi|lebih detail|lebih lanjut|lanjutkan|lanjut|lengkapin|lengkapi|perdalam|perinci|detail|detailin|terus(?:,|kan)?|yang tadi|yg tadi|tadi itu|tambahin|tambahkan|expand|go deeper|jelasin lebih|jelaskan lebih|sampe? tuntas|ceritain lebih|info lebih)\b/i;
+  /\b(lebih dalam|lebih dalam lagi|lebih detail|lebih lanjut|lanjutkan|lanjut|lengkapin|lengkapi|perdalam|perinci|detail|detailin|terus(?:,|kan)?|yang tadi|yg tadi|tadi itu|tambahin|tambahkan|expand|go deeper|jelasin lebih|jelaskan lebih|sampe? tuntas|ceritain lebih|info lebih|maksud saya|maksudku|bukan\s+[^?!.,]{1,40}\s+tapi)\b/i;
 
 /** True if the (already normalized) message is a follow-up request that extends
  *  a prior answer rather than starting a brand-new topic. Read-only. */

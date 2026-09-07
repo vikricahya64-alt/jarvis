@@ -517,6 +517,25 @@ function testResolveFollowUpAnchor() {
     "stale (>15m) answer → no anchor (freshness gate)");
 }
 
+function testFormalWordPreservation() {
+  const n1 = normalizeInput("Riset bisnis jangka panjang tanpa skill minim modal");
+  assert.ok(!n1.includes("tanya"), "tanpa must NOT be autocorrected to tanya");
+  assert.ok(!n1.includes("minum"), "minim must NOT be autocorrected to minum");
+  assert.ok(n1.includes("tanpa skill minim modal"), "formal minimizer phrase preserved verbatim");
+  const n2 = normalizeInput("Bukan minum tapi dengan modal minimal");
+  assert.ok(n2.startsWith("bukan minum tapi dengan modal minimal"),
+    "bukan/tapi/dengan must NOT be autocorrected to buka/topi/dengar");
+  const n3 = normalizeInput("Cari peluang usaha dari kota kecil dengan modal minim");
+  assert.ok(!n3.includes("cari kota"), "dari must NOT be autocorrected to cari");
+  assert.ok(n3.includes("dari kota"), "dari preserved");
+  const n4 = normalizeInput("peluang usaha di pasar untuk pemula");
+  assert.ok(!n4.includes("kasar"), "pasar must NOT be autocorrected to kasar");
+  assert.ok(n4.includes("di pasar untuk pemula"), "pasar/untuk preserved");
+  const n5 = normalizeInput("Riset tentang bisnis yang bisa jalan tanpa modal besar");
+  assert.ok(!n5.includes("uang"), "yang must NOT be autocorrected to uang");
+  assert.ok(n5.includes("yang bisa jalan tanpa modal besar"), "yang/ tanpa preserved");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -538,6 +557,7 @@ async function main() {
   testFormatSourceList();
   testM6Regressions();
   testResolveFollowUpAnchor();
+  testFormalWordPreservation();
   console.log("LOGIC TESTS PASSED");
 }
 
