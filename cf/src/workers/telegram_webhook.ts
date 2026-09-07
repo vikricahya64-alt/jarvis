@@ -25,8 +25,9 @@ import {
   setPrivacyMode, isPrivacyMode,
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
-import { queueStatus, recordTaskCounters, recentContext } from "../lib/db";
-import { searchAndSynthesize, extractTopic, parseTranslate, translateText, isFollowUpQuery, resolveFollowUpAnchor, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond } from "../lib/ai";
+import { queueStatus, recordTaskCounters, recentContext, appendMemory } from "../lib/db";
+import { searchAndSynthesize, extractTopic, parseTranslate, translateText, isFollowUpQuery, resolveFollowUpAnchor, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, isPureContinuation } from "../lib/ai";
+import { continueAnalysis } from "../lib/ai";
 import { getWeatherText } from "../lib/weather";
 
 import { normalizeInput, isEmptyInput } from "../lib/normalize";
@@ -880,6 +881,20 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
         const ctx = await recentContext(env, owner, 8).catch(() => []);
         const anchor = resolveFollowUpAnchor(ctx);
         if (anchor) {
+          // PURE continuation ("Lanjutkan") must EXTEND the last reply, never
+          // re-search a sentence fragment. Fail-closed: if the LLM is down,
+          // fall through to the search-based follow-up so a reply always flows.
+          if (isPureContinuation(text)) {
+            const cont = await continueAnalysis(env, owner, anchor.prior, text);
+            if (cont) {
+              await appendMemory(env, owner, "user", text, anchor.topic).catch(() => {});
+              await appendMemory(env, owner, "assistant", cont, anchor.topic).catch(() => {});
+              if (cont.length > 120) void reflectOnTurn(env, text, cont, []).catch(() => {});
+              await recordTaskCounters(env, "standard", owner);
+              await fire(sendMessage(env, owner, cont));
+              break;
+            }
+          }
           const r = await searchAndSynthesize(env, owner, text, anchor.topic);
           await recordTaskCounters(env, "standard", owner);
           await fire(sendMessage(env, owner, r.reply));

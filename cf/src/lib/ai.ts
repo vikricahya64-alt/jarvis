@@ -74,6 +74,52 @@ export function isFollowUpQuery(text: string): boolean {
   return FOLLOWUP_RE.test(low);
 }
 
+/** True when the message is a PURE continuation command ("Lanjutkan",
+ *  "terus", "selanjutnya", "next") that must EXTEND the prior reply — NOT
+ *  trigger a fresh web search. Strict: a following subject ("Lanjutkan riset
+ *  kompetitor") is a directive with its own object → NOT pure (searches).
+ *  Deterministic, zero budget. */
+export function isPureContinuation(userText: string): boolean {
+  if (!userText) return false;
+  const low = userText.trim().toLowerCase();
+  const head = /^(lanjut|lajut|lanjutin|lanjutkan|terus|teruskan|selanjutnya|next|sambung|sambungkan|continue|ke bagian berikutnya|lebih lanjut)(?:\s*(?:dong|ya|yuk|deh|tolong|aja))?\s*[.!?…,-]?\s*$/;
+  return head.test(low);
+}
+
+/** ECC continuation parity: extend the LAST assistant analysis without a new
+ *  web search. The prior reply (already sourced) is the only input, so the
+ *  continuation stays on the exact same topic/structure and NEVER degrades into
+ *  a clarifying question ("kota Malang ..." bug — M7). Fail-closed: null when
+ *  no provider answers, so the caller falls back to a fresh search reply. */
+export async function continueAnalysis(
+  env: Env,
+  _owner: number,
+  prior: string,
+  userText: string,
+): Promise<string | null> {
+  const step = (userText || "").trim().slice(0, 80);
+  const system = [
+    "Kamu J.A.R.V.I.S., asisten setia pemilik. Tugas: MELANJUTKAN analisis/riset yang terpotong di atas.",
+    "Aturan:",
+    "1. JANGAN mengulang atau meringkas bagian yang sudah ditulis.",
+    "2. LANGSUNG lanjutkan ke bagian berikutnya sesuai struktur yang sudah mulai (mis. jika baru sampai 'Kelebihan', lanjut 'Kekurangan', 'Langkah Memulai', dst. sampai tuntas).",
+    "3. PERTAHANKAN gaya penjawab di atas (judul Bold, poin bernomor, Bahasa Indonesia).",
+    "4. JANGAN bertanya balik ke pemilik di akhir.",
+    "5. Jika semua bagian sudah tuntas, akhiri dengan satu paragraf 'Kesimpulan' yang menutup topik.",
+  ].join("\n");
+  const messages = [
+    { role: "system", content: system },
+    { role: "user", content: `Lanjutkan bagian berikut dari analisis ini (jangan ulang isinya):\n\n${(prior || "").slice(0, 6000)}` },
+  ];
+  try {
+    const groq = await groqRespond(env, step, { prebuiltMessages: messages, topic: "continuation" });
+    if (groq) return groq;
+    return await openrouterRespond(env, step, { prebuiltMessages: messages, topic: "continuation" });
+  } catch {
+    return null;
+  }
+}
+
 /** Derive a research topic from the last assistant analysis (for follow-up
  *  anchoring). Returns the last assistant reply's content as the anchor topic,
  *  or null if there's no prior assistant analysis to build on.
@@ -101,12 +147,22 @@ export function resolveFollowUpAnchor(
     if (typeof c.ts === "number" && now - c.ts > RECENT_MS) return false;
     const t = (c.content || "").trim();
     if (t.length < 30) return false;
-    if (CLARIFY_RE.test(t)) return false;
+    // Only SHORT clarification/questions are rejected as anchors. A long,
+    // substantive answer that merely ENDS with "Apakah Anda ingin…?" is still
+    // a valid anchor — its trailing question is stripped below ("kota Malang"
+    // bug M7), not the whole reply discarded.
+    if (CLARIFY_RE.test(t) && t.length < 120) return false;
     return true;
   });
   if (!lastAssistant || !lastAssistant.content || lastAssistant.content.trim().length < 30) return null;
   const text = lastAssistant.content.trim();
-  return { topic: text.slice(0, 120), prior: text.slice(0, 3000) };
+  // Topic anchor: a CLEAN phrase, not a raw sentence. Strip trailing
+  // question/closing-fluff and clip at a word boundary so follow-up searches
+  // don't re-query sentence fragments ("kota Malang ..." bug) — the topic fed
+  // to the searcher must be noun-phrase-ish, while `prior` keeps the full text.
+  const trimmed = text.replace(/[\s.…]+[.?!…]*\s*$/, "").replace(/\s+/g, " ").trim();
+  const clipped = trimmed.length > 90 ? trimmed.slice(0, 90).replace(/\s\S*$/, "") : trimmed;
+  return { topic: clipped.length > 0 ? clipped : text.slice(0, 90), prior: text.slice(0, 3000) };
 }
 
 /** Pull a concrete topic from a search/summarize request (shared with webhook).

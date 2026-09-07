@@ -10,7 +10,7 @@
 
 import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
-import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor } from "../src/lib/ai";
+import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation } from "../src/lib/ai";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
@@ -536,6 +536,23 @@ function testFormalWordPreservation() {
   assert.ok(n5.includes("yang bisa jalan tanpa modal besar"), "yang/ tanpa preserved");
 }
 
+function testPureContinuation() {
+  for (const c of ["Lanjutkan", "Lanjut", "lanjutin", "terus", "Teruskan", "selanjutnya", "next", "sambung"]) {
+    assert.strictEqual(isPureContinuation(c), true, `"${c}" is a pure continuation`);
+  }
+  for (const c of ["Berikan detail bisnis kerajinan", "Lanjutkan riset kompetitor", "cari detail", "lebih dalam soal budidaya kopi"]) {
+    assert.strictEqual(isPureContinuation(c), false, `"${c}" is NOT a pure continuation`);
+  }
+  const now = Date.now();
+  const rec = (content: string) => ({ role: "assistant" as const, content, ts: now });
+  const anchor = resolveFollowUpAnchor([rec("**Kelebihan Bisnis Kerajinan:**\n1. Modal sangat minim karena bahan utama dari barang daur ulang yang mudah didapatkan. 2. Pasar besar: wisatawan yang berkunjung ke Malang, butuh suvenir khas. 3. Bisa juga dijual online via e-commerce dan marketplace. Apakah Anda ingin tahu lebih lanjut?")]);
+  assert.ok(anchor, "anchor resolves");
+  assert.ok(anchor!.topic.length > 0 && anchor!.topic.length <= 90, "anchor topic clipped & bounded");
+  assert.ok(!/\?|ingin tahu lebih/.test(anchor!.topic), "anchor topic has no trailing question-cliff");
+  const anchor2 = resolveFollowUpAnchor([rec("Analisis bisnis jangka panjang tanpa skill minim modal dengan empat bagian pembahasan yang lengkap dan rinci plus strategi pasca bertahun-tahun menjalankannya lalu langkah bertahap.")]);
+  assert.ok(anchor2 && anchor2.topic.length <= 90 && !anchor2.topic.endsWith("dan"), "long anchor clipped at word bound");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -558,6 +575,7 @@ async function main() {
   testM6Regressions();
   testResolveFollowUpAnchor();
   testFormalWordPreservation();
+  testPureContinuation();
   console.log("LOGIC TESTS PASSED");
 }
 
