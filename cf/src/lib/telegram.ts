@@ -157,6 +157,41 @@ export async function sendMessage(
   return call(env, "sendMessage", body);
 }
 
+/** Deliver a conversational reply to the owner with one retry plus a
+ *  best-effort diagnostic if both attempts fail. Never throws (fire-and-forget
+ *  contract — a Telegram hiccup must not turn into a 5xx retry storm), but
+ *  unlike bare fire() a failed reply is never silently dropped: the owner is
+ *  told the answer exists and how to regain it. */
+export async function deliverSmartReply(
+  env: { TELEGRAM_TOKEN?: string },
+  chatId: number,
+  text: string,
+  retryDelayMs = 800,
+): Promise<void> {
+  try {
+    await sendMessage(env, chatId, text);
+    return;
+  } catch (e) {
+    console.error("[telegram] reply send failed (retrying):", (e as Error).message);
+  }
+  try {
+    await new Promise((r) => setTimeout(r, retryDelayMs));
+    await sendMessage(env, chatId, text);
+    return;
+  } catch (e) {
+    console.error("[telegram] reply send failed (retry):", (e as Error).message, (e as Error).stack);
+  }
+  try {
+    await sendMessage(
+      env,
+      chatId,
+      "⚠️ J.A.R.V.I.S. punya jawabannya, tapi Telegram gagal mengirimkannya ke kamu (2×). Kirim ulang pertanyaan atau cek /status.",
+    );
+  } catch (e) {
+    console.error("[telegram] diagnostic send failed:", (e as Error).message);
+  }
+}
+
 export async function answerCallbackQuery(
   env: { TELEGRAM_TOKEN?: string },
   callbackQueryId: string,
