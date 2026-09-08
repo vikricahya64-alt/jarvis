@@ -108,13 +108,20 @@ You should see `"pending_update_count": 0`.
 
 ## 4. Configure Supabase Database Webhook (triggers orchestrator)
 
-1. Supabase Dashboard → **Database → Webhooks** → **Create a new webhook**.
-2. **Type:** PostgreSQL Table.
-3. **Table:** `tasks`.
-4. **Events:** `INSERT`.
-5. **Webhook URL:** `https://<your-app>.vercel.app/api/orchestrator`.
-6. **Headers:** `Content-Type: application/json`.
-7. Save.
+> Auth: `/api/orchestrator` and `/api/simulator_proxy` require a shared secret
+> (`INTERNAL_AUTH_TOKEN` env on Vercel). Requests must send it as
+> `Authorization: Bearer <token>` or `X-Internal-Token: <token>`. Requests
+> without the header (or without the env being set) get `401` — fail-closed.
+
+1. `vercel env add INTERNAL_AUTH_TOKEN production` (set a strong random token, e.g. `openssl rand -hex 32`).
+2. Supabase Dashboard → **Database → Webhooks** → **Create a new webhook**.
+3. **Type:** PostgreSQL Table.
+4. **Table:** `tasks`.
+5. **Events:** `INSERT`.
+6. **Webhook URL:** `https://<your-app>.vercel.app/api/orchestrator`.
+7. **Headers:** `Content-Type: application/json` and
+   `Authorization: Bearer <INTERNAL_AUTH_TOKEN>`.
+8. Save.
 
 Now, whenever a row is inserted into `tasks`, Supabase POSTs the new record to
 `/api/orchestrator`, which runs the pipeline.

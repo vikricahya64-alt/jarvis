@@ -116,6 +116,11 @@ Env vars on Vercel (Project → Settings → Environment Variables, Production):
 `vercel.json` already registers cron-trigger + oauth2-callback functions with
 maxDuration 60.
 
+Security (fail-closed): `CRON_SECRET` is REQUIRED — Vercel Cron injects it as
+`Authorization: Bearer $CRON_SECRET`; if unset, `/api/cron` and
+`/api/maintenance` return 401. `INTERNAL_AUTH_TOKEN` is REQUIRED for
+`/api/orchestrator` and `/api/simulator_proxy` (same Bearer header).
+
 ---
 
 ## 7. Testing checklist

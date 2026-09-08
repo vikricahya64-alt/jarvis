@@ -55,7 +55,7 @@ export interface ErrorPattern {
 export interface RecoveryAction {
   id: string;
   timestamp: number;
-  type: "auto_revert" | "manual_revert" | "config_reset" | "dependency_update";
+  type: "auto_revert" | "manual_revert" | "config_reset" | "dependency_update" | "revert_needed";
   fromVersion: string;
   toVersion: string;
   reason: string;
@@ -258,7 +258,9 @@ export async function checkAutoRevert(env: Env): Promise<{
   }
 }
 
-/** Execute auto-revert to the previous healthy version. */
+/** Assess whether an auto-revert SHOULD happen. NOTE: the worker cannot
+ *  truly switch an already-deployed version (D1 bookkeeping only), so this
+ *  surfaces a REVERT_NEEDED advisory rather than fabricating a revert. */
 export async function executeAutoRevert(
   env: Env,
   reason: string,
@@ -267,40 +269,28 @@ export async function executeAutoRevert(
     const active = await getActiveVersion(env);
     if (!active) return null;
 
-    // Find the previous healthy version
-    const previous = await env.DB.prepare(
-      `SELECT version FROM deploy_versions
-       WHERE status = 'rolled_back' AND error_rate < ?
-       ORDER BY deployed_at DESC LIMIT 1`,
-    ).bind(AUTO_REVERT_THRESHOLDS.errorRateThreshold).first<{ version: string }>();
-
-    const targetVersion = previous?.version ?? "unknown";
-
-    // Mark current as rolled back
-    await env.DB.prepare(
-      `UPDATE deploy_versions SET status = 'rolled_back' WHERE version = ?`,
-    ).bind(active.version).run();
-
-    // Record recovery action
-    const actionId = `revert_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    // Honest behavior: record that a revert is REQUIRED (owner must deploy
+    // the rollback). The old code marked status='rolled_back' and inserted a
+    // success=true row — a fabricated "auto-revert" that switched nothing.
+    const actionId = `revert_need_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     await env.DB.prepare(
       `INSERT INTO recovery_actions (id, timestamp, type, from_version, to_version, reason, success)
-       VALUES (?, ?, 'auto_revert', ?, ?, ?, 1)`,
-    ).bind(actionId, Date.now(), active.version, targetVersion, reason).run();
+       VALUES (?, ?, 'revert_needed', ?, 'manual', ?, 0)`,
+    ).bind(actionId, Date.now(), active.version, reason).run();
 
-    console.log(`[deploy_safety] AUTO-REVERT: ${active.version} → ${targetVersion} (${reason})`);
+    console.warn(`[deploy_safety] REVERT NEEDED (manual): ${active.version} — ${reason}`);
 
     return {
       id: actionId,
       timestamp: Date.now(),
-      type: "auto_revert",
+      type: "revert_needed",
       fromVersion: active.version,
-      toVersion: targetVersion,
+      toVersion: "manual",
       reason,
-      success: true,
+      success: false,
     };
   } catch (e) {
-    console.error(`[deploy_safety] auto-revert failed: ${(e as Error).message}`);
+    console.error(`[deploy_safety] revert assessment failed: ${(e as Error).message}`);
     return null;
   }
 }
@@ -498,7 +488,7 @@ export interface DeploySafetyResult {
   recoveryActions: number;
 }
 
-/** Main deploy safety loop. Checks health, detects patterns, auto-reverts if needed. */
+/** Main deploy safety loop. Checks health, detects patterns, flags reverts. */
 export async function runDeploySafetyLoop(env: Env): Promise<DeploySafetyResult> {
   const result: DeploySafetyResult = {
     health: await getVersionHealth(env),
@@ -508,14 +498,19 @@ export async function runDeploySafetyLoop(env: Env): Promise<DeploySafetyResult>
   };
 
   try {
-    // 1) Check if auto-revert is needed
+    // 1) Assess whether a revert is needed. The worker cannot roll back a
+    //    deployed version itself, so a triggered check records a
+    //    REVERT_NEEDED action (success=false). autoReverted stays false
+    //    unless a real sync revert actually happened (never today).
     const revertCheck = await checkAutoRevert(env);
     if (revertCheck?.shouldRevert) {
       const revertResult = await executeAutoRevert(env, revertCheck.reason);
       if (revertResult) {
-        result.autoReverted = true;
+        if (revertResult.success) {
+          result.autoReverted = true;
+        }
         result.recoveryActions++;
-        console.log(`[deploy_safety] Auto-reverted: ${revertCheck.reason}`);
+        console.warn(`[deploy_safety] Revert flagged (manual action required): ${revertCheck.reason}`);
       }
     }
 

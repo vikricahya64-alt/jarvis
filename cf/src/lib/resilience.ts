@@ -165,8 +165,11 @@ export async function acquireCronLock(env: Env, lockName: string, ttlMs = 55000)
        )`,
     ).bind(lockName, "worker", now, expires, lockName, now).run();
     return ins.meta.changes > 0;
-  } catch {
-    return true; // availability over strictness on lock failure
+  } catch (e) {
+    // Fail CLOSED: if we cannot confirm exclusive ownership, the job must not
+    // run twice (owner sovereignty: no duplicate/overlapping cron side effects).
+    console.error("[cron_lock] acquire failed, refusing to run", (e as Error).message);
+    return false;
   }
 }
 
@@ -176,7 +179,9 @@ export async function releaseCronLock(env: Env, lockName: string): Promise<void>
     await env.DB.prepare(
       `UPDATE cron_locks SET expires_at=0 WHERE lock_name=?`,
     ).bind(lockName).run();
-  } catch { /* best-effort */ }
+  } catch {
+    // best-effort; an un-released lock simply expires via TTL
+  }
 }
 
 /** Append an observability row to request_log (provider, step, status, latency). */

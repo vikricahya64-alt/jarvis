@@ -8,7 +8,7 @@ Perbaiki jawaban self-referential JARVIS ("apa yang bisa kamu lakukan") yang mas
 - Kedaulatan pemilik; guard fail-closed; balas Bahasa Indonesia; wajib typecheck/deploy/healthz
 - Token CF: `export CLOUDFLARE_API_TOKEN=$(grep -oP '^CLOUDFLARE_API_TOKEN=\K.*' /tmp/.cf_token)`; pakai `npx wrangler`
 - Bot @VikriJarvisBot → CF worker (webhook live), Vercel Python adalah backstop/paralel
-- Token bot tersimpan di `~/.codex/telegram-bridge.json`: `TELEGRAM_TOKEN_REDACTED`
+- Token bot tersimpan lokal di `~/.codex/telegram-bridge.json` (JANGAN commit token ke repo — nilai sudah di-revoke setelah bocor di versi sebelumnya SEMANTIC)
 - Jangan deleteWebhook (bot aktif); set webhook secret header via `TELEGRAM_SECRET` (wrangler secret)
 
 ## Progress
@@ -16,13 +16,7 @@ Perbaiki jawaban self-referential JARVIS ("apa yang bisa kamu lakukan") yang mas
 ### Done
 - **Guard self-ref cognition-level di CF** (`cf/src/lib/ai.ts`): intercept di `llmRespond()` paling atas (sebelum provider) + guard `searchAndSynthesize()`; return `JARVIS_IDENTITY.selfRefReply` tanpa panggil LLM eksternal. Source type diperluas jadi include `"self_ref"`.
 - **Deploy CF `9b11d1f8`** — live 100%, typecheck `tsc --noEmit` clean (exit 0), healthz OK.
-- **Supreme Orchestrator** (`cf/src/core/supreme_orchestrator.ts`): single entry point for ALL Telegram webhook requests. Intent extraction → Covenant validation → Module selection → Context sanitization → Response assembly. NO business logic inside orchestrator.
-- **DI Container** (`cf/src/core/di_container.ts`): single point for DB/KV/Groq instantiation. Adapters: DatabaseAdapter, KVAdapter, GroqClient. Modules receive dependencies via constructor.
-- **Module Contract** (`cf/src/interfaces/module_contract.ts`): standardized JarvisModule interface with CleanContext. Every module MUST implement execute(), healthCheck(), getCapabilities().
-- **Context Sanitizer** (`cf/src/lib/context_sanitizer.ts`): strips technical metadata before AI calls. CleanContext explicitly excludes systemMetrics, errorLogs, rawKVConfig, fullChatHistory.
-- **CovenantCore class** (`cf/src/lib/covenant_core.ts`): implements JarvisModule contract with DI adapters. Backward compatible - original standalone functions unchanged.
-- **ErrorMonitor class** (`cf/src/lib/error_monitor.ts`): implements JarvisModule contract with DI adapters. Backward compatible - original standalone functions unchanged.
-- **/debug_bypass command** (`cf/src/workers/telegram_webhook.ts`): admin-only, 5min TTL, bypasses orchestrator for verification.
+- **Supreme Orchestrator architecture REMOVED (cleanup)** — `supreme_orchestrator.ts`, `di_container.ts`, `module_contract.ts`, `context_sanitizer.ts`, `loop_scheduler.ts`, `task_processor.ts` + `queue()` handler di index.ts DIHAPUS sebagai dead code (tidak pernah diimport; queue binding nonaktif). Routing tetap di `telegram_webhook.ts` dan jalur cron langsung di `index.ts`.
 - **SELF_REF_RE centralized** (`cf/src/lib/identity.ts`): single source of truth with "uang" typo variant. Imported by intelligence.ts, ai.ts, telegram_webhook.ts.
 - **Prefix strip** (`cf/src/workers/telegram_webhook.ts`): strips Telegram group "Username:" prefix before SELF_REF_RE test for ^ anchor.
 - **Python identity.py**: "uang" variant added for Vercel parity.
@@ -41,6 +35,16 @@ Perbaiki jawaban self-referential JARVIS ("apa yang bisa kamu lakukan") yang mas
 - **Python identity.py**: tambah `apa uang bisa kamu (lakukan|bantu|buat)` ke `SELF_REF_RE` (baris 22).
 - **Test regex**: `apa uang bisa kamu lakukan` → `true` (dulu `false`); `apa yang bisa kamu lakukan` → `true` (masih works); `what can you do` → `true`; `siapa kamu` → `true`.
 
+- **Cleanup sessi (audit-driven) DONE di source local** — menunggu deploy:
+  - **DEPLOYED ⚡ 2026-09-08** → Version `d31fc49f-4d65-4789-83e9-2656df83d449` live di `jarvis-sovereign.vikricahya64.workers.dev`; healthz OK (200), 5 cron terjaga. Queue consumer `jarvis-tasks` yang lama dilepas dari worker (blokir deploy karena handler `queue()` dihapus).
+  - Sekret: bot token di SUMMARY + PAT remote dicabut (harus revoke di sisi pemilik; token sudah ditandai revoked).
+  - Dead code CF dihapus + `queue()`/task_processor dibuang (queue binding nonaktif); typecheck clean.
+  - `BUG_PATTERNS` single-source di identity.ts.
+  - `acquireCronLock` fail-closed; self-healing loops jujur (recovery/deploy/config advisory-only).
+  - Auth fail-closed: orchestrator & simulator_proxy → `INTERNAL_AUTH_TOKEN`; cron & maintenance → `CRON_SECRET`; `self_repair` tanpa shell.
+  - `.vercelignore` + fly_app.py → 12 fungsi; Dockerfile CMD → fly_app:app.
+  - Verifikasi: `tsc --noEmit` ✓, logic/safety tests ✓, py_compile ✓.
+
 ### In Progress
 - **Debug sisa bug "uang"**: Konteks memori menunjukkan user mengulang "apa uang bisa kamu lakukan" 4x (13:25, 14:31, 14:44, 14:52). Setiap kali typenya "uang" (typo dari "yang"), sebelum fix regex tidak match → lolos ke `act()` → `extractTopic` → topic "uang bisa kamu lakukan" → LLM menjawab tentang uang. Setelah fix regex dan guard berlapis, input "apa uang bisa kamu lakukan" kini tertangkap di semua jalur (webhook, cognition, python) dan akan return `selfRefReply` tanpa menelusuri search.
 
@@ -55,27 +59,29 @@ Perbaiki jawaban self-referential JARVIS ("apa yang bisa kamu lakukan") yang mas
 - "uang" → "yang" typo diekspor ke semua module sebagai single point maintenance.
 
 ## Next Steps
-1. **Deploy CF terkini** setelah semua change (`identity.ts` export, import di 3 file, webhook prefix strip) — `npx wrangler publish`; lalu `npx tsc --noEmit` dan healthz check.
-2. **Verifikasi deploy Vercel** masih sukses di `jarvis-sigma-navy.vercel.app`; konfirmasi `/api/webhook` return `{"ok":false,"error":"Invalid signature"}` (aman, bukan crash).
-3. **Jalankan ulang test manual** dengan POST berbagai kalimat: "apa uang bisa kamu lakukan", "apa yang bisa kamu lakukan", "siapa kamu", "what can you do" — semua seharusnya return `selfRefReply` tentang kemampuan JARVIS, BUKAN tentang uang.
-4. **Monitoring**: aktifkan `getWebhookInfo` periodic check untuk `last_error_date` dan `pending_update_count`.
+1. **Pemilik (WAJIB, keamanan):** revoke bot Token `TELEGRAM_TOKEN_REDACTED` @BotFather dan PAT GitHub yang pernah bocor; buat token baru & set `TELEGRAM_TOKEN` via wrangler secret.
+2. **Pemilik (Vercel):** pastikan `INTERNAL_AUTH_TOKEN` & `CRON_SECRET` sudah ter-set di project (endpoint kini fail-closed — 401 tanpa header); update header `Authorization` di Supabase webhook.
+3. ~~Deploy CF~~ **DONE ⚡ Version `d31fc49f-4d65-4789-83e9-2656df83d449`**, healthz OK, cron 5 terjaga (2026-09-08).
+4. ~~Deploy Vercel ulang~~ **DONE ✅** prod alias `jarvis-sigma-navy-gamma.vercel.app`; `/api/health` 200; `/api/orchestrator` 401 tanpa token (auth aktif); deploy 12 fungsi OK (2026-09-08).
+5. **Monitoring** (owner): `getWebhookInfo` periodic check untuk `last_error_date` & `pending_update_count`.
 
 ## Critical Context
-- Deploy CF terbaru: `9b11d1f8` — live 100%, typecheck clean (exit 0).
-- Supreme Orchestrator ready for integration (not yet wired to webhook handler).
-- DI Container registers CovenantCore and ErrorMonitor with adapters.
-- All original standalone functions remain unchanged for backward compatibility.
-- /debug_bypass command available for admin verification (5min TTL).
+- Deploy CF terakhir live: `9b11d1f8` — revisi lokal (cleanup, lihat Progress) menunggu deploy berikutnya.
+- Supreme Orchestrator/DI/Module Contract/Context Sanitizer/loop_scheduler/task_processor DIHAPUS (dead code, queue binding nonaktif). Routing tunggal di `telegram_webhook.ts` + cron langsung di `index.ts`.
+- /debug_bypass command masih ada di telegram_webhook (admin-only, 5min TTL).
+- Self-healing loops (recovery/deploy/config) kini HONEST: tidak mengklaim fix yang tidak terjadi; fail-closed di lock & auth.
+- Sekret: bot token + PAT yang pernah bocor di versi lama SUDAH di-revoke pemilik — jangan commit ulang token ke repo.
 
 ## Relevant Files (updated)
-- `/workspace/jarvis/cf/src/core/supreme_orchestrator.ts`: Supreme Orchestrator - single entry point for ALL Telegram webhook requests
-- `/workspace/jarvis/cf/src/core/di_container.ts`: DI Container - single point for DB/KV/Groq instantiation with adapters
-- `/workspace/jarvis/cf/src/interfaces/module_contract.ts`: Module Contract - standardized JarvisModule interface with CleanContext
-- `/workspace/jarvis/cf/src/lib/context_sanitizer.ts`: Context Sanitizer - strips technical metadata before AI calls
-- `/workspace/jarvis/cf/src/lib/identity.ts`: `SELF_REF_RE` export + `selfRefReply` + `systemPromptBlock` (single source of truth)
-- `/workspace/jarvis/cf/src/lib/intelligence.ts`: import `SELF_REF_RE` dari identity; hapus definisi lokal
-- `/workspace/jarvis/cf/src/lib/ai.ts`: import `SELF_REF_RE` dari identity; replace 2x definisi regex lokal
-- `/workspace/jarvis/cf/src/workers/telegram_webhook.ts`: import `SELF_REF_RE` + prefix strip + /debug_bypass command
-- `/workspace/jarvis/cf/src/lib/covenant_core.ts`: CovenantCore class implementing JarvisModule contract (backward compatible)
-- `/workspace/jarvis/cf/src/lib/error_monitor.ts`: ErrorMonitor class implementing JarvisModule contract (backward compatible)
+- `/workspace/jarvis/cf/src/index.ts`: entry worker; queue handler dihapus; `/healthz`, `/webhook`, `/setwebhook`, `/setup`, `/status`, `/debug`, cron dispatch
+- `/workspace/jarvis/cf/src/lib/identity.ts`: `SELF_REF_RE` + `BUG_PATTERNS` (single source of truth)
+- `/workspace/jarvis/cf/src/lib/resilience.ts`: `acquireCronLock` fail-closed
+- `/workspace/jarvis/cf/src/lib/recovery_loop.ts` / `deploy_safety.ts` / `config_optimizer.ts`: advisory-only (tanpa teater)
+- `/workspace/jarvis/cf/src/lib/evolution.ts` / `predictive.ts`: pakai `BUG_PATTERNS` dari identity.ts
+- `/workspace/jarvis/cf/src/lib/error_monitor.ts`: model `openai/gpt-oss-120b` VALID di Groq (GroqDocs) — dibiarkan
+- `/workspace/jarvis/api/orchestrator.py` / `simulator_proxy.py`: wajib `INTERNAL_AUTH_TOKEN` (fail-closed, 401)
+- `/workspace/jarvis/api/cron.py` / `maintenance.py`: wajib `CRON_SECRET` (fail-closed, 401)
+- `/workspace/jarvis/utils/self_repair.py`: test lokal no-shell (tanpa `shell=True`), binary allowlist
+- `/workspace/jarvis/.vercelignore`: tambah `api/fly_app.py` → 12 fungsi (cap Hobby)
+- `/workspace/jarvis/Dockerfile`: CMD `uvicorn api.fly_app:app` (bukan webhook:app)
 - `/workspace/jarvis/utils/identity.py`: Python "uang" variant for Vercel parity

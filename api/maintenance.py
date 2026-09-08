@@ -7,6 +7,7 @@ Protected by the same CRON_SECRET header as /api/cron. Bounded and
 non-fatal: each stage is isolated so one failure never aborts the rest.
 """
 import os
+import hmac
 import json
 import logging
 from http.server import BaseHTTPRequestHandler
@@ -43,7 +44,7 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         token = self.headers.get("Authorization", "").replace("Bearer ", "")
         secret = os.getenv("CRON_SECRET", "")
-        if secret and token != secret:
+        if not secret or not hmac.compare_digest(token, secret):
             self._send_json({"ok": False, "error": "Unauthorized"}, 401)
             return
         try:

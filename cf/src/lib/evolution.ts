@@ -28,6 +28,7 @@
 import { Env, searchMemory, rememberMemory, statAgentTasksRecent } from "./db";
 import { llmRespond } from "./ai";
 import { isAutonomyPaused } from "./command_hierarchy";
+import { BUG_PATTERNS } from "./identity";
 
 // Evidence-warrant gate: an insight must rest on at least this many supporting
 // episodic memories before the agent may act on it (phantom-guardrail guard).
@@ -487,7 +488,8 @@ export async function validateInsightsViaStability(env: Env, now = Date.now()): 
  *  being promoted. Bounded per run (10) so preference growth stays on a leash.
  *  ON CONFLICT keeps the first promotion (no dup key spam). */
 export async function promoteInsightsToPreferences(env: Env, now = Date.now()): Promise<number> {
-  const BUG_PATTERNS = /uang bisa kamu|uang dapat digunakan|apa uang bisa/i;
+  // Filter out insights based on old bug patterns (uang typo) — single source
+  // of truth in identity.ts (BUG_PATTERNS).
   try {
     const { results } = await env.DB.prepare(
       `SELECT id, rule_text, category, evidence_count, confidence
@@ -559,7 +561,6 @@ export async function listInsights(env: Env, includeDisabled = false): Promise<I
       evidence_count: number; confidence: number; disabled: number;
     }>();
     // Filter out insights based on old bug patterns (uang typo)
-    const BUG_PATTERNS = /uang bisa kamu|uang dapat digunakan|apa uang bisa/i;
     return (results ?? [])
       .filter((r) => !BUG_PATTERNS.test(r.rule_text))
       .map((r) => ({

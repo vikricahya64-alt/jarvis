@@ -52,7 +52,7 @@ RUN chmod +x /app/healthcheck.sh /app/app.py 2>/dev/null || true
 USER jarvis
 EXPOSE 8080
 
-# Default: run the ASGI app (Uvicorn single worker). Override CMD for the L9
-# legacy monitor or an ephemeral worker by passing a different command.
-CMD ["uvicorn", "api.webhook:app", "--host", "0.0.0.0", "--port", "8080", \
+# Default: run the ASGI app (Uvicorn single worker). api/fly_app.py owns the
+# FastAPI `app` object; api/webhook.py is only a legacy BaseHTTPRequestHandler.
+CMD ["uvicorn", "api.fly_app:app", "--host", "0.0.0.0", "--port", "8080", \
      "--workers", "1", "--no-access-log"]

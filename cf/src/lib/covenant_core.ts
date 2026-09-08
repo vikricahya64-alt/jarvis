@@ -339,7 +339,7 @@ export class CovenantCore {
      import { CovenantCore } from "./lib/covenant_core";
      const core = new CovenantCore(dbAdapter, kvAdapter, groqAdapter);
    
-   The DI container (di_container.ts) registers this class so the Supreme
-   Orchestrator can select it via the module registry. No existing code is
-   broken by this addition.
+   Covenant Core is a class wrapper for the standalone covenant helpers so
+   other modules (e.g. the webhook route) can invoke it via one handle.
+   Original standalone functions remain exported and unchanged.
    ======================================================================== */

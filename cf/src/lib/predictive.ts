@@ -42,6 +42,7 @@ import { Env, pendingProposals } from "./db";
 import { listInsights, getActivePreferences } from "./evolution";
 import { isAutonomyPaused } from "./command_hierarchy";
 import { getScheduledTasks } from "./maestro";
+import { BUG_PATTERNS } from "./identity";
 
 export interface Suggestion {
   id: number;
@@ -162,7 +163,6 @@ export async function gatherSuggestionCandidates(
 
   // 3) Insight signals — a high-confidence, never-validated lesson is worth the
   //    owner confirming (lights up the L13 warrant loop). Only moderately urgent.
-  const BUG_PATTERNS = /uang bisa kamu|uang dapat digunakan|apa uang bisa/i;
   const insights = await listInsights(env, false).catch(() => []);
   for (const ins of insights) {
     const key = `insight:${ins.id}`;

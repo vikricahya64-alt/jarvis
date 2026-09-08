@@ -10,7 +10,7 @@
 //         anything outside bounds → suggest to owner.
 //=====================================================================
 
-import { Env, getDmsConfig, writeDmsConfig } from "./db";
+import { Env } from "./db";
 
 /** Configuration metrics snapshot. */
 export interface ConfigMetrics {
@@ -34,14 +34,6 @@ export interface ConfigSuggestion {
   reason: string;
   autoApply: boolean; // true if safe to auto-apply
 }
-
-/** Safe bounds for auto-optimization. */
-const OPTIMIZATION_BOUNDS = {
-  maxContextTurns: { min: 3, max: 10, default: 6 },
-  maxMemorySearch: { min: 2, max: 10, default: 3 },
-  conversationPruneDays: { min: 3, max: 30, default: 7 },
-  memoryDecayHalfLife: { min: 7, max: 90, default: 30 },
-};
 
 /** Collect current system metrics for optimization decisions. */
 export async function collectMetrics(env: Env): Promise<ConfigMetrics> {
@@ -108,7 +100,7 @@ export function analyzeOptimizations(metrics: ConfigMetrics): ConfigSuggestion[]
       currentValue: "6",
       suggestedValue: "4",
       reason: `Error rate tinggi (${(metrics.errorRate * 100).toFixed(1)}%), kurangi konteks untuk efisiensi.`,
-      autoApply: true,
+      autoApply: false,
     });
   }
 
@@ -119,7 +111,7 @@ export function analyzeOptimizations(metrics: ConfigMetrics): ConfigSuggestion[]
       currentValue: "30",
       suggestedValue: "15",
       reason: `Memory pressure tinggi (${(metrics.memoryPressure * 100).toFixed(0)}%), percepat decay.`,
-      autoApply: true,
+      autoApply: false,
     });
   }
 
@@ -141,48 +133,26 @@ export function analyzeOptimizations(metrics: ConfigMetrics): ConfigSuggestion[]
       currentValue: "6",
       suggestedValue: "8",
       reason: "System stabil, bisa tambah konteks untuk jawaban lebih baik.",
-      autoApply: true,
+      autoApply: false,
     });
   }
 
   return suggestions;
 }
 
-/** Apply safe auto-optimizations. Returns applied changes. */
-export async function applyOptimizations(
-  env: Env,
-  suggestions: ConfigSuggestion[],
-): Promise<string[]> {
-  const applied: string[] = [];
-
-  for (const s of suggestions) {
-    if (!s.autoApply) continue;
-
-    // Validate within bounds
-    const bounds = OPTIMIZATION_BOUNDS[s.key as keyof typeof OPTIMIZATION_BOUNDS];
-    if (!bounds) continue;
-
-    const newVal = Number(s.suggestedValue);
-    if (!Number.isFinite(newVal) || newVal < bounds.min || newVal > bounds.max) continue;
-
-    // Apply to D1 config
-    try {
-      const cfg = await getDmsConfig(env, 0); // owner 0 = system config
-      const configKey = `opt_${s.key}`;
-      (cfg as Record<string, unknown>)[configKey] = newVal;
-      await writeDmsConfig(env, 0, cfg);
-      applied.push(`${s.key}: ${s.currentValue} → ${s.suggestedValue}`);
-    } catch { /* availability */ }
-  }
-
-  return applied;
-}
+/**
+ * Advisory-only auto-optimization: these tuning knobs (maxContextTurns,
+ * maxMemorySearch, ...) currently have NO consumer — the old code wrote
+ * `opt_<key>` into DMS config that nothing ever read. Honest behavior is to
+ * surface suggestions to the owner (via the report) and never pretend a
+ * silent D1 write changed behavior. Always returns [] by design.
+ */
+export const applyOptimizations = async (): Promise<string[]> => [];
 
 /** Format optimization report for Telegram. */
 export function formatOptimizationReport(
   metrics: ConfigMetrics,
   suggestions: ConfigSuggestion[],
-  applied: string[],
 ): string {
   const lines = ["⚙️ *Config Optimization Report*", ""];
 
@@ -193,23 +163,15 @@ export function formatOptimizationReport(
   lines.push(`  Cron success: ${(metrics.cronSuccessRate * 100).toFixed(0)}%`);
   lines.push("");
 
-  // Suggestions
+  // Suggestions (advisory only — no auto-apply exists today; knobs have no consumer)
   if (suggestions.length > 0) {
-    lines.push("*Saran:*");
+    lines.push("*Saran (perlu review owner, belum ada auto-apply):*");
     for (const s of suggestions) {
-      const autoTag = s.autoApply ? " ✅" : " ⚠️";
-      lines.push(`  • ${s.key}: ${s.suggestedValue}${autoTag}`);
+      lines.push(`  • ${s.key}: ${s.suggestedValue} ⚠️`);
       lines.push(`    ${s.reason}`);
     }
-  }
-
-  // Applied changes
-  if (applied.length > 0) {
-    lines.push("");
-    lines.push("*Auto-applied:*");
-    for (const a of applied) {
-      lines.push(`  ✅ ${a}`);
-    }
+  } else {
+    lines.push("✅ Tidak ada saran tuning.");
   }
 
   return lines.join("\n");
@@ -223,6 +185,6 @@ export async function runConfigOptimization(env: Env): Promise<{
 }> {
   const metrics = await collectMetrics(env);
   const suggestions = analyzeOptimizations(metrics);
-  const applied = await applyOptimizations(env, suggestions);
+  const applied = await applyOptimizations();
   return { metrics, suggestions, applied };
 }

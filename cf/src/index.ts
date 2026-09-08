@@ -14,7 +14,7 @@ import { fireDueAgentRules } from "./lib/agent_rules";
 import { handleUpdate, ensureWebhook } from "./workers/telegram_webhook";
 import { setWebhook, sendMessage, getWebhookInfo, getMe, setMyCommands } from "./lib/telegram";
 import { runDms } from "./daemons/dead_mans_switch";
-import { processMessage, escalateToDms, TaskMessage } from "./workers/task_processor";
+
 import { requireCert } from "./lib/zero_trust";
 import { covenantStatusText, validateActionAgainstCovenant, signClause, isCovenantManagement, covenantHash } from "./lib/covenant_core";
 import { identityStatusText, createEpoch, verifyContinuity, markEpochVerified } from "./lib/identity_anchor";
@@ -106,14 +106,6 @@ function certOr(request: Request, fallback: boolean): boolean {
     request.headers.has("Cloudflare-Client-Cert-Subject");
   if (!hasCertHeaders) return fallback;
   return requireCert(request).ok;
-}
-
-/** Read a numeric env var with a default. */
-function numberOrDefault(env: Env, key: string, dflt: number): number {
-  const raw = env[key as keyof Env];
-  if (typeof raw !== "string" || raw === "") return dflt;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : dflt;
 }
 
 /** Compose + send the Sunday obedience report to the owner via Telegram. */
@@ -626,25 +618,6 @@ version: "m8-v29-544fb547",
     } finally {
       await new Promise((r) => setTimeout(r, 0));
       await releaseCronLock(env, lockName);
-    }
-  },
-
-  //----------------------------------------------------------------------
-  // Queue consumer entry — bound consumer ("jarvis-tasks").
-  //----------------------------------------------------------------------
-  async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
-    for (const message of batch.messages) {
-      const msg = message.body as TaskMessage;
-      const outcome = await processMessage(env, msg);
-      if (outcome === "ok") {
-        message.ack();
-      } else if (outcome === "retry") {
-        const attemptsSoFar = message.attempts ?? 1;
-        const maxRetries = numberOrDefault(env, "QUEUE_MAX_RETRIES", 3);
-        if (attemptsSoFar >= maxRetries) {
-          await escalateToDms(env, msg.ownerId, `queue_dlq for ${msg.correlationId}`);
-        }
-      }
     }
   },
 } satisfies ExportedHandler<Env>;
