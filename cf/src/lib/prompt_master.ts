@@ -29,6 +29,8 @@ BENTUK OUTPUT WAJIB (reproduksi strukturnya persis):
 • Terakhir (opsional, maks 5 baris): CATATAN: <catatan pemakaian singkat>.
 
 DILARANG: menulis program, kode jawaban, atau mengerjakan permintaan pemilik secara langsung.
+Blok PROMPT DIISI TEKS INSTRUKSI saja — JANGAN PERNAH memasukkan baris kode/program jawaban
+(import, def, const, print, dsb) ke dalamnya, meskipun diminta "prompt untuk <bahasa>".
 Kamu HANYA menyusun prompt. Jika pemilik minta "prompt untuk <bahasa/tool>", prompt final adalah
 INSTRUKSI yang akan dijalankan tool target, bukan implementasi dari instruksi itu sendiri.
 Contoh: "buatkan prompt untuk python" → prompt final berisi perintah untuk AGEN Python ("Buat program
@@ -98,12 +100,23 @@ export async function writeExpertPrompt(
   return { reply: reply.slice(0, 3600), ok: true };
 }
 
+/** Tanda presentasi kode/program jawaban (bukan instruksi). Blok PROMPT yang
+ *  berisi ini = deformasi "menjawab program, bukan menyusun prompt". */
+const PROMPT_CODE_SIGNATURES =
+  /(?:^|\n)(?:import\s+[\w.*]+\s+(?:from|as|\b)|from\s+[\w.*]+\s+import\b|def\s+\w+\s*\(|class\s+\w+|const\s+\w+\s*=|let\s+\w+\s*=|function\s+\w*\s*\(|=>\s*\{|print\s*\(|console\.(?:log|error)\s*\()/;
+
 /** True when the reply carries a prompt-like shape: a fenced block present OR
- *  an explicit target/header marker. Conservative — must never block a valid
- *  prompt, only gross deformations. */
+ *  an explicit target/header marker whose body reads as instructions without
+ *  program code. Conservative — never blocks a valid prompt, only gross
+ *  deformations ("answered the task instead of writing the prompt"). */
 export function isPromptShaped(reply: string): boolean {
   const t = (reply ?? "").trim();
   if (!t) return false;
   if (/```/.test(t)) return true;
-  return /^(?:sasaran|target|alat|tool target|🎯)\s*[:：]/i.test(t);
+  const hasHeader =
+    /^(?:sasaran|target|alat|tool target|🎯)\s*[:：]/i.test(t) ||
+    /\bprompt\s*[:：]/i.test(t);
+  if (!hasHeader) return false;
+  if (PROMPT_CODE_SIGNATURES.test(t)) return false;
+  return true;
 }
