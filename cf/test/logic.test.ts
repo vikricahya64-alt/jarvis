@@ -16,7 +16,7 @@ import { recoveryPlan, classifyOperational, budgetedRecovery, tallyFailure, read
 import { gateVerdict, tallyGate } from "../src/lib/verifier";
 import { runGapUpgradeLoop, resolveGapProposal, listGapProposals, describeGapProposals, capIdForPath, GAP_MIN_7D } from "../src/lib/gap_upgrade";
 import { isPromptMasterRequest, isPromptShaped } from "../src/lib/prompt_master";
-import { isContext7Request, context7FailureMessage } from "../src/lib/context7";
+import { isContext7Request, context7FailureMessage, lookupLibraryDocs } from "../src/lib/context7";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
@@ -1011,6 +1011,56 @@ function testContext7FailClosed() {
   assert.ok(isContext7Request("docs untuk hono"), "docs trigger fires");
 }
 
+function testNormalizeLibraryToken() {
+  // ROOT-CAUSE regression (live m8-v15): spelling corrector rewrote "hono"
+  // (library Hono) into "sono" (slang) → Context7 resolved Sonos → confident
+  // WRONG-subject docs. Library identifiers bound to a context7/docs trigger
+  // must survive normalization verbatim while real slang still expands.
+  assert.strictEqual(normalizeInput("cara pakai hono"), "cara pakai hono", "hono must not become sono");
+  assert.strictEqual(normalizeInput("cara pakai sonos"), "cara pakai sonos", "real library name preserved");
+  assert.strictEqual(normalizeInput("docs untuk hono"), "docs untuk hono", "docs trigger protected");
+  assert.strictEqual(normalizeInput("ctx7: honojs/hono"), "ctx7: honojs/hono", "repo id protected");
+  assert.strictEqual(normalizeInput("gmn cara bikin website"), "bagaimana cara bikin website", "slang expansion still works");
+}
+
+async function testContext7ResolveVerifier() {
+  // Defense-in-depth: even IF a corrupted name reaches resolution, the
+  // resolved library title must match the requested name. "sono" must NEVER
+  // resolve to "/websites/sonos" — verifier rejects → honest not_found.
+  const realFetch = globalThis.fetch;
+  const env: any = {
+    CONFIG_KV: {
+      get: async () => null,
+      put: async () => {},
+      delete: async () => {},
+      list: async () => ({ keys: [] }),
+    },
+    CONTEXT7_API_KEY: undefined,
+  };
+  try {
+    (globalThis as any).fetch = async (url: any) => {
+      const u = String(url);
+      if (u.includes("/v2/libs/search")) {
+        return new Response(JSON.stringify({
+          results: [
+            { id: "/websites/sonos", title: "Sonos" },
+            { id: "/websites/hono_dev", title: "Hono" },
+          ],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("", { status: 200 }); // context endpoint: empty docs
+    };
+    const miss = await lookupLibraryDocs(env, "cara pakai sono");
+    assert.strictEqual(miss.ok, false, "mismatched title must fail-closed");
+    assert.strictEqual(miss.reason, "not_found", "verifier reject => not_found");
+    assert.ok(!(miss.reply ?? "").includes("Sonos"), "never answer a different library");
+    const hit = await lookupLibraryDocs(env, "cara pakai hono");
+    assert.strictEqual(hit.reason, "empty", "verifier PASSES hono → reaches docs fetch → empty docs");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 async function testFailureRollup() {
   const kv = new Map<string, string>();
   const env = {
@@ -1075,6 +1125,8 @@ async function main() {
   await testGapUpgrade();
   testPromptMasterContract();
   testContext7FailClosed();
+  testNormalizeLibraryToken();
+  await testContext7ResolveVerifier();
   console.log("LOGIC TESTS PASSED");
 }
 

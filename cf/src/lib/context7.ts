@@ -69,15 +69,42 @@ async function ctx7Fetch(env: Env, path: string): Promise<string | null> {
   return res.text();
 }
 
+function normalizeTitle(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Deterministic title verifier (m8-v15, defense-in-depth vs the normalizer
+ *  "hono"→"sono" corruption class): the resolved library must ACTUALLY be the
+ *  library the user asked for. Exact/leading-token/last-repo-segment equality
+ *  only — "sono" is NEVER allowed to resolve to "Sonos" (suffix not a boundary).
+ *  A mismatch → null → honest not_found; never wrong-library docs. */
+function libraryTitleMatches(title: string | undefined | null, requested: string): boolean {
+  if (!title) return false;
+  const t = normalizeTitle(title);
+  const r = normalizeTitle(requested);
+  if (!t || !r) return false;
+  if (t === r) return true;
+  const firstToken = t.split(/\s+/)[0];
+  if (firstToken === r) return true;
+  // Repo-id form: last path segment of "org/repo" == requested ("honojs/hono").
+  const segments = title.split("/");
+  if (segments.length > 1) {
+    const last = normalizeTitle(segments[segments.length - 1]);
+    if (last === r || last.split(/\s+/)[0] === r) return true;
+  }
+  return false;
+}
+
 async function resolveLibrary(env: Env, libraryName: string, query: string): Promise<string | null> {
   const q = encodeURIComponent(query.slice(0, 200));
   const n = encodeURIComponent(libraryName);
   const body = await ctx7Fetch(env, `/v2/libs/search?query=${q}&libraryName=${n}`);
   if (!body) return null;
   try {
-    const d = JSON.parse(body) as { results?: Array<{ id?: string }>; error?: string };
+    const d = JSON.parse(body) as { results?: Array<{ id?: string; title?: string }>; error?: string };
     if (d.error || !d.results?.length) return null;
-    return d.results[0].id ?? null;
+    const hit = d.results.find((r) => libraryTitleMatches(r.title, libraryName));
+    return hit?.id ?? null;
   } catch {
     return null;
   }
