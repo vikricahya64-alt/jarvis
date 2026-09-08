@@ -12,8 +12,9 @@ import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
 import { isTranslateCapRequest, matchWebhookPreCapability, capabilityIntent, getCapability, approachForIntent, describeCapabilities } from "../src/lib/capability_registry";
 import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate } from "../src/lib/ai";
-import { recoveryPlan, classifyOperational, budgetedRecovery, tallyFailure, readFailureTally } from "../src/lib/failure";
+import { recoveryPlan, classifyOperational, budgetedRecovery, tallyFailure, readFailureTally, readFailureLedger, ledgerDayKey } from "../src/lib/failure";
 import { tallyGate } from "../src/lib/verifier";
+import { runGapUpgradeLoop, resolveGapProposal, listGapProposals, describeGapProposals, capIdForPath, GAP_MIN_7D } from "../src/lib/gap_upgrade";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
@@ -922,6 +923,60 @@ async function testBudgetedRecovery() {
   assert.strictEqual(kv.size, beforeOk, "ok verdict records nothing");
 }
 
+async function testGapUpgrade() {
+  const kv = new Map<string, string>();
+  const env = {
+    CONFIG_KV: {
+      get: async (k: string) => kv.get(k) ?? null,
+      put: async (k: string, v: string) => {
+        kv.set(k, v);
+      },
+      delete: async (k: string) => {
+        kv.delete(k);
+      },
+    },
+  } as never;
+
+  // Seed a multi-day ledger: today + yesterday both show search_synth truncated.
+  const today = ledgerDayKey(0);
+  const yesterday = ledgerDayKey(1);
+  kv.set(`gate:${today}`, JSON.stringify({ search_synth: { truncated: 3 } }));
+  kv.set(`gate:${yesterday}`, JSON.stringify({ search_synth: { truncated: 2 } }));
+  const rows = await readFailureLedger(env, 7);
+  const synthRow = rows.find((r) => r.path === "search_synth" && r.failureClass === "truncated");
+  assert.ok(synthRow && synthRow.count === 5, `ledger aggregates across days (got ${synthRow?.count})`);
+
+  // Gap threshold: search_synth truncated (5 ≥ 3) → proposed; translate (0) → none.
+  const run1 = await runGapUpgradeLoop(env);
+  assert.strictEqual(run1.opened, 1, "recurring gap opens one proposal");
+  assert.strictEqual(run1.proposed[0]?.cap, capIdForPath("search_synth"), "proposal targets the right capability");
+  assert.ok(run1.proposed[0]?.fix.includes("max_tokens"), "fix hint is capability-specific");
+  assert.strictEqual(run1.deduped, 0, "first pass opens, nothing deduped");
+
+  // Same window re-run → deduped (open slot already exists).
+  const run2 = await runGapUpgradeLoop(env);
+  assert.strictEqual(run2.opened, 0, "same-window re-run opens nothing");
+  assert.strictEqual(run2.deduped, 1, "open slot is deduplicated");
+
+  // listGapProposals + describeGapProposals surface the OPEN proposal.
+  const open = await listGapProposals(env);
+  assert.strictEqual(open.length, 1, "one open proposal listed");
+  assert.ok((await describeGapProposals(env)).includes("Auto-proposals"), "describe renders header");
+
+  // Resolve → stamped done; re-run still suppressed this window.
+  assert.ok(await resolveGapProposal(env, "search", "truncated", "applied"), "resolve applies proposal");
+  assert.strictEqual((await listGapProposals(env)).length, 0, "applied proposal leaves the open list");
+  const run3 = await runGapUpgradeLoop(env);
+  assert.strictEqual(run3.opened, 0, "resolved gap is not re-proposed same window");
+  assert.strictEqual(run3.deduped, 1, "done stamp suppresses duplicate");
+
+  // Other path mapping sanity (registry contract).
+  for (const [path, want] of Object.entries({ translate: "translate", understand: "understand", context7: "context7", subagents: "search", search_synth: "search" })) {
+    assert.strictEqual(capIdForPath(path as never), want, `capability mapping for ${path}`);
+  }
+  assert.ok(GAP_MIN_7D >= 3, "threshold guard documented");
+}
+
 async function testFailureRollup() {
   const kv = new Map<string, string>();
   const env = {
@@ -983,6 +1038,7 @@ async function main() {
   testFailureTaxonomy();
   await testBudgetedRecovery();
   await testFailureRollup();
+  await testGapUpgrade();
   console.log("LOGIC TESTS PASSED");
 }
 
