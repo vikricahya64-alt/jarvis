@@ -446,6 +446,7 @@ const INST_STOPWORDS = new Set([
   "dan", "yang", "dengan", "untuk", "dari", "di", "ke", "pada", "itu", "apa", "akan", "ini",
   "adalah", "tentang", "mengenai", "dalam", "saja", "juga", "atau", "karena", "agar", "supaya",
   "secara", "tersebut", "seperti", "beserta", "antara", "bagi", "sebuah", "atas", "bisa", "masih",
+  "referensinya", "referensinyaa",
 ]);
 
 export type InstitutionalRequest = {
@@ -502,28 +503,50 @@ function buildInstitutionalRequest(
   return { institutions, core: finalCore, matchedQualifier, generic };
 }
 
-function institutionalQuery(core: string, inst: InstitutionDef): string {
+function institutionalQuery(core: string, inst: InstitutionDef, quoted: boolean): string {
   const tokens = core.toLowerCase().split(/\s+/).filter((w) => w.length > 2 && !INST_STOPWORDS.has(w));
   const phrase = tokens.slice(0, 4).join(" ");
-  return `"${phrase}" site:${inst.domain}`;
+  // M8-v28: an EXACT-phrase site: query ("kebutuhan pasar" site:bps.go.id)
+  // empirically returns ZERO results on DDG for natural-language cores — the
+  // institutional frame silently degraded to generic web junk. Unquoted tokens
+  // (with site:) are far more robust; quoted remains as the first attempt when
+  // the core is a tight 1–2 token phrase unlikely to over-match.
+  return quoted && phrase.split(" ").length <= 2 ? `"${phrase}" site:${inst.domain}` : `${phrase} site:${inst.domain}`;
 }
 
-/** Site:-scoped institutional search: up to 3 institutions × one fan-out
- *  search each, every hit tagged with its institution. Fail-closed → []. */
+/** Site:-scoped institutional search: up to 3 institutions; per institution a
+ *  quoted attempt (only for tight 1–2 token cores) then an unquoted retry.
+ *  TRUST BOUNDARY (M8-v28): only hits whose host actually ends with the
+ *  institution's domain are accepted — a search engine that ignores `site:`
+ *  and returns off-domain junk (the ambulance-care pages seen in production)
+ *  can no longer pollute the institutional pool or the source list. Fail-
+ *  closed → []. */
 export async function institutionalSearchHits(env: Env, req: InstitutionalRequest, limit = 6): Promise<SearchHit[]> {
   const out: SearchHit[] = [];
   const seen = new Set<string>();
   for (const inst of req.institutions.slice(0, 3)) {
-    const hits = await searchTopResults(env, institutionalQuery(req.core, inst), 3).catch(() => [] as SearchHit[]);
-    for (const h of hits) {
-      if (isJunkSource(h.url)) continue;
-      const key = h.url.split("?")[0];
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      out.push({ title: h.title, url: h.url, snippet: h.snippet, institution: inst.name });
+    if (out.length >= limit) break;
+    const hostOk = (u: string): boolean => {
+      try {
+        const host = new URL(u).hostname.replace(/^www\./, "");
+        return host === inst.domain || host.endsWith(`.${inst.domain}`);
+      } catch { return false; }
+    };
+    for (const quoted of [true, false]) {
+      const hits = await searchTopResults(env, institutionalQuery(req.core, inst, quoted), 4).catch(() => [] as SearchHit[]);
+      const accepted = hits.filter((h) => hostOk(h.url) && !isJunkSource(h.url));
+      if (!accepted.length) continue;
+      for (const h of accepted) {
+        const key = h.url.split("?")[0];
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push({ title: h.title, url: h.url, snippet: h.snippet, institution: inst.name });
+        if (out.length >= limit) break;
+      }
+      break; // quoted attempt already produced on-domain hits
     }
   }
-  return out.slice(0, limit);
+  return out;
 }
 
 /** LLM digest of institutional hits — names the institution per item so the
@@ -1421,7 +1444,7 @@ export async function searchAndSynthesize(
       : instReq ? instHitsP.then((ih) => (ih.length ? institutionalDigest(ih) : ddgSearch(env, topic)))
         : ddgSearch(env, topic),
     skipSearch ? Promise.resolve([] as SearchHit[])
-      : instReq ? instHitsP.then((ih) => (ih.length ? ih : ddgSearchHits(env, topic)))
+      : instReq ? instHitsP.then((ih) => (ih.length ? ih : [] as SearchHit[]))
         : ddgSearchHits(env, topic),
     followupAnchor && anchorCtx ? Promise.resolve(anchorCtx.slice(-4)) : recentContext(env, owner, 4),
     searchMemory(env, topic, 4).catch(() => []),
@@ -1461,6 +1484,20 @@ export async function searchAndSynthesize(
         `Gunakan hanya temuan dari situs lembaga di daftar sumber sah; untuk setiap angka/klaim sebut nama lembaganya ` +
         `("menurut BPS", "data SMERU"). JANGAN menambah nama lembaga atau tautan di luar daftar sumber. ` +
         `Jika tidak ada hasil dari lembaga resmi untuk bagian itu, katakan jujur bahwa belum ada data lembaga resmi — jangan menebak.`,
+    });
+  }
+  // M8-v28 INSTITUTIONAL FAIL-CLOSED: an institutional ask with an EMPTY pool
+  // never falls back to generic web hits (those would be presented as lembaga
+  // sources and, worse, surfaced junk like off-topic job pages). The answer
+  // stays honest: no fabricated numbers, pointer to the right institution.
+  if (instReq && hits.length === 0) {
+    context.push({
+      role: "system",
+      content:
+        `Tidak ada hasil dari situs lembaga riset terdaftar untuk topik ini. ` +
+        `Katakan dengan jujur bahwa belum ditemukan data resmi lembaga untuk permintaan ini. ` +
+        `Boleh menunjuk lembaga mana yang biasanya menerbitkan data ini (mis. BPS untuk statistik, ` +
+        `SMERU untuk kebijakan sosial, BRIN untuk riset), TANPA memproduksi angka, klaim, atau tautan apa pun.`,
     });
   }
   // L13: inject accumulated insights + owner preferences into the reply
