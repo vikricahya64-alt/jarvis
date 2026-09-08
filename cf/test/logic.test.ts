@@ -14,6 +14,7 @@ import { isTranslateCapRequest, matchWebhookPreCapability, capabilityIntent, get
 import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate, trackTokenUsage } from "../src/lib/ai";
 import { recoveryPlan, classifyOperational, budgetedRecovery, tallyFailure, readFailureTally, readFailureLedger, ledgerDayKey } from "../src/lib/failure";
 import { gateVerdict, tallyGate, sanitizeUncitedLinks, normalizeLinkForCompare } from "../src/lib/verifier";
+import { cleanSubReply } from "../src/lib/subagents";
 import { runGapUpgradeLoop, resolveGapProposal, listGapProposals, describeGapProposals, capIdForPath, GAP_MIN_7D } from "../src/lib/gap_upgrade";
 import { isPromptMasterRequest, isPromptShaped, sanitizePromptDeliverable } from "../src/lib/prompt_master";
 import { isContext7Request, context7FailureMessage, lookupLibraryDocs } from "../src/lib/context7";
@@ -1110,6 +1111,25 @@ async function testFailureRollup() {
   assert.ok(kv.size >= 2, "both KV ledgers written");
 }
 
+function testCleanSubReply() {
+  // Rail keluaran sub-agent (verified live): balasan research dulu lolos tanpa
+  // dibersihkan — memproduksi URL karangan + anotasi kerja internal (【high】,
+  // label UNTRUSTED_EXTERNAL_CONTENT). Bersihkan DETERMINISTIK sebelum kirim.
+  const real = ["https://www.gramedia.com/literasi/pengertian-produk/"];
+  const dirty =
+    "Kesimpulan: produk adalah barang/jasa.【medium】\n" +
+    "<<<UNTRUSTED_EXTERNAL_CONTENT:artikel>>>\nraw teks halaman\n<<<END_UNTRUSTED_EXTERNAL_CONTENT>>>\n" +
+    "Sumber: UNTRUSTED_EXTERNAL_CONTENT (tidak relevan).\n" +
+    "Baca [sini](https://www.gramedia.com/literasi/pengertian-produk/) atau referensi palsu: https://fiktif.example.com/xyz serta https://gramedia.com/literasi/pengertian-produk/.";
+  const clean = cleanSubReply(dirty, real);
+  assert.ok(!/【/.test(clean), "tag kurung 【】 dibuang");
+  assert.ok(!/UNTRUSTED/.test(clean), "wrapper spotlight + label dibuang");
+  assert.ok(!/fiktif\.example\.com/.test(clean), "URL karangan dipotong");
+  assert.ok(/gramedia\.com\/literasi\/pengertian-produk/.test(clean), "URL nyata tetap hidup");
+  assert.ok(/Baca sini/.test(clean.replace(/[[\]()]/g, "")), "label teks dari [label](url) karangan dipertahankan");
+  assert.ok(!/<<<|>>>/.test(clean), "wrapper pembatas hilang");
+}
+
 async function testSmartReplyDelivery() {
   // Jaminan "jangan pernah senyap": kirim balasan sekali, retry sekali jika
   // gagal, dan bila keduanya gagal beri pemilik diagnostik (tidak di-drop
@@ -1270,6 +1290,7 @@ async function main() {
   await testAntiHallucinationRails();
   await testSalesReportBasis();
   await testSmartReplyDelivery();
+  testCleanSubReply();
   console.log("LOGIC TESTS PASSED");
 }
 
