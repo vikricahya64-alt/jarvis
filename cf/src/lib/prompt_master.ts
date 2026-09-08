@@ -38,6 +38,15 @@ yang menghitung luas lingkaran..."), BUKAN hasil programnya.
 
 6. Balas dalam bahasa pemilik (Indonesia/Inggris secara natural), ringkas.
 
+Contoh output untuk "buatkan prompt untuk python":
+SASARAN: Python
+PROMPT:
+\`\`\`text
+Buat program Python yang menghitung luas lingkaran dari jari-jari. Gunakan math.pi
+dan tampilkan hasil dengan 2 angka desimal.
+\`\`\`
+CATATAN: kalau jari-jari harus dari input pengguna, jalankan via tool Python, jangan tulis kodenya di blok PROMPT.
+
 === SKILL.md (profil & aturan) ===
 ${PROMPT_MASTER_SKILL_MD}
 
@@ -97,7 +106,43 @@ export async function writeExpertPrompt(
     const retryReply = (retry?.reply ?? "").trim();
     reply = retryReply || reply;
   }
-  return { reply: reply.slice(0, 3600), ok: true };
+  // Deterministic guarantee (free, no extra LLM): a non-fenced deliverable
+  // whose PROMPT section slipped in program code gets its body truncated at
+  // the first code line, so the user NEVER receives the "answered instead of
+  // prompted" program — only the clean instruction stays (see comment above).
+  return { reply: sanitizePromptDeliverable(reply).slice(0, 3600), ok: true };
+}
+
+/** Baris yang menandakan kode/program (dipakai hanya untuk pemotongan, bukan
+ *  penilaian bentuk — lebih agresif dari PROMPT_CODE_SIGNATURES). */
+const CODE_LINE_RE =
+  /^\s*(?:import\s+[\w.*]+|from\s+[\w.*]+\s+import\b|def\s+\w+\s*\(|class\s+\w+|const\s+\w+\s*=|let\s+\w+\s*=|var\s+\w+\s*=|function\s+\w*\s*\(|return\b|print\s*\(|console\.(?:log|error)\s*\(|=>\s|@\w+|[#/]{2}|[a-zA-Z_]\w*\s*=\s*(?:[a-zA-Z_]\w*\.?[\w]*\s*\(|["'\d-]))/;
+const NOTE_LINE_RE = /^[•*\-]\s*(?:catatan|note)\s*[:：]|^(?:catatan|note)\s*[:：]/i;
+
+/** Potong blok PROMPT di baris kode pertama; pertahankan baris instruksi dan
+ *  bagian CATATAN/NOTE yang ada. Reply fenced atau bebas-kode dikembalikan apa
+ *  adanya. */
+export function sanitizePromptDeliverable(reply: string): string {
+  const t = (reply ?? "").trim();
+  if (!t || /```/.test(t)) return t;
+  const lines = t.split("\n");
+  let codeIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (CODE_LINE_RE.test(lines[i])) {
+      codeIdx = i;
+      break;
+    }
+  }
+  if (codeIdx < 0) return t;
+  const head = lines.slice(0, codeIdx).join("\n").trimEnd();
+  const notes: string[] = [];
+  for (let i = codeIdx; i < lines.length; i++) {
+    if (NOTE_LINE_RE.test(lines[i].trim())) notes.push(lines[i]);
+  }
+  const tail = notes.length
+    ? notes.join("\n")
+    : "CATATAN: bagian kode dihapus agar PROMPT hanya berisi instruksi; minta tool target menuliskan kodenya.";
+  return head ? `${head}\n\n${tail}` : tail;
 }
 
 /** Tanda presentasi kode/program jawaban (bukan instruksi). Blok PROMPT yang
@@ -114,7 +159,7 @@ export function isPromptShaped(reply: string): boolean {
   if (!t) return false;
   if (/```/.test(t)) return true;
   const hasHeader =
-    /^(?:sasaran|target|alat|tool target|🎯)\s*[:：]/i.test(t) ||
+    /^(?:[•*\-]\s*)?(?:sasaran|target|alat|tool target|🎯)\s*[:：]/i.test(t) ||
     /\bprompt\s*[:：]/i.test(t);
   if (!hasHeader) return false;
   if (PROMPT_CODE_SIGNATURES.test(t)) return false;

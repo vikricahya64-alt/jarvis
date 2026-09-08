@@ -15,7 +15,7 @@ import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinu
 import { recoveryPlan, classifyOperational, budgetedRecovery, tallyFailure, readFailureTally, readFailureLedger, ledgerDayKey } from "../src/lib/failure";
 import { gateVerdict, tallyGate } from "../src/lib/verifier";
 import { runGapUpgradeLoop, resolveGapProposal, listGapProposals, describeGapProposals, capIdForPath, GAP_MIN_7D } from "../src/lib/gap_upgrade";
-import { isPromptMasterRequest, isPromptShaped } from "../src/lib/prompt_master";
+import { isPromptMasterRequest, isPromptShaped, sanitizePromptDeliverable } from "../src/lib/prompt_master";
 import { isContext7Request, context7FailureMessage, lookupLibraryDocs } from "../src/lib/context7";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
@@ -998,9 +998,23 @@ function testPromptMasterContract() {
   );
   // Clean instruction-only body stays shaped (even without a fenced block).
   assert.ok(isPromptShaped("SASARAN: Python\nPROMPT:\nBuat program Python yang menghitung luas lingkaran dari input pengguna dan tampilkan hasil dengan 2 angka desimal."), "instruction body shaped");
+  assert.ok(isPromptShaped("• SASARAN: Python\n• PROMPT:\nBuat program ringkas untuk menjual produk."), "bullet header shaped");
   assert.ok(isPromptShaped("Target: Python\nTugas: buat program lingkaran..."), "target header keeps it shaped (no retry)");
   // A plain answer without ANY prompt scaffold IS a deformation → retry path.
   assert.ok(!isPromptShaped("Berikut program Python untuk menghitung luas lingkaran: import math"), "bare prose deform");
+
+  // Deterministic sanitizer: never delivers the "answered instead of prompted"
+  // program — the exact live m8-v16 bullet failure is trimmed to the clean
+  // instruction + CATATAN retained.
+  const sanitized = sanitizePromptDeliverable(
+    "• SASARAN: Python\n• PROMPT:\npython\nBuat program untuk menghitung luas lingkaran\nimport math\n\ndef hitungluaslingkaran(jarijari):\n  luas = math.pi * (jarijari ** 2)\n  return luas\n\nContoh penggunaan\njarijari = 5\nluaslingkaran = hitungluaslingkaran(jarijari)\nprint(f\"Luas lingkaran ... {luaslingkaran}\")\n\n• CATATAN: Pastikan Anda memiliki modul math.",
+  );
+  assert.ok(!/import\s+math|def\s+hitung|print\s*\(|jarijari\s*=\s*5/.test(sanitized), "sanitizer removes the implementation");
+  assert.ok(/Buat program untuk menghitung luas lingkaran/.test(sanitized), "sanitizer keeps the instruction");
+  assert.ok(/CATATAN: Pastikan Anda memiliki modul math/.test(sanitized), "sanitizer keeps existing CATATAN");
+  const untouched = sanitizePromptDeliverable("SASARAN: Python\nPROMPT:\nBuat program luas lingkaran dari jari-jari, 2 desimal.");
+  assert.strictEqual(untouched, "SASARAN: Python\nPROMPT:\nBuat program luas lingkaran dari jari-jari, 2 desimal.", "sanitizer leaves clean body untouched");
+  assert.strictEqual(sanitizePromptDeliverable("SASARAN: Py\nPROMPT:\n```text\nimport math # contoh\n```"), "SASARAN: Py\nPROMPT:\n```text\nimport math # contoh\n```", "fenced replies are never sanitized");
   // Trigger predicate: any 'prompt'/'prompting' mention fires (broad, by design).
   assert.ok(isPromptMasterRequest("buatkan prompt untuk python"), "prompt request detected");
   assert.ok(isPromptMasterRequest("bagaimana teknik prompting yang baik?"), "prose mention triggers");
