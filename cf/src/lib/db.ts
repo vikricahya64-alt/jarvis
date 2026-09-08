@@ -1674,10 +1674,11 @@ export async function salesReport(env: Env, owner: number, fromTs: number, toTs:
   const empty: SalesSummary = { total_orders: 0, total_revenue: 0, total_cost: 0, profit: 0, avg_order: 0, top_products: [] };
   try {
     const agg = await env.DB.prepare(
-      `SELECT COUNT(*) as cnt, COALESCE(SUM(total),0) as revenue FROM orders
+      `SELECT COUNT(*) as cnt, COALESCE(SUM(total),0) as revenue, COALESCE(SUM(shipping_cost),0) as shipping FROM orders
        WHERE owner_id = ? AND created_at BETWEEN ? AND ? AND status != 'cancelled'`,
-    ).bind(owner, fromTs, toTs).first<{ cnt: number; revenue: number }>();
+    ).bind(owner, fromTs, toTs).first<{ cnt: number; revenue: number; shipping: number }>();
     const totalOrders = agg?.cnt ?? 0;
+    // Omzet = apa yang benar-benar dibayar customer (sudah net diskon + ongkir).
     const totalRevenue = agg?.revenue ?? 0;
 
     const costAgg = await env.DB.prepare(
@@ -1689,7 +1690,11 @@ export async function salesReport(env: Env, owner: number, fromTs: number, toTs:
        WHERE o.owner_id = ? AND o.created_at BETWEEN ? AND ? AND o.status != 'cancelled'`,
     ).bind(owner, fromTs, toTs).first<{ item_rev: number; item_cost: number }>();
 
-    const totalCost = costAgg?.item_cost ?? 0;
+    // Basis LABA yang konsisten: revenue net (sudah minus diskon) dikurangi
+    // harga pokok barang DAN ongkir (shipping dianggap pass-through, bukan
+    // keuntungan). Dulu profit = SUM(orders.total) - item_cost → ongkir yang
+    // termasuk di revenue menggelembungkan laba.
+    const totalCost = (costAgg?.item_cost ?? 0) + (agg?.shipping ?? 0);
     const profit = totalRevenue - totalCost;
 
     const top = await env.DB.prepare(
