@@ -42,8 +42,9 @@ import {
   isResearchClass, orchestrateResearch,
   isDesignIntent,
 } from "./subagents";
-import { isPromptMasterRequest, writeExpertPrompt } from "./prompt_master";
-import { isContext7Request, lookupLibraryDocs } from "./context7";
+import { writeExpertPrompt } from "./prompt_master";
+import { lookupLibraryDocs } from "./context7";
+import { capabilityIntent, approachForIntent } from "./capability_registry";
 import { reflectOnTurn, getAnswerBehaviorContext } from "./evolution";
 import { buildFinalReply } from "./response_formatter";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
@@ -134,12 +135,6 @@ function recordMetrics(strategy: string, latencyMs: number, provider: string | n
 
 // SELF_REF_RE is imported from identity.ts (single source of truth).
 
-/** Detect translation requests. */
-const TRANSLATE_RE = /(?:terjemahkan|translate|arti|mean)\s+(?:ke(?:\s+(?:bahasa)?)?)?\s*(\w[\w\s]*)/i;
-
-/** Detect bare translation (just "terjemahkan" with prior assistant context). */
-const BARE_TRANSLATE_RE = /^(?:terjemahkan|translate)\s*$/i;
-
 /**
  * Phase 1: PERCEIVE — Build a complete understanding of the input.
  * Detects language, emotion, intent, topic, mode, and enriches context.
@@ -224,11 +219,15 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
     return { type: "emergency", urgency: "high", formality: "formal", confidence: 0.9, entities: {} };
   }
 
-  if (isPromptMasterRequest(text)) {
+  // Capability router (single source of trigger): prompt-master & context7 are
+  // classified by the SAME canonical predicates the webhook pre-cascade uses,
+  // so the two routers can no longer drift (capability_registry.ts).
+  const preCap = capabilityIntent(text, { ids: ["prompt_master", "context7"] });
+  if (preCap?.id === "prompt_master") {
     return { type: "prompt_writer", urgency: "low", formality: "neutral", confidence: 0.85, entities: { topic: text.slice(0, 100) } };
   }
 
-  if (isContext7Request(text)) {
+  if (preCap?.id === "context7") {
     return { type: "context7", urgency: "low", formality: "neutral", confidence: 0.8, entities: { topic: text.slice(0, 100) } };
   }
 
@@ -244,13 +243,17 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
     }
   }
 
-  // Translation
-  const translateMatch = text.match(TRANSLATE_RE);
-  if (translateMatch) {
-    return { type: "translation", urgency: "low", formality: "formal", confidence: 0.9, entities: { target: translateMatch[1]?.trim() || "" } };
-  }
-  if (BARE_TRANSLATE_RE.test(low)) {
-    return { type: "translation", urgency: "low", formality: "formal", confidence: 0.8, entities: { bare: "true" } };
+  // Translation — canonical predicate shared with the webhook pre-cascade.
+  const trCap = capabilityIntent(text, { ids: ["translate"] });
+  if (trCap) {
+    const bare = /^\s*(?:terjemahkan|translate)\s*$/i.test(low);
+    return {
+      type: "translation",
+      urgency: "low",
+      formality: "formal",
+      confidence: bare ? 0.8 : 0.9,
+      entities: bare ? { bare: "true" } : {},
+    };
   }
 
   // Search / research
@@ -298,11 +301,14 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
  */
 export function decide(perception: Perception): Strategy {
   const { intent, isFollowUp, topic, mood, enrichedContext } = perception;
+  // Registry-backed strategy approach (single contract table); falls back to
+  // simple_llm when the intent has no dedicated capability.
+  const cap = (it: string) => (approachForIntent(it) as Strategy["approach"]) ?? "simple_llm";
 
   // Self-referential → direct answer (no LLM needed, handled by webhook)
   if (intent.type === "self_referential") {
     return {
-      approach: "self_referential",
+      approach: cap("self_referential"),
       depth: "shallow",
       providerPreference: "any",
       riskLevel: "safe",
@@ -312,7 +318,7 @@ export function decide(perception: Perception): Strategy {
   // Translation → dedicated pipeline
   if (intent.type === "translation") {
     return {
-      approach: "translate",
+      approach: cap("translation"),
       depth: "shallow",
       providerPreference: "fast",
       riskLevel: "safe",
@@ -322,7 +328,7 @@ export function decide(perception: Perception): Strategy {
   // Prompt-engineering → expert prompt writer (prompt-master skill)
   if (intent.type === "prompt_writer") {
     return {
-      approach: "prompt_master",
+      approach: cap("prompt_writer"),
       depth: "medium",
       providerPreference: "thorough",
       riskLevel: "safe",
@@ -332,7 +338,7 @@ export function decide(perception: Perception): Strategy {
   // Library docs → Context7 (up-to-date documentation grounding)
   if (intent.type === "context7") {
     return {
-      approach: "context7_docs",
+      approach: cap("context7"),
       depth: "medium",
       providerPreference: "any",
       riskLevel: "safe",
@@ -342,7 +348,7 @@ export function decide(perception: Perception): Strategy {
   // Emergency → fast, direct LLM
   if (intent.type === "emergency") {
     return {
-      approach: "simple_llm",
+      approach: cap("emergency"),
       depth: "shallow",
       providerPreference: "fast",
       riskLevel: "safe",
@@ -352,7 +358,7 @@ export function decide(perception: Perception): Strategy {
   // Design engineering → full design pipeline
   if (intent.type === "design" && topic) {
     return {
-      approach: "orchestrate_design",
+      approach: cap("design"),
       depth: "deep",
       providerPreference: "thorough",
       riskLevel: "caution",
@@ -371,7 +377,7 @@ export function decide(perception: Perception): Strategy {
       };
     }
     return {
-      approach: "search_synthesize",
+      approach: cap("search"),
       depth: "medium",
       providerPreference: "any",
       riskLevel: "safe",

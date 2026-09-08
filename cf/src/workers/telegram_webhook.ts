@@ -34,8 +34,7 @@ import { normalizeInput, isEmptyInput } from "../lib/normalize";
 import { saveSessionToKV, loadSessionFromKV, touchSession, updateSession } from "../lib/context_manager";
 import { saveObservation } from "../lib/db";
 import { processMessage, type MessageContext } from "../lib/jarvis_core";
-import { isPromptMasterRequest } from "../lib/prompt_master";
-import { isContext7Request } from "../lib/context7";
+import { matchWebhookPreCapability } from "../lib/capability_registry";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "../lib/identity";
 import { covenantStatusText, signClause } from "../lib/covenant_core";
 import { identityStatusText } from "../lib/identity_anchor";
@@ -775,44 +774,44 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
   const effectiveAction = consentOk ? "EXECUTE" : res.decision.action;
   switch (effectiveAction) {
     case "EXECUTE":
-      // Translation is a dedicated read-only request handled BEFORE the generic
-      // search path so it never falls through to the bare "Ok." reply.
-      // - "Terjemahkan <teks>" / "translate <teks>": translate inline text.
-      // - "Terjemahkan" (bare) / "Terjemahkan ke <bahasa>": translate the last
-      //   assistant analysis from conversation context (fail-closed: if no prior
-      //   assistant reply exists, sends a graceful fallback message).
-      if (/^\s*(?:terjemahkan|translate)/i.test(text)) {
-        const tr = parseTranslate(text);
-        if (tr) {
-          const translated = await translateText(env, tr.source, tr.target);
-          const out = translated
-            ? (tr.target ? `Terjemahan (${tr.target}):\n` : "Terjemahan:\n") + translated
-            : `Maaf, gagal menerjemahkan saat ini. Coba lagi sebentar.`;
-          await recordTaskCounters(env, "translate", owner);
-          updateSession(owner, text, out, null, "translation");
-          await fire(sendMessage(env, owner, out));
-          break;
+      // Capability pre-cascade — driven by the SINGLE canonical router
+      // (capability_registry.matchWebhookPreCapability) so the webhook can
+      // never drift from the brain's classifier (capabilityIntent). Replace
+      // the old fragmented triggers (standalone translate head-regex +
+      // isPromptMasterRequest + isContext7Request) with the shared predicates.
+      // Translate is handled inline (dedicated fail-closed chain); the other
+      // pre capabilities are thin delegations to the brain pipeline (act() →
+      // registry contract) so there is no duplicated logic to rot.
+      const preCap = matchWebhookPreCapability(text);
+      if (preCap) {
+        if (preCap.id === "translate") {
+          const tr = parseTranslate(text);
+          if (tr) {
+            const translated = await translateText(env, tr.source, tr.target);
+            const out = translated
+              ? (tr.target ? `Terjemahan (${tr.target}):\n` : "Terjemahan:\n") + translated
+              : `Maaf, gagal menerjemahkan saat ini. Coba lagi sebentar.`;
+            await recordTaskCounters(env, "translate", owner);
+            updateSession(owner, text, out, null, "translation");
+            await fire(sendMessage(env, owner, out));
+            break;
+          }
+          // Bare translate: pull last assistant reply from conversation context.
+          const ctx = await recentContext(env, owner, 10);
+          const lastAssistant = [...ctx].reverse().find((c) => c.role === "assistant");
+          if (lastAssistant && lastAssistant.content.length > 30) {
+            const translated = await translateText(env, lastAssistant.content, null);
+            const out = translated
+              ? `Terjemahan analisis terakhir:\n\n${translated}`
+              : `Maaf, gagal menerjemahkan analisis saat ini. Coba lagi sebentar.`;
+            await recordTaskCounters(env, "translate", owner);
+            updateSession(owner, text, out, null, "translation");
+            await fire(sendMessage(env, owner, out));
+            break;
+          }
+          // Bare translate without any prior analysis → fall through to the
+          // brain pipeline below (same fail-open path as before).
         }
-        // Bare translate: pull last assistant reply from conversation context.
-        const ctx = await recentContext(env, owner, 10);
-        const lastAssistant = [...ctx].reverse().find((c) => c.role === "assistant");
-        if (lastAssistant && lastAssistant.content.length > 30) {
-          const translated = await translateText(env, lastAssistant.content, null);
-          const out = translated
-            ? `Terjemahan analisis terakhir:\n\n${translated}`
-            : `Maaf, gagal menerjemahkan analisis saat ini. Coba lagi sebentar.`;
-          await recordTaskCounters(env, "translate", owner);
-          updateSession(owner, text, out, null, "translation");
-          await fire(sendMessage(env, owner, out));
-          break;
-        }
-        // Nothing to translate: fall through to generic (will show "Ok.")
-      }
-      if (isPromptMasterRequest(text)) {
-        await fire(sendMessage(env, owner, await applyDefault(env, owner, res, text)));
-        break;
-      }
-      if (isContext7Request(text)) {
         await fire(sendMessage(env, owner, await applyDefault(env, owner, res, text)));
         break;
       }
