@@ -32,7 +32,8 @@
 //=====================================================================
 
 import { Env, searchMemory, recentContext } from "./db";
-import { llmRespond, searchTopResults, deepReadPage } from "./ai";
+import { llmRespond, searchTopResults, deepReadPage, recoverReply } from "./ai";
+import { gateVerdict, tallyGate } from "./verifier";
 import { getAnswerBehaviorContext } from "./evolution";
 import { fetchPageText } from "./extract";
 import { isObj, parseStructured, cleanStr } from "./structured";
@@ -688,6 +689,21 @@ export async function orchestrateResearch(
         if (verdict.approved) return finalReply;
         const safe = (verdict.safeReply?.trim() || reply).trim();
         return safe + (/\bhttps?:\/\//.test(safe) || !att ? "" : att); // fall back to original if no safe rewrite
+      }
+    }
+    // OUTPUT GATE (deterministic rail, budget-bounded): even after the optional
+    // LLM verifier (or when it was skipped), flag raw dumps / non-answers /
+    // anchor repetition and regenerate ONCE with a corrective instruction.
+    // Truncation is already handled at provider level — not re-triggered here.
+    const gate = gateVerdict(finalReply, anchor);
+    if (gate !== "ok" && gate !== "truncated") {
+      void tallyGate(env, "subagents", gate).catch(() => {});
+      if (calls < MAX_TOTAL_LLM_CALLS) {
+        const rec = await recoverReply(env, userText, finalReply, [], anchor, gate, topic);
+        calls += 1;
+        if (rec && rec.trim().length >= 40) {
+          return rec.trim() + (/\bhttps?:\/\//.test(rec) || !att ? "" : att);
+        }
       }
     }
     return finalReply;

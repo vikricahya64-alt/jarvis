@@ -16,6 +16,7 @@ import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFI
 import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
 import { isBareTodoVerb, parseReminder, tidyVisionReply } from "../src/workers/telegram_webhook";
 import { parseTranslate } from "../src/lib/ai";
+import { isLikelyTruncated, repairTruncatedReply, gateVerdict, isRawDumpText, isRepetitiveText } from "../src/lib/verifier";
 
 async function testPredictiveUrgencyRanking() {
   // Deterministic ranking: approval (open/expiring proposals) must rank first,
@@ -670,6 +671,97 @@ function testDetailTopicMarker() {
   assert.strictEqual(extractTopic("Lanjutkan"), null, "pure continuation is NOT a search topic");
 }
 
+function testGateTruncation() {
+  // m8-v8 signature: long answer ending on a bare heading → silent cut.
+  const cut =
+    "Proses machine learning dimulai dari pengumpulan data yang sangat banyak dan beragam formatnya.\n" +
+    "Data mentah itu lalu dibersihkan, dinormalisasi, dan dibagi menjadi set latih serta set uji sebelum pelatihan model. ".repeat(3) +
+    "\nProses Machine Learning";
+  assert.strictEqual(isLikelyTruncated(cut), true, "bare trailing heading looks cut");
+  assert.strictEqual(gateVerdict(cut), "truncated", "gate flags the silent cut");
+  const repaired = repairTruncatedReply(cut);
+  assert.ok(/terpotong|ketik "lanjut"/.test(repaired), "repair appends the honest continuation hint");
+  // Well-formed answer (proper ending sentence + bullets) → ok.
+  const ok =
+    "Machine learning adalah cabang AI yang belajar dari data. Model dilatih dari contoh berlabel, lalu memetakan input ke output.\n" +
+    "1. Deteksi spam — mengklasifikasi email.\n" +
+    "2. Rekomendasi konten — menyaring menu sesuai minat.\n" +
+    "3. Kendaraan otonom — membaca kamera dan radar.\n" +
+    "Kesimpulannya, ML mengotomatiskan pola yang sulit ditulis manual.";
+  assert.strictEqual(gateVerdict(ok), "ok", "well-formed answer passes gate");
+}
+
+function testGateRawDump() {
+  // HTML leak.
+  assert.strictEqual(
+    gateVerdict('<!DOCTYPE html><html lang="id"><body><div class="entry">konten halaman</div></body></html>'),
+    "raw_dump", "HTML tag + attribute leak",
+  );
+  // Scraper marker leak.
+  assert.strictEqual(
+    gateVerdict('Hasil pencarian hari ini:\nclass="result__a" href="/d=uddg=https://ex.com"\nISI HALAMAN: teks halaman mentah yang panjang'),
+    "raw_dump", "scraper markers leaked into answer",
+  );
+  // JSON object leak.
+  assert.strictEqual(
+    gateVerdict('{\n"nama": "seri nasib",\n"kolom": "nilai",\n"tanggal": "2026",\n"kategori": "harapan",\n"pakar": "anonim",\n"metode": "survey",\n}'),
+    "raw_dump", "JSON blob leaked",
+  );
+  // Dense unfenced code.
+  assert.strictEqual(
+    gateVerdict('const a = 1;\nconst b = 2;\nfunction hitung() {\n  return a + b;\n}\nconsole.log(hitung());\nconst label = "hasil";'),
+    "raw_dump", "unfenced code-heavy reply",
+  );
+  // Long base64 blob (genuine base64: mixed-case, padded, %4).
+  assert.strictEqual(
+    gateVerdict("Hasil bocor: b3V0cHV0IGdhdGUgdmVyaWZpZXIgamFydmlzIGZyZWUgdGllciB0ZXN0IHN0cmluZyB1bnR1ayBkZXRla3NpIGJhc2U2NCBib2NvciBwYWRhIGphd2FiYW4gYXNpc3Rlbg=="),
+    "raw_dump", "base64 blob",
+  );
+  // Legit code answer WITH fences must NOT be flagged.
+  const fenced =
+    "Berikut cara hitung biaya produksi pakai script:\n```js\nconst hargaBahan = 100000;\nconst qty = 12;\nconsole.log(hargaBahan * qty);\n```\nItu memberi total 1,2 juta untuk 12 unit — silakan sesuaikan dengan harga Anda.";
+  assert.strictEqual(gateVerdict(fenced), "ok", "fenced code answer is NOT a dump");
+  // Clean research prose must NOT be flagged.
+  assert.strictEqual(gateVerdict(
+    "Riset pasar kopi premium menunjukkan margin keuntungan rata-rata 38 persen untuk niche specialty. Konsumen bersedia membayar lebih untuk kualitas biji. Strategi terbaik: mulai dari kedai kecil, jaga konsistensi rasa, dan bangun pangsa lewat media sosial.",
+  ), "ok", "clean research prose passes");
+}
+
+function testGateNonAnswer() {
+  assert.strictEqual(gateVerdict("Error fetching https://x.com: ECONNRESET"), "non_answer", "machine error artifact");
+  assert.strictEqual(gateVerdict("An error occurred while processing your request."), "non_answer", "boilerplate error");
+  assert.strictEqual(gateVerdict("https://a.com/b https://b.com/c https://c.com/d"), "non_answer", "URL-only stub");
+  assert.strictEqual(gateVerdict("   "), "non_answer", "blank reply");
+}
+
+function testGateRepetition() {
+  const anchor =
+    "Analisis tentang machine learning: supervised, unsupervised, dan reinforcement learning adalah tiga cabang utama. " +
+    "Model dilatih dengan data berlabel, memetakan input ke output. " +
+    "Contoh nyata: deteksi spam, rekomendasi konten, dan kendaraan otonom. " +
+    "Evaluasi memakai akurasi, presisi, dan recall.";
+  // Near-verbatim repeat of the anchor → repetitive.
+  const repeat =
+    "Berikut analisis tentang machine learning: supervised, unsupervised, dan reinforcement learning adalah tiga cabang utama. " +
+    "Model dilatih dengan data berlabel, memetakan input ke output. " +
+    "Contoh nyata: deteksi spam, rekomendasi konten, dan kendaraan otonom. " +
+    "Evaluasi memakai akurasi, presisi, dan recall.";
+  assert.strictEqual(gateVerdict(repeat, anchor), "repetitive", "follow-up repeats the anchor");
+  // Genuinely NEW continuation on the same topic → ok.
+  const fresh =
+    "Mendalaminya lebih lanjut: arsitektur transformer kini mendominasi dengan attention mechanism sebagai inti. " +
+    "TensorFlow dan PyTorch adalah framework paling populer untuk latihan. " +
+    "MLOps menawarkan alur versi model, monitoring drift, hingga deployment via API. " +
+    "Biaya latihan model besar bisa mencapai jutaan rupiah per sesi.";
+  assert.strictEqual(gateVerdict(fresh, anchor), "ok", "new continuation passes");
+  // Without an anchor, repetition cannot be judged.
+  assert.strictEqual(gateVerdict(repeat, ""), "ok", "no anchor → never repetitive");
+  // Direct helper sanity.
+  assert.ok(isRepetitiveText(repeat, anchor), "helper agrees on verbatim repeat");
+  assert.ok(!isRepetitiveText(fresh, anchor), "helper agrees on fresh continuation");
+  assert.ok(isRawDumpText('<!DOCTYPE html><html lang="id"><body><div class="entry">konten halaman</div></body></html>'), "raw-dump helper agrees with gate");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -698,6 +790,10 @@ async function main() {
   testPureContinuation();
   testTidyContinuation();
   testDetailTopicMarker();
+  testGateTruncation();
+  testGateRawDump();
+  testGateNonAnswer();
+  testGateRepetition();
   console.log("LOGIC TESTS PASSED");
 }
 

@@ -19,6 +19,10 @@ import { buildConversationMessages, detectLanguage } from "./conversation";
 import { buildFinalReply } from "./response_formatter";
 import { detectEmotion as detectEmotionSig, inferEmotionFromContext, getMoodState, detectTopicSentiment } from "./emotion";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
+import { gateVerdict, tallyGate, repairTruncatedReply, isLikelyTruncated, type GateVerdict } from "./verifier";
+// Canonical truncation helpers now live in ./verifier; re-exported here for
+// any existing importers (single source of truth, no behavior change).
+export { repairTruncatedReply, isLikelyTruncated, gateVerdict, tallyGate };
 
 const GROQ_MODEL = "openai/gpt-oss-120b";
 
@@ -361,39 +365,6 @@ export async function translateText(
   return g.reply;
 }
 
-/** Deterministic repair when the token budget was exhausted: strip any dangling
- *  trailing list marker / unclosed formatting so the listener never receives a
- *  half-cut bullet, then append an honest continuation hint. Applies ONLY when
- *  the API reported finish_reason === "length" (genuine truncation). Never throws. */
-export function repairTruncatedReply(reply: string): string {
-  let out = (reply ?? "").trim();
-  // 1) Drop a lone trailing list marker ("5.", "5)", "- ", "* ").
-  out = out.replace(/\s*(?:\n+\s*\d+\.|\n+\s*\d+\)|\n+\s*[-*])\s*$/u, "");
-  // 2) Drop an unclosed trailing markdown segment ("**...**" unterminated).
-  const openBolds = (out.match(/\*\*/g) ?? []).length;
-  if (openBolds % 2 === 1) out = out.replace(/\*\*[^*]*$/u, "");
-  // 3) Drop a trailing colon that only opens an item that never got written.
-  out = out.replace(/[:：]\s*$/u, "").trim();
-  if (!out) return out;
-  return `${out}\n\n📌 Jawaban saya terpotong oleh batas panjang — ketik \u201clanjut\u201d untuk bagian berikutnya.`;
-}
-
-/** True when a reply most likely got cut mid-sentence by the provider, even
- *  when no finish_reason / pinned-token signal is reported. Long answers that
- *  end on a bare heading or an unpunctuated statement line are the classic
- *  silent-cut signature (e.g. trailing "Proses Machine Learning" with nothing
- *  after it). Short answers and list items / explicit end-punctuation are
- *  trusted as complete. */
-export function isLikelyTruncated(text: string): boolean {
-  const t = (text ?? "").trim();
-  if (t.length < 120) return false;
-  const lastLine = (t.split(/\r?\n/).pop() ?? "").trim();
-  if (!lastLine) return false;
-  if (/[.!?…;：:]$|["'’)」》>`]|\]\s*$/u.test(lastLine)) return false;
-  if (/^[-*•·]|\d+[.)]/.test(lastLine)) return false;
-  return true;
-}
-
 /** Rough prompt/response token estimate (chars/4) for the free-tier cost
  *  ledger. Cheap and never throws — precision is not the goal. */
 export function estimateTokens(text: string): number {
@@ -716,6 +687,51 @@ export async function llmRespond(
     if (r) return { reply: r, source: cand.src };
   }
   return { reply: null, source: null };
+}
+
+/** Budgeted recovery rail (evaluator-optimizer, bounded to ONE extra call):
+ *  regenerate a reply the deterministic output gate flagged as raw_dump /
+ *  non_answer / repetitive, with a corrective system instruction for THAT
+ *  verdict. Never recurses, never throttles the caller; returns null when the
+ *  provider fails so the caller keeps its original reply (fail-open). */
+export async function recoverReply(
+  env: Env,
+  userText: string,
+  bad: string,
+  context: Array<{ role: string; content: string }>,
+  anchor: string,
+  verdict: Exclude<GateVerdict, "ok">,
+  topic: string,
+): Promise<string | null> {
+  const guidance: Record<string, string> = {
+    raw_dump:
+      "Balasanmu bocor isi mentah (tag HTML, JSON/kode, atau teks halaman web) alih-alih jawaban bersih. " +
+      "Tulis ulang menjadi jawaban Bahasa Indonesia yang natural dan rapi: pakai fakta dari riset dengan kata-katamu sendiri, " +
+      "tampilkan tautan sebagai [Nama](url), jangan sertakan markup mentah atau kode program.",
+    non_answer:
+      "Balasanmu hanya tautan atau keterangan mesin, bukan jawaban utuh. Susun jawaban lengkap dalam Bahasa Indonesia yang natural, " +
+      "dengan kalimat pembuka dan penutup, sertakan sumber secara rapi bila perlu.",
+    repetitive:
+      "Jawabanmu mengulang isi analisis sebelumnya. Tulis LANJUTAN yang menambah informasi BARU (angka, contoh, langkah, detail) — " +
+      "JANGAN mengulang kalimat, judul, atau poin yang sudah ada di analisis sebelumnya.",
+    truncated:
+      "Jawabanmu terpotong. Lanjutkan sampai tuntas dan akhiri bagian terakhir dengan tanda titik.",
+  };
+  const tryCtx =
+    context?.filter((c) => (c.content || "").trim()).slice(-5) ?? [];
+  tryCtx.push({ role: "system", content: guidance[verdict] ?? guidance.repetitive });
+  if (anchor) {
+    tryCtx.push({
+      role: "system",
+      content: `Analisis sebelumnya pada sesi ini (jadikan acuan; JANGAN mengulang isinya):\n${anchor.slice(-1200)}`,
+    });
+  }
+  try {
+    const g = await llmRespond(env, userText, { context: tryCtx, topic, contextIsEnriched: true });
+    return g.reply?.trim() ? g.reply : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Generic text extractor: strip HTML tags & entity whitespace. */
@@ -1191,6 +1207,20 @@ export async function searchAndSynthesize(
   }
   const g = await llmRespond(env, userText, { context, topic, contextIsEnriched: true });
   if (g.reply) {
+    // OUTPUT GATE (verifier rail): catch silent failures deterministically
+    // before the reply reaches the owner. One bounded recovery call only —
+    // never silently drops a good reply, never loops (budget → end).
+    let generated = g.reply;
+    const verdict = gateVerdict(generated, followupAnchor);
+    if (verdict !== "ok") {
+      void tallyGate(env, "search_synth", verdict).catch(() => {});
+      if (verdict === "truncated") {
+        generated = repairTruncatedReply(generated);
+      } else {
+        const rec = await recoverReply(env, userText, generated, context, followupAnchor, verdict, topic);
+        if (rec && rec.trim().length >= 40) generated = rec;
+      }
+    }
     // SELF-LEARNING: Store the synthesized knowledge for future queries
     if (searchResult) {
       await storeLearnedKnowledge(env, topic, searchResult, "web_search_synthesized").catch(() => {});
@@ -1213,7 +1243,7 @@ export async function searchAndSynthesize(
       : emotion.sentiment;
     
     // Format reply for natural conversation
-    let formatted = buildFinalReply(g.reply, "research", finalSentiment);
+    let formatted = buildFinalReply(generated, "research", finalSentiment);
     if (hits.length > 0 && !/sumber:|📚/i.test(formatted)) {
       formatted = `${formatted}\n\n📚 *Sumber:*\n${formatSourceList(hits, 4)}`;
     }
