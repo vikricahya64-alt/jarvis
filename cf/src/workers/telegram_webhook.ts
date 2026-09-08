@@ -104,6 +104,46 @@ async function safeDBReply<T>(
   await fire(sendMessage(env, chatId, text));
 }
 
+/** Drain pending typo-confirmation research jobs (invoked by the minute cron).
+ *  Each job runs the heavy search OUTSIDE a Telegram webhook request, so a
+ *  >30s research run can never kill an interactive bot call before the answer
+ *  is delivered. Job keys are claimed (deleted) then processed; on a catchable
+ *  failure the key is restored so the next tick retries. */
+export async function drainPendingTypoRuns(env: Env): Promise<number> {
+  try {
+    const { keys } = await env.CONFIG_KV.list({ prefix: "typo_run:", limit: 5 });
+    let done = 0;
+    for (const k of keys) {
+      const raw = await env.CONFIG_KV.get(k.name, "json").catch<unknown>(() => null) as
+        null | { text?: string; topic?: string; owner?: number };
+      if (!raw || !raw.text || !raw.owner) {
+        await env.CONFIG_KV.delete(k.name).catch(() => {});
+        continue;
+      }
+      await env.CONFIG_KV.delete(k.name).catch(() => {}); // claim before run
+      try {
+        const topic = raw.topic || raw.text;
+        const r = await searchAndSynthesize(env, raw.owner, raw.text, topic);
+        await appendMemory(env, raw.owner, "user", raw.text, topic).catch(() => {});
+        await appendMemory(env, raw.owner, "assistant", r.reply, topic).catch(() => {});
+        saveObservation(env, raw.owner, `User menanyakan tentang: ${topic}`, "interest").catch(() => {});
+        updateSession(raw.owner, raw.text, r.reply, topic, "research");
+        await recordTaskCounters(env, "standard", raw.owner);
+        await storeResearchAnchor(env, raw.owner, topic, r.reply).catch(() => {});
+        await deliverSmartReply(env, raw.owner, r.reply);
+        done++;
+      } catch (e) {
+        console.error("[typo_drain] search failed, requeue", (e as Error).message);
+        await env.CONFIG_KV.put(k.name, JSON.stringify(raw), { expirationTtl: 900 }).catch(() => {});
+      }
+    }
+    return done;
+  } catch (e) {
+    console.error("[typo_drain] listing failed", (e as Error).message);
+    return 0;
+  }
+}
+
 /** Main entry for a verified Telegram POST. */
 export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Response> {
   // Callback query → consent resolution.
@@ -178,22 +218,18 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
         await fire(answerCallbackQuery(env, cq.id, "Dibatalkan."));
         return new Response("ok");
       }
-      await fire(answerCallbackQuery(env, cq.id, idx === "0" ? "Topik dikoreksi." : "Menggunakan topik asli."));
-      try {
-        const topic = extractTopic(chosen) ?? chosen;
-        const r = await searchAndSynthesize(env, raw.owner, chosen, topic);
-        await appendMemory(env, raw.owner, "user", chosen, topic).catch(() => {});
-        await appendMemory(env, raw.owner, "assistant", r.reply, topic).catch(() => {});
-        saveObservation(env, raw.owner, `User menanyakan tentang: ${topic}`, "interest").catch(() => {});
-        updateSession(raw.owner, chosen, r.reply, topic, "research");
-        await recordTaskCounters(env, "standard", raw.owner);
-        await storeResearchAnchor(env, raw.owner, topic, r.reply).catch(() => {});
-        await deliverSmartReply(env, raw.owner, r.reply);
-      } catch (e) {
-        console.error("[typo_confirm] search failed", (e as Error).message);
-        await fire(sendMessage(env, raw.owner,
-          `Maaf, pencarian sedang bermasalah — coba lagi sebentar.`));
-      }
+      // Defer the heavy search to the minute cron (drainPendingTypoRuns) so a
+      // >30s research run can never kill this webhook request before the answer
+      // is delivered. Self-healing: the job key persists until processed.
+      const topic = extractTopic(chosen) ?? chosen;
+      const jobId = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+      await env.CONFIG_KV.put(
+        `typo_run:${jobId}`, JSON.stringify({ text: chosen, topic, owner: raw.owner, ts: Date.now() }),
+        { expirationTtl: 900 },
+      ).catch(() => {/* degrade: re-add inline fallback below */});
+      await fire(sendMessage(env, raw.owner,
+        `🔍 Riset untuk *${topic.slice(0, 80)}* sedang dijalankan — jawaban menyusul sebentar (< 1 menit).`));
+      await fire(answerCallbackQuery(env, cq.id, idx === "0" ? "Diproses dengan topik koreksi." : "Diproses dengan topik asli."));
       return new Response("ok");
     }
     await fire(answerCallbackQuery(env, cq.id, "Tidak dikenal."));
