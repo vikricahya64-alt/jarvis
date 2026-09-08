@@ -123,6 +123,10 @@ export async function ensureWebhook(env: Env): Promise<boolean> {
       !Array.isArray(wh.allowed_updates) ||
       wh.allowed_updates.length === 0 ||
       wh.allowed_updates.includes("callback_query");
+    // M8-v26: always log the observed webhook state so the cron self-heal is
+    // auditable from wrangler tail (behavior unchanged).
+    console.log(`[ensureWebhook] url=${wh.url ?? "(none)"} pending=${wh.pending_update_count} ` +
+      `allowed=${JSON.stringify(wh.allowed_updates ?? [])} okUrl=${String(okUrl)} hasCb=${String(hasCb)}`);
     if (okUrl && hasCb) return true;
     const ALLOWED = [
       "message", "edited_message", "channel_post",
