@@ -144,6 +144,18 @@ export async function ensureWebhook(env: Env): Promise<boolean> {
 
 /** Main entry for a verified Telegram POST. */
 export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Response> {
+  // IDEMPOTENCY (M8-v29): Telegram redelivers an update when our ack is slow —
+  // and research can take seconds, so a redelivered confirmation reply ("1")
+  // was processed AGAIN through the generic path and answered "Siap." right
+  // after "✅ … Menyusun riset…". Reject repeats by update_id: the FIRST
+  // delivery owns the pipeline; a retry is acked silently with zero side
+  // effects. TTL covers Telegram's retry window; KV is strongly consistent
+  // here (single worker writes).
+  if (update.update_id) {
+    const seenUpd = await env.CONFIG_KV.get(`upd_rx:${update.update_id}`).catch(() => null);
+    if (seenUpd) return new Response("ok", { status: 200 });
+    await env.CONFIG_KV.put(`upd_rx:${update.update_id}`, "1", { expirationTtl: 3600 }).catch(() => {});
+  }
   // Callback query → consent resolution.
   if (update.callback_query) {
     const cq = update.callback_query;
