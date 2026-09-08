@@ -10,7 +10,8 @@
 
 import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
-import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps } from "../src/lib/ai";
+import { isTranslateCapRequest, matchWebhookPreCapability, capabilityIntent, getCapability, approachForIntent, describeCapabilities } from "../src/lib/capability_registry";
+import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate } from "../src/lib/ai";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
@@ -762,6 +763,77 @@ function testGateRepetition() {
   assert.ok(isRawDumpText('<!DOCTYPE html><html lang="id"><body><div class="entry">konten halaman</div></body></html>'), "raw-dump helper agrees with gate");
 }
 
+function testCapabilityRegistry() {
+  // Translate canonical predicate (shared webhook + brain):
+  assert.strictEqual(
+    isTranslateCapRequest("terjemahkan teks ini ke bahasa Inggris"),
+    true,
+    "translate head-phrase with payload",
+  );
+  assert.strictEqual(
+    isTranslateCapRequest("Terjemahkan  (ke spanyol) halo semua"),
+    true,
+    "translate with parenthesized target",
+  );
+  assert.strictEqual(isTranslateCapRequest("terjemahkan"), true, "bare translate request");
+  assert.strictEqual(isTranslateCapRequest("translate Hello world"), true, "english bare/head translate");
+  assert.strictEqual(isTranslateCapRequest("jangan terjemahkan kata ini"), false, "verb-like mid-sentence must not fire");
+  assert.strictEqual(isTranslateCapRequest("translated the document"), false, "past-tense english must not fire");
+  // parseTranslate parity: the canonical predicate must fire (and webhook
+  // translate path trigger) exactly when parseTranslate can decode a payload.
+  const scripted: string[] = [
+    "terjemahkan ke bahasa inggris: halo semua",
+    "Terjemahkan halo dunia",
+    "translate Hello world to English",
+    "terjemahkan ke jawa: aku sehat",
+    "terjemahkan ke spanyol: buenos dias",
+    "translate: gestion de projet",
+  ];
+  for (const t of scripted) {
+    if (parseTranslate(t)) {
+      assert.strictEqual(isTranslateCapRequest(t), true, `predicate fires when parseable: ${t}`);
+    }
+  }
+  const unscripted: string[] = [
+    "terjemahkan", // bare → predicate TRUE (dedicated fallback), parseTranslate null
+  ];
+  for (const t of unscripted) {
+    assert.strictEqual(parseTranslate(t), null, `not parseable: ${t}`);
+  }
+  assert.strictEqual(isTranslateCapRequest("terjemahkan"), true, "bare translate still routes");
+  const tr = parseTranslate("terjemahkan ke bahasa inggris: halo semua");
+  assert.ok(tr && tr.target === "English" && /halo semua/.test(tr.source), "target+source decoded");
+
+  // Webhook pre-cascade order = canonical contract (translate before prompt_master
+  // before context7), so the shared predicate resolves identically to the brain.
+  const pre = matchWebhookPreCapability("tolong buatkan prompt untuk AI coding agent");
+  assert.ok(pre && pre.id === "prompt_master", "webhook pre cascade picks prompt_master");
+  const preCtx = matchWebhookPreCapability("cara pakai hono di workers?");
+  assert.ok(preCtx && preCtx.id === "context7", "webhook pre cascade picks context7");
+  const preTr = matchWebhookPreCapability("terjemahkan ke jawa: bisa tolong dibantu");
+  assert.ok(preTr && preTr.id === "translate", "webhook pre cascade picks translate");
+  const preNone = matchWebhookPreCapability("apa rekomendasi laptop untuk coding?");
+  assert.strictEqual(preNone, null, "non-pre capability not short-circuited in webhook");
+
+  // Brain capabilityIntent agrees with the webhook cascade (no drift).
+  const brainTr = capabilityIntent("terjemahkan ke jawa: bisa dibantu", { ids: ["translate"] });
+  assert.ok(brainTr && brainTr.intent === "translation", "brain intent translation from registry");
+  const brainCtx = capabilityIntent("docs untuk hono", { ids: ["prompt_master", "context7"] });
+  assert.ok(brainCtx && brainCtx.id === "context7", "brain context7 from shared predicate");
+
+  // Contract integrity: every registered capability is resolvable and the
+  // approach mapping is total for capability intents.
+  const capabilityIds = ["self_referential", "emergency", "prompt_master", "context7", "design", "translate", "search", "followup", "understand", "command", "chat", "question"] as const;
+  for (const c of capabilityIds) {
+    assert.ok(getCapability(c), `capability registered: ${c}`);
+  }
+  for (const it of ["self_referential", "translation", "prompt_writer", "context7", "design", "search"]) {
+    assert.ok(approachForIntent(it), `approach resolves for intent: ${it}`);
+  }
+  assert.strictEqual(approachForIntent("bogus_intent"), null, "unknown intent has no approach");
+  assert.ok(describeCapabilities().includes("Capabilities J.A.R.V.I.S."), "describeCapabilities renders header");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -794,6 +866,7 @@ async function main() {
   testGateRawDump();
   testGateNonAnswer();
   testGateRepetition();
+  testCapabilityRegistry();
   console.log("LOGIC TESTS PASSED");
 }
 
