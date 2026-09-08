@@ -13,8 +13,10 @@ import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize"
 import { isTranslateCapRequest, matchWebhookPreCapability, capabilityIntent, getCapability, approachForIntent, describeCapabilities } from "../src/lib/capability_registry";
 import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate } from "../src/lib/ai";
 import { recoveryPlan, classifyOperational, budgetedRecovery, tallyFailure, readFailureTally, readFailureLedger, ledgerDayKey } from "../src/lib/failure";
-import { tallyGate } from "../src/lib/verifier";
+import { gateVerdict, tallyGate } from "../src/lib/verifier";
 import { runGapUpgradeLoop, resolveGapProposal, listGapProposals, describeGapProposals, capIdForPath, GAP_MIN_7D } from "../src/lib/gap_upgrade";
+import { isPromptMasterRequest, isPromptShaped } from "../src/lib/prompt_master";
+import { isContext7Request, context7FailureMessage } from "../src/lib/context7";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
@@ -977,6 +979,38 @@ async function testGapUpgrade() {
   assert.ok(GAP_MIN_7D >= 3, "threshold guard documented");
 }
 
+function testPromptMasterContract() {
+  // A prompt-master deliverable must look like a PROMPT, not a direct answer.
+  assert.ok(isPromptShaped("SASARAN: Python coding agent\nPROMPT:\n```text\nBuat fungsi...\n```"), "headered + fenced prompt shaped");
+  assert.ok(isPromptShaped("Target: Midjourney\nPROMPT\n```\ncinematic, --ar 16:9\n```"), "english header shaped");
+  assert.ok(isPromptShaped("SASARAN: LLM text\nPROMPT: ..."), "header without fence shaped");
+  assert.ok(!isPromptShaped("Berikut program Python untuk menghitung luas lingkaran: import math"), "direct solution is NOT prompt-shaped");
+  assert.ok(!isPromptShaped(""), "empty not shaped");
+  // Real failure shape from the live test: the answer STARTED with "Target:"
+  // so the shape-guard cannot catch the "answered instead of prompted" drift —
+  // that case is covered by the strengthened system-prompt contract instead.
+  assert.ok(isPromptShaped("Target: Python\nTugas: buat program lingkaran..."), "target header keeps it shaped (no retry)");
+  // A plain answer without ANY prompt scaffold IS a deformation → retry path.
+  assert.ok(!isPromptShaped("Berikut program Python untuk menghitung luas lingkaran: import math"), "bare prose deform");
+  // Trigger predicate: any 'prompt'/'prompting' mention fires (broad, by design).
+  assert.ok(isPromptMasterRequest("buatkan prompt untuk python"), "prompt request detected");
+  assert.ok(isPromptMasterRequest("bagaimana teknik prompting yang baik?"), "prose mention triggers");
+  assert.ok(!isPromptMasterRequest("tolong rapikan tulisan ini"), "no prompt word → no trigger");
+}
+
+function testContext7FailClosed() {
+  // Honest, deterministic fallbacks for every lookup failure — never empty.
+  for (const reason of ["unresolved", "not_found", "api_down", "empty"] as const) {
+    const msg = context7FailureMessage(reason, "hono");
+    assert.ok(msg && msg.length > 20, `failure message for ${reason}`);
+    assert.ok(!msg.includes("Sonos"), `no hallucinated subject for ${reason}`);
+  }
+  assert.ok(context7FailureMessage("not_found", "hono").includes("hono"), "names the library that failed");
+  assert.ok(context7FailureMessage("not_found", "hono").includes("ctx7:"), "offers the repo-id escape hatch");
+  assert.ok(isContext7Request("cara pakai hono"), "canonical context7 trigger fires");
+  assert.ok(isContext7Request("docs untuk hono"), "docs trigger fires");
+}
+
 async function testFailureRollup() {
   const kv = new Map<string, string>();
   const env = {
@@ -1039,6 +1073,8 @@ async function main() {
   await testBudgetedRecovery();
   await testFailureRollup();
   await testGapUpgrade();
+  testPromptMasterContract();
+  testContext7FailClosed();
   console.log("LOGIC TESTS PASSED");
 }
 
