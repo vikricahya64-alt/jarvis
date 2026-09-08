@@ -43,7 +43,7 @@ import {
   isDesignIntent,
 } from "./subagents";
 import { writeExpertPrompt } from "./prompt_master";
-import { lookupLibraryDocs } from "./context7";
+import { lookupLibraryDocs, context7FailureMessage } from "./context7";
 import { capabilityIntent, approachForIntent } from "./capability_registry";
 import { readFailureTally } from "./failure";
 import { describeGapProposals } from "./gap_upgrade";
@@ -532,15 +532,11 @@ export async function act(
       if (ctx7.ok && ctx7.reply) {
         return { reply: ctx7.reply, source: "context7" };
       }
-      const fallback = await llmRespond(env, text, {
-        topic: topic ?? undefined,
-        context: enrichedContext,
-        contextIsEnriched: true,
-      });
-      if (fallback.reply) {
-        return { reply: fallback.reply, source: fallback.source ?? "llm" };
-      }
-      return { reply: "Maaf, saya belum bisa mengambil dokumentasi library itu sekarang. Coba lagi sebentar.", source: "context7_fallback" };
+      // FAIL-CLOSED (anti-halusinasi): library yang tidak ter-resolve harus
+      // dijawab JUJUR, bukan diteruskan ke LLM umum (yang terbukti bisa
+      // menghalusinasi subjek salah — mis. "hono" jadi "Sonos"). Tally dicatat
+      // lookupLibraryDocs ke ledger gap→upgrade (context7 empty/blocked).
+      return { reply: context7FailureMessage(ctx7.reason ?? "empty", ctx7.library), source: "context7_fallback" };
     }
 
     case "simple_llm":

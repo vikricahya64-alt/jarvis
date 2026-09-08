@@ -1,6 +1,7 @@
 import type { Env } from "./db";
 import { llmRespond } from "./ai";
 import { fetchWithTimeout } from "./resilience";
+import { tallyFailure, type OperationalFailure } from "./failure";
 
 const CTX7_API = "https://context7.com/api";
 
@@ -85,6 +86,36 @@ async function resolveLibrary(env: Env, libraryName: string, query: string): Pro
 export interface Context7Result {
   reply: string | null;
   ok: boolean;
+  /** Library name tried (when the caller requested one but resolution failed). */
+  library?: string;
+  /** Why the lookup failed — the caller decides the honest reply (fail-closed,
+   *  anti-hallucination: NEVER fall through to a generic LLM on a miss). */
+  reason?: "unresolved" | "not_found" | "api_down" | "empty";
+}
+
+/** Map a lookup-failure reason to the operational failure ledger class so the
+ *  gap→upgrade loop sees context7 volume (fire-and-forget, never throws). */
+function tallyContext7Reason(env: Env, reason: NonNullable<Context7Result["reason"]>): void {
+  const cls: OperationalFailure = reason === "api_down" ? "blocked" : "empty";
+  void tallyFailure(env, "context7", cls).catch(() => {});
+}
+
+/** Deterministic, honest fallback message for a failed Context7 lookup.
+ *  NO generic-LLM answer: an unresolvable library must never be answered by
+ *  a model that is free to hallucinate a wrong subject (e.g. "hono" → "Sonos"). */
+export function context7FailureMessage(reason: NonNullable<Context7Result["reason"]>, library?: string): string {
+  const lib = library?.trim() ? ` '${library.trim()}'` : "";
+  switch (reason) {
+    case "not_found":
+      return `Hmm, saya belum menemukan library${lib} di Context7. Periksa ejaannya, atau beri id repo yang pasti seperti *ctx7: org/repo* (contoh: \`ctx7: honojs/hono\`).`;
+    case "api_down":
+      return `Dokumentasi${lib} belum bisa diambil dari Context7 saat ini. Bisa dicoba lagi sebentar, atau pakai bentuk \`ctx7: org/repo\`.`;
+    case "unresolved":
+      return "Saya kurang menangkap nama library yang Anda maksud. Sebutkan library-nya (mis. 'cara pakai hono'), atau id repo-nya: *ctx7: org/repo*.";
+    case "empty":
+    default:
+      return `Dokumentasi${lib} tidak menghasilkan konten untuk dijawab. Coba rephrasing, atau pakai id repo: \`ctx7: org/repo\`.`;
+  }
 }
 
 export async function lookupLibraryDocs(
@@ -93,16 +124,25 @@ export async function lookupLibraryDocs(
   context: Array<{ role: string; content: string }> = [],
 ): Promise<Context7Result> {
   const { nameOrId, isId } = extractLibrary(userText);
-  if (!nameOrId) return { reply: null, ok: false };
+  if (!nameOrId) {
+    tallyContext7Reason(env, "unresolved");
+    return { reply: null, ok: false, reason: "unresolved", library: undefined };
+  }
 
   let libraryId = isId ? nameOrId : null;
   if (!libraryId) {
     libraryId = await resolveLibrary(env, nameOrId, userText);
   }
-  if (!libraryId) return { reply: null, ok: false };
+  if (!libraryId) {
+    tallyContext7Reason(env, "not_found");
+    return { reply: null, ok: false, reason: "not_found", library: nameOrId };
+  }
 
   const docs = await ctx7Fetch(env, `/v2/context?query=${encodeURIComponent(userText.slice(0, 200))}&libraryId=${encodeURIComponent(libraryId)}`);
-  if (!docs || !docs.trim()) return { reply: null, ok: false };
+  if (!docs || !docs.trim()) {
+    tallyContext7Reason(env, docs === null ? "api_down" : "empty");
+    return { reply: null, ok: false, reason: docs === null ? "api_down" : "empty", library: libraryId };
+  }
 
   const system =
     `Kamu adalah J.A.R.V.I.S. yang memakai Context7 untuk menjawab pertanyaan pemilik tentang library/API. ` +
@@ -119,7 +159,10 @@ export async function lookupLibraryDocs(
   }).catch(() => null);
 
   const reply = (r?.reply ?? "").trim();
-  if (!reply) return { reply: null, ok: false };
+  if (!reply) {
+    tallyContext7Reason(env, "empty");
+    return { reply: null, ok: false, reason: "empty", library: libraryId };
+  }
   return { reply: reply.slice(0, 3600), ok: true };
 }
 
