@@ -11,7 +11,7 @@
 import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders, getAgentTask, finishAgentTask, listAgentTasks, failStaleAgentTasks, pruneOldAgentTasks, rememberMemory } from "./lib/db";
 import { sanitizeAgentReport, flagAgentReport } from "./lib/agent_executor";
 import { fireDueAgentRules } from "./lib/agent_rules";
-import { handleUpdate, drainPendingTypoRuns } from "./workers/telegram_webhook";
+import { handleUpdate, ensureWebhook } from "./workers/telegram_webhook";
 import { setWebhook, sendMessage, getWebhookInfo, getMe, setMyCommands } from "./lib/telegram";
 import { runDms } from "./daemons/dead_mans_switch";
 import { processMessage, escalateToDms, TaskMessage } from "./workers/task_processor";
@@ -176,7 +176,7 @@ export default {
         ok: true,
         ts: Date.now(),
         env: env.APP_ENV ?? "unknown",
-version: "m8-v24-be5f34bb",
+version: "m8-v25-ea9278ae",
       }));
     }
 
@@ -283,7 +283,7 @@ version: "m8-v24-be5f34bb",
         return respond(Response.json({
           ok: true,
           ts: Date.now(),
-version: "m8-v24-be5f34bb",
+version: "m8-v25-ea9278ae",
           systems: {
             d1: d1Ok ? "✅" : "❌",
             kv: kvOk ? "✅" : "❌",
@@ -617,12 +617,9 @@ version: "m8-v24-be5f34bb",
         } else if (rules.paused) {
           console.log(`[cron] agent_rules: paused /pause aktif`);
         }
-        // Typo-confirmation research jobs (deferred from the interactive
-        // callback so heavy searches never kill a webhook request).
-        const typoDone = await drainPendingTypoRuns(env);
-        if (typoDone > 0) {
-          console.log(`[cron] typo_drain: ran=${typoDone} (${Date.now() - start}ms)`);
-        }
+        // M8-v25: self-heal the Telegram webhook config (explicitly include
+        // callback_query in allowed_updates) and drain any straggling cron work.
+        await ensureWebhook(env);
       }
     } catch (e) {
       console.error(`[cron:${cron}] failed`, (e as Error).message);
