@@ -46,6 +46,7 @@ import { writeExpertPrompt } from "./prompt_master";
 import { lookupLibraryDocs } from "./context7";
 import { capabilityIntent, approachForIntent } from "./capability_registry";
 import { readFailureTally } from "./failure";
+import { describeGapProposals } from "./gap_upgrade";
 import { reflectOnTurn, getAnswerBehaviorContext } from "./evolution";
 import { buildFinalReply } from "./response_formatter";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
@@ -652,6 +653,7 @@ export async function getBrainStatus(owner: number, env?: Env): Promise<string> 
   const mood = getMoodState(owner);
   const metrics = brainMetrics;
   const gateLines = env ? await readFailureTally(env) : "";
+  const gapLines = env ? await describeGapProposals(env) : "";
 
   const lines = [
     "🧠 *J.A.R.V.I.S. Brain Status*",
@@ -681,5 +683,6 @@ export async function getBrainStatus(owner: number, env?: Env): Promise<string> 
     "",
   ];
   if (gateLines) lines.push(gateLines);
+  if (gapLines) lines.push(gapLines);
   return lines.map((l) => l.trimEnd()).join("\n");
 }

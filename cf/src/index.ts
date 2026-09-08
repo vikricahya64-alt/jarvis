@@ -23,6 +23,7 @@ import { ddgSearch } from "./lib/ai";
 import { acquireCronLock, releaseCronLock } from "./lib/resilience";
 import { runDreamCycle, generateMorningBriefing, decayPreferences, runEvolutionLoop, runInsightLifecycle } from "./lib/evolution";
 import { offerSuggestions } from "./lib/predictive";
+import { runGapUpgradeLoop } from "./lib/gap_upgrade";
 import { tickAutonomy } from "./lib/maestro";
 import { syncAllSessions } from "./lib/context_manager";
 import { runErrorHealLoop } from "./lib/error_monitor";
@@ -175,7 +176,7 @@ export default {
         ok: true,
         ts: Date.now(),
         env: env.APP_ENV ?? "unknown",
-        version: "m8-v12-090ea2d",
+        version: "m8-v13-5351a99",
       }));
     }
 
@@ -282,7 +283,7 @@ export default {
         return respond(Response.json({
           ok: true,
           ts: Date.now(),
-version: "m8-v12-090ea2d",
+version: "m8-v13-5351a99",
           systems: {
             d1: d1Ok ? "✅" : "❌",
             kv: kvOk ? "✅" : "❌",
@@ -563,10 +564,19 @@ version: "m8-v12-090ea2d",
       } else if (cron === "0 7 * * *") {
         const evoResult = await runEvolutionLoop(env);
         console.log(`[cron] evolution_loop: scanned=${evoResult.dreamResult.scanned} insights=${evoResult.dreamResult.insightsExtracted} affinity_cats=${evoResult.affinityCategories} drift=${evoResult.driftDetected} (${Date.now() - start}ms)`);
+        const gapUp = await runGapUpgradeLoop(env);
+        console.log(`[cron] gap_upgrade: rows=${gapUp.analyzed} gapped=${gapUp.proposed.length} opened=${gapUp.opened} deduped=${gapUp.deduped} (${Date.now() - start}ms)`);
         const briefing = await generateMorningBriefing(env, owner);
-        if (briefing) {
-          await sendMessage(env, owner, briefing);
-          console.log(`[cron] morning_briefing: sent ${briefing.length} chars`);
+        // A nursing gap with a fresh auto-proposal joins the briefing (one message).
+        const briefingText =
+          briefing && gapUp.opened > 0
+            ? `${briefing}\n\n🩺 *Auto-proposal gap→upgrade*\n${gapUp.proposed
+                .map((p) => `  • *${p.cap}* — ${p.failureClass} (×${p.count}): ${p.fix}`)
+                .join("\n")}`
+            : briefing;
+        if (briefingText) {
+          await sendMessage(env, owner, briefingText);
+          console.log(`[cron] morning_briefing: sent ${briefingText.length} chars`);
         } else {
           console.log(`[cron] morning_briefing: skip`);
         }

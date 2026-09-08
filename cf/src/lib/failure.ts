@@ -232,3 +232,55 @@ export async function readFailureTally(env: Env): Promise<string> {
     "",
   ].join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// Multi-day ledger (Phase 4 input: gap→upgrade)
+// ---------------------------------------------------------------------------
+
+export interface FailureLedgerRow {
+  /** Tally path (registry metricsKey intent), e.g. "search_synth". */
+  path: FailurePath;
+  failureClass: FailureClass;
+  /** Summed count over the window. */
+  count: number;
+}
+
+/** ISO date string (YYYY-MM-DD) for a UTC day offset from today (offset 0 =
+ *  today). Deterministic for fixed timestamps. */
+export function ledgerDayKey(offset: number, now = Date.now()): string {
+  const d = new Date(now);
+  d.setUTCDate(d.getUTCDate() - offset);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
+/** Aggregate the gate + operational ledgers across the last `days` days into
+ *  per-(path, class) counts. Read-only, never throws. */
+export async function readFailureLedger(env: Env, days = 7): Promise<FailureLedgerRow[]> {
+  const agg = new Map<string, FailureLedgerRow>();
+  const add = (path: string, cls: string, n: number) => {
+    const key = `${path}:${cls}`;
+    const prev = agg.get(key) ?? {
+      path: path as FailurePath,
+      failureClass: cls as FailureClass,
+      count: 0,
+    };
+    prev.count += n;
+    agg.set(key, prev);
+  };
+  for (let off = 0; off < days; off++) {
+    const day = ledgerDayKey(off);
+    const [gateRaw, failRaw] = await Promise.all([
+      env.CONFIG_KV?.get(`gate:${day}`).catch(() => null),
+      env.CONFIG_KV?.get(`fail:${day}`).catch(() => null),
+    ]);
+    const gate = (gateRaw ? JSON.parse(gateRaw) : {}) as Record<string, Record<string, number>>;
+    const fail = (failRaw ? JSON.parse(failRaw) : {}) as Record<string, Record<string, number>>;
+    for (const [path, byClass] of Object.entries(gate)) {
+      for (const [cls, n] of Object.entries(byClass)) add(path, cls, n);
+    }
+    for (const [path, byClass] of Object.entries(fail)) {
+      for (const [cls, n] of Object.entries(byClass)) add(path, cls, n);
+    }
+  }
+  return [...agg.values()].sort((a, b) => b.count - a.count);
+}
