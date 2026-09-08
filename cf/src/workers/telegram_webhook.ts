@@ -992,15 +992,19 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
       }
       const topic = extractTopic(text);
       if (topic) {
-        // M8-v25: Typo confirmation via the plain-text message path. When topic
+        // M8-v27: Typo confirmation via the plain-text message path. When topic
         // contains a word that is a one-character mutation of a common
         // institution/research word, ask the user to confirm ("1"/"2" reply)
-        // before burning LLM budget on a wrong search. NO inline buttons: this
-        // production webhook demonstrably drops callback_query updates, so the
-        // confirmation and the owner's answer both travel through the reliable
-        // message channel (see the typo_wait interceptor above).
+        // BEFORE burning LLM budget on a wrong search — UNLESS the surrounding
+        // context already supports the original-as-typed reading ("harga tembaga
+        // hari ini" → copper, bias "original" → research it as-is, no prompt;
+        // per HFON literature, ask only when context is ambiguous or points to
+        // the corrected reading). NO inline buttons: this production webhook
+        // demonstrably drops callback_query updates, so the confirmation and the
+        // owner's answer both travel through the reliable message channel (see
+        // the typo_wait interceptor above).
         const confusable = detectConfusableTopic(topic);
-        if (confusable) {
+        if (confusable && confusable.bias !== "original") {
           const correctedText = text.replace(
             new RegExp(`\\b${confusable.original}\\b`, "i"),
             confusable.corrected,
@@ -1014,10 +1018,13 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
             JSON.stringify({ text, correctedText, original: confusable.original, corrected: confusable.corrected, ts: Date.now() }),
             { expirationTtl: 600 },
           ).catch(() => {/* degrade: no confirm, run as-is */});
+          const biasHint = confusable.bias === "corrected"
+            ? `\nKonteks kalimatmu mengarah ke *${confusable.corrected}*.`
+            : "";
           await fire(sendMessage(env, owner,
             `🔍 Topik terdeteksi: *${topic.slice(0, 80)}*\n\n` +
             `Apakah yang dimaksud: *${correctedTopic.slice(0, 80)}*?\n` +
-            `Balas \`1\` untuk *${confusable.corrected}* (koreksi), atau \`2\` untuk tetap *${confusable.original}*.`));
+            `Balas \`1\` untuk *${confusable.corrected}* (koreksi), atau \`2\` untuk tetap *${confusable.original}*.${biasHint}`));
           break;
         }
         // Friendly info/query EXECUTE → real search + synthesis. This webhook
