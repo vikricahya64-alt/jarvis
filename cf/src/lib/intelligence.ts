@@ -45,6 +45,7 @@ import {
 import { writeExpertPrompt } from "./prompt_master";
 import { lookupLibraryDocs } from "./context7";
 import { capabilityIntent, approachForIntent } from "./capability_registry";
+import { readFailureTally } from "./failure";
 import { reflectOnTurn, getAnswerBehaviorContext } from "./evolution";
 import { buildFinalReply } from "./response_formatter";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
@@ -646,10 +647,11 @@ export async function processIntelligence(
 // ============================================================================
 
 /** Get comprehensive brain status for diagnostics. */
-export function getBrainStatus(owner: number): string {
+export async function getBrainStatus(owner: number, env?: Env): Promise<string> {
   const session = getSession(owner);
   const mood = getMoodState(owner);
   const metrics = brainMetrics;
+  const gateLines = env ? await readFailureTally(env) : "";
 
   const lines = [
     "🧠 *J.A.R.V.I.S. Brain Status*",
@@ -676,7 +678,8 @@ export function getBrainStatus(owner: number): string {
     "  • Cognition (LLM/research/design): ✅",
     "  • Reflection (learning/memory): ✅",
     "  • Safety (verifier/heuristics): ✅",
+    "",
   ];
-
-  return lines.join("\n");
+  if (gateLines) lines.push(gateLines);
+  return lines.map((l) => l.trimEnd()).join("\n");
 }

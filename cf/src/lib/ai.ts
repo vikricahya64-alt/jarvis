@@ -20,6 +20,7 @@ import { buildFinalReply } from "./response_formatter";
 import { detectEmotion as detectEmotionSig, inferEmotionFromContext, getMoodState, detectTopicSentiment } from "./emotion";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
 import { gateVerdict, tallyGate, repairTruncatedReply, isLikelyTruncated, type GateVerdict } from "./verifier";
+import { budgetedRecovery } from "./failure";
 // Canonical truncation helpers now live in ./verifier; re-exported here for
 // any existing importers (single source of truth, no behavior change).
 export { repairTruncatedReply, isLikelyTruncated, gateVerdict, tallyGate };
@@ -1207,20 +1208,22 @@ export async function searchAndSynthesize(
   }
   const g = await llmRespond(env, userText, { context, topic, contextIsEnriched: true });
   if (g.reply) {
-    // OUTPUT GATE (verifier rail): catch silent failures deterministically
-    // before the reply reaches the owner. One bounded recovery call only —
-    // never silently drops a good reply, never loops (budget → end).
-    let generated = g.reply;
-    const verdict = gateVerdict(generated, followupAnchor);
-    if (verdict !== "ok") {
-      void tallyGate(env, "search_synth", verdict).catch(() => {});
-      if (verdict === "truncated") {
-        generated = repairTruncatedReply(generated);
-      } else {
-        const rec = await recoverReply(env, userText, generated, context, followupAnchor, verdict, topic);
-        if (rec && rec.trim().length >= 40) generated = rec;
-      }
-    }
+    // OUTPUT GATE → Phase-3 BUDGETED RECOVERY (failure.ts): classify the
+    // provider reply deterministically, then repay it within a strict LLM
+    // budget (truncated → deterministic repair at 0 calls, others → ONE
+    // corrective rewrite max). Never loops, never throws; if recovery cannot
+    // clean the reply it falls back to the reply as-is (fail-open).
+    const step = await budgetedRecovery(env, {
+      userText,
+      bad: g.reply,
+      context,
+      anchor: followupAnchor,
+      verdict: gateVerdict(g.reply, followupAnchor),
+      topic,
+      path: "search_synth",
+      llmBudget: 1,
+    });
+    let generated = step.text;
     // SELF-LEARNING: Store the synthesized knowledge for future queries
     if (searchResult) {
       await storeLearnedKnowledge(env, topic, searchResult, "web_search_synthesized").catch(() => {});
