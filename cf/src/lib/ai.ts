@@ -35,7 +35,11 @@ export const BRIEF_INTENT_RE =
   /\b(?:ringkas|intisari|intisarikan|versi singkat|jawaban singkat|secara singkat|singkat saja|singkat aja|tl;?dr|short version|keep it short|brief)\b/i;
 // OpenRouter free-tier fallback. ":free" models rotate; pinned to a widely
 // available free model by default, overridable via OPENROUTER_MODEL env.
-const OPENROUTER_MODEL = "qwen/qwen3.6-27b";
+// Verified 2026-09-08: default + deep models both exist and are fully free.
+const OPENROUTER_MODEL = "nvidia/nemotron-3.5-lightning:free";
+// Heavy-reasoning tier for deep research synthesis (overridable via
+// OPENROUTER_DEEP_MODEL env).
+const OPENROUTER_DEEP_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
 // Google Gemini as a resilience fallback when Groq is rate-limited/down.
 // Uses the free-tier model (gemma-4-31b-it) by default; can rotate to backup.
 const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models/";
@@ -194,7 +198,7 @@ export async function continueAnalysis(
   try {
     const groq = await groqRespond(env, step, { prebuiltMessages: messages, topic: "continuation" });
     if (groq) return tidyContinuation(groq);
-    const or = await openrouterRespond(env, step, { prebuiltMessages: messages, topic: "continuation" });
+    const or = await openrouterRespond(env, step, { prebuiltMessages: messages, topic: "continuation", deep: true });
     return or ? tidyContinuation(or) : null;
   } catch {
     return null;
@@ -719,7 +723,7 @@ body: JSON.stringify({
 export async function openrouterRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }>; deep?: boolean } = {},
 ): Promise<string | null> {
   const key = env.OPENROUTER_API_KEY;
   if (!key) return null; // fail-open: not configured
@@ -734,7 +738,9 @@ export async function openrouterRespond(
       : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined, skipUserMessage: opts.skipUserMessage },
   ).catch(() => buildFallbackMessages(context, userText));
 
-  const model = env.OPENROUTER_MODEL || OPENROUTER_MODEL;
+  const model = opts.deep
+    ? (env.OPENROUTER_DEEP_MODEL || OPENROUTER_DEEP_MODEL)
+    : (env.OPENROUTER_MODEL || OPENROUTER_MODEL);
   let reply: string | null = null;
   const ok = await withResilience(env, "openrouter", 0, async (timeoutMs) => {
     const res = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
@@ -906,7 +912,7 @@ export async function workersAiRespond(
 export async function llmRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; systemOverride?: string } = {},
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; systemOverride?: string; deep?: boolean } = {},
 ): Promise<{ reply: string | null; source: "workers_ai" | "groq" | "openrouter" | "gemini" | "self_ref" | null }> {
   // SELF-REFERENTIAL INTERCEPT — the brain's first and most important guard.
   // If the input asks "who are you" or "what can you do", answer directly from
@@ -1534,7 +1540,7 @@ export async function searchAndSynthesize(
       content: "Pemilik minta VERSI SINGKAT: jawab maksimal ±60 kata, langsung ke inti, tanpa intro/markdown berlebihan.",
     });
   }
-  const g = await llmRespond(env, userText, { context, topic, contextIsEnriched: true });
+  const g = await llmRespond(env, userText, { context, topic, contextIsEnriched: true, deep: true });
   if (g.reply) {
     // OUTPUT GATE → Phase-3 BUDGETED RECOVERY (failure.ts): classify the
     // provider reply deterministically, then repay it within a strict LLM

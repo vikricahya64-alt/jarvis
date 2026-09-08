@@ -8,7 +8,7 @@
 #   GROQ_API_KEY         — (fallback candidate) JARVIS's Groq key, free tier.
 # Optional secrets/vars:
 #   OPENCODE_MODEL       — model id in "provider/model" form (default:
-#                          openrouter/nvidia/nemotron-3-super-120b-a12b:free,
+#                          nvidia/nemotron-3-super-120b-a12b:free,
 #                          a strong free OpenRouter model). Set vars to override.
 
 name: opencode
@@ -89,7 +89,7 @@ jobs:
           # inputs.model (per-run override) > vars.OPENCODE_MODEL > default.
           MODEL="${{ inputs.model }}"
           if [ -z "$MODEL" ]; then MODEL="${{ vars.OPENCODE_MODEL }}"; fi
-          if [ -z "$MODEL" ]; then MODEL="openrouter/nvidia/nemotron-3-super-120b-a12b:free"; fi
+          if [ -z "$MODEL" ]; then MODEL="nvidia/nemotron-3-super-120b-a12b:free"; fi
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
           echo "Anggota model: $MODEL"
 

@@ -73,8 +73,10 @@ DMS_STAGE2_HOURS = "48"
 QUEUE_RETRY_BACKOFF_MS = "1000"
 # OpenRouter (free models) — breadth fallback + research deepening.
 #   * OPENROUTER_API_KEY is a SECRET: set via `wrangler secret put OPENROUTER_API_KEY`
-#   * OPENROUTER_MODEL optional; defaults inside code to qwen/qwen3.6-27b.
-OPENROUTER_MODEL = "qwen/qwen3.6-27b"
+#   * OPENROUTER_MODEL / OPENROUTER_DEEP_MODEL optional; defaults inside code.
+#     Verified 2026-09-08: both exist on OpenRouter and are 100% free.
+OPENROUTER_MODEL = "nvidia/nemotron-3.5-lightning:free"
+OPENROUTER_DEEP_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 # Serverless delegation target (AGENT_TOKEN & GITHUB_TOKEN are SECRETS via
 # `wrangler secret put`). The repo is PUBLIC → GitHub Actions minutes are
 # unlimited for free, so heavy JARVIS work is executed by opencode on an
