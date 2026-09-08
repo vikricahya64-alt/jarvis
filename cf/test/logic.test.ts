@@ -21,6 +21,7 @@ import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbac
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText, salesReport } from "../src/lib/db";
 import { isBareTodoVerb, parseReminder, tidyVisionReply } from "../src/workers/telegram_webhook";
+import { deliverSmartReply } from "../src/lib/telegram";
 import { parseTranslate } from "../src/lib/ai";
 import { isLikelyTruncated, repairTruncatedReply, gateVerdict, isRawDumpText, isRepetitiveText } from "../src/lib/verifier";
 
@@ -1109,6 +1110,51 @@ async function testFailureRollup() {
   assert.ok(kv.size >= 2, "both KV ledgers written");
 }
 
+async function testSmartReplyDelivery() {
+  // Jaminan "jangan pernah senyap": kirim balasan sekali, retry sekali jika
+  // gagal, dan bila keduanya gagal beri pemilik diagnostik (tidak di-drop
+  // diam-diam seperti fire() lama yang menelan error).
+  const realFetch = globalThis.fetch;
+  const env: any = { TELEGRAM_TOKEN: "stub" };
+
+  const calls: string[] = [];
+  (globalThis as any).fetch = async (_url: any, init: any) => {
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    calls.push(String(body.text));
+    // Semua percobaan kirim gagal; hanya teks diagnostik yang "oke".
+    return new Response(JSON.stringify({
+      ok: (body.text as string).startsWith("⚠️"),
+      description: (body.text as string).startsWith("⚠️") ? undefined : "Bad Gateway",
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    await deliverSmartReply(env, 1, "jawaban penting", 0);
+    assert.strictEqual(calls.length, 3, "asli + retry + diagnostik = 3 call");
+    assert.strictEqual(calls[0], "jawaban penting", "call pertama teks asli");
+    assert.strictEqual(calls[1], "jawaban penting", "retry membawa teks asli");
+    assert.ok(/gagal mengirimkannya/.test(calls[2]), "call ketiga = pesan diagnostik");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
+  const retried: string[] = [];
+  (globalThis as any).fetch = async (_url: any, init: any) => {
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    retried.push(String(body.text));
+    return new Response(JSON.stringify({
+      ok: retried.length >= 2,
+      description: retried.length >= 2 ? undefined : "Bad Gateway",
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    await deliverSmartReply(env, 1, "coba lagi", 0);
+    assert.strictEqual(retried.length, 2, "retry sukses di percobaan ke-2");
+    assert.ok(!(retried[1] ?? "").startsWith("⚠️"), "tanpa diagnostik jika retry berhasil");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 async function testSalesReportBasis() {
   // Basis laba konsisten: Omzet tetap = apa yang customer bayar (SUM orders.total,
   // sudah net diskon + ongkir); ongkir diperlakukan pass-through sehingga TIDAK
@@ -1223,6 +1269,7 @@ async function main() {
   await testContext7ResolveVerifier();
   await testAntiHallucinationRails();
   await testSalesReportBasis();
+  await testSmartReplyDelivery();
   console.log("LOGIC TESTS PASSED");
 }
 

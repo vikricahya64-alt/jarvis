@@ -17,7 +17,7 @@ import {
   createOrder, listOrders, getOrder, updateOrderStatus, salesReport,
   type Product, type Order, type OrderInput,
 } from "../lib/db";
-import { sendMessage, sendPhoto, sendVoice, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, TelegramMessage, downloadTelegramFile } from "../lib/telegram";
+import { sendMessage, sendPhoto, sendVoice, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, TelegramMessage, downloadTelegramFile, deliverSmartReply } from "../lib/telegram";
 import { withResilience, fetchWithTimeout } from "../lib/resilience";
 import { synthesizeSpeech } from "../lib/tts";
 import {
@@ -812,7 +812,7 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
           // Bare translate without any prior analysis → fall through to the
           // brain pipeline below (same fail-open path as before).
         }
-        await fire(sendMessage(env, owner, await applyDefault(env, owner, res, text)));
+        await deliverSmartReply(env, owner, await applyDefault(env, owner, res, text));
         break;
       }
       // Gambar: generate image prompt, then ACTUALLY generate the image
@@ -912,7 +912,7 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
           updateSession(owner, text, r.reply, topic, "research");
           await recordTaskCounters(env, "standard", owner);
           await storeResearchAnchor(env, owner, topic, r.reply).catch(() => {});
-          await fire(sendMessage(env, owner, r.reply));
+          await deliverSmartReply(env, owner, r.reply);
         } catch (e) {
           console.error("[webhook] search path failed", (e as Error).message);
           await fire(sendMessage(env, owner,
