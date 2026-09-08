@@ -425,6 +425,75 @@ function verifierSystem(ownerSovereignty: string): string {
   ].join("\n");
 }
 
+// ---- topic-focus rail (deterministic) ------------------------------------
+// Fresh queries were being HIJACKED by stale learned memory: the researcher saw
+// "Pengetahuan yang SUDAH tersimpan" about an old subject (verified live: a
+// "kebutuhan pasar X" query turned into a copper-market research) and planned
+// angles serving the MEMORY, not the owner's current words. Deterministic fix:
+// every planned angle MUST share >=1 significant keyword with the CURRENT
+// query+topic; angles that drift get replaced by focus-derived fallback angles.
+const STOPWORDS = new Set([
+  "dan", "atau", "yang", "ini", "itu", "ini", "untuk", "dari", "dengan",
+  "akan", "pada", "para", "bagi", "tentang", "mengenai", "adalah", "dalam",
+  "setiap", "serta", "karena", "tidak", "jangan", "saat", "sini", "sana",
+  "bila", "jika", "kalau", "dapat", "bisa", "mau", "ingin", "ada", "apa",
+  "siapa", "kenapa", "mengapa", "kapan", "berapa", "dimana", "apa", "semua",
+  "lebih", "saja", "juga", "sudah", "belum", "hanya", "banyak", "paling",
+  "menurut", "sangat", "agar", "supaya", "antara", "seperti", "melalui",
+]);
+
+/** Kata bermakna (>3 huruf, bukan stopword) dari sebuah teks. Dipakai untuk
+ *  menyandingkan sudut pencarian dengan fokus pertanyaan pemilik SAAT INI. */
+export function significantTokens(text: string): string[] {
+  return String(text ?? "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 3 && !STOPWORDS.has(w));
+}
+
+function overlaps(a: string[], b: string[]): boolean {
+  return a.some((t) => b.includes(t));
+}
+
+/** Kata penunjang aman untuk sudut — boleh menambah, tak dianggap "menyimpang". */
+const ANGLE_DESCRIPTOR = new Set([
+  "tren", "trend", "contoh", "terbaru", "harga", "biaya", "analisis", "analisa",
+  "laporan", "data", "indonesia", "pemasaran", "konsumsi", "strategi", "praktis",
+  "komparasi", "perbandingan", "umum",
+]);
+
+/** Sudut dipertahankan HANYA jika (1) berbagi >=1 kata kunci bermakna dengan
+ *  fokus pertanyaan DAN (2) tidak membawa istilah substantif asing (mis.
+ *  "tembaga", "produksi") — kata seperti itu menandakan sudut menyimpang dari
+ *  pertanyaan pemilik menuju subjek lain (memori lama / hasil search liar). */
+function angleKept(angle: string, focus: string[]): boolean {
+  const toks = significantTokens(angle);
+  if (!toks.length) return false;
+  if (!overlaps(toks, focus)) return false;
+  const stray = toks.filter((t) => !focus.includes(t) && !ANGLE_DESCRIPTOR.has(t));
+  return stray.length === 0;
+}
+
+/** Sejajarkan angles hasil researcher dengan fokus pertanyaan: angle yang tidak
+ *  berpegang pada kata-kata pertanyaan SAAT INI diganti angle turunan dari fokus
+ *  itu sendiri — mencegah memori lama/kesalahan LLM membajak arah riset. */
+export function alignAngles(userText: string, topic: string, rawAngles: string[]): string[] {
+  const focus = significantTokens(`${userText} ${topic}`);
+  const cleaned = (rawAngles ?? [])
+    .map((a) => shortenAngle(cleanStr(a)))
+    .filter(Boolean)
+    .slice(0, MAX_ANGLES);
+  if (focus.length === 0) return cleaned.length ? cleaned : [shortenAngle(topic)];
+  const kept = cleaned.filter((a) => angleKept(a, focus));
+  const fallback: string[] = [];
+  for (let i = 0; i + 2 < focus.length; i += 3) {
+    fallback.push(shortenAngle(focus.slice(i, i + 3).join(" ")));
+  }
+  if (!fallback.length && focus.length) fallback.push(shortenAngle(focus.slice(0, 4).join(" ")));
+  const angles = kept.concat(fallback).slice(0, MAX_ANGLES);
+  return angles.length ? angles : [shortenAngle(focus.slice(0, 5).join(" "))];
+}
+
 // ---- researcher sub-agent (1 LLM call) ----------------------------------
 async function runResearcher(
   env: Env,
@@ -436,23 +505,28 @@ async function runResearcher(
   // topic (persisted from earlier turns) so the planned angles EXTEND prior
   // findings instead of re-searching from a blank slate. Free (D1 read, no
   // fetch/LLM). This is the "memori antar-sub-agen" shared context hop.
-  const mems = await searchMemory(env, topic, 4).catch(() => []);
+  // Topic-focus: buang memori yang tidak berbagi kata kunci dengan pertanyaan
+  // SAAT INI (memori lama tidak boleh mengubah arah riset) dan ingatkan
+  // researcher bahwa pertanyaan sekarang adalah penentu arah.
+  const focusTokens = significantTokens(`${userText} ${topic}`);
+  const mems = (await searchMemory(env, topic, 4).catch(() => []))
+    .filter((m) => focusTokens.length === 0 || overlaps(significantTokens(m.content), focusTokens));
   const known = mems.length
-    ? "\nPengetahuan yang SUDAH tersimpan tentang topik ini (biarkan angle menindaklanjuti, jangan mengulanginya):\n" +
+    ? "\nPengetahuan yang SUDAH tersimpan (KONTEKS SAJA — JANGAN memindahkan arah riset ke subjek memori lama; pertanyaan & topik pemilik SAAT INI adalah penentu arah):\n" +
       mems.map((m) => `- ${m.content}`).join("\n").slice(0, 900)
     : "";
   // Level 15 follow-up anchor: when this research extends an immediately-previous
   // analysis (same session), tell the researcher explicitly so its angles DEEPEN
   // that answer instead of treating the follow-up as a fresh topic.
   const anchorBlock = anchor
-    ? `\nANALISIS SEBELUMNYA (jadikan titik acuan; sudut pencarian harus MEMPERDALAM, bukan mengulang):\n${anchor.slice(0, 3000)}\n`
+    ? `\nANALISIS SEBELUMNYA (jadikan titik acuan; sudut pencarian harus MEMPERDALAM, bukan mengulang — tetap berdiri pada pertanyaan pemilik SAAT INI):\n${anchor.slice(0, 3000)}\n`
     : "";
   const prompt =
     `Pertanyaan pemilik: "${userText}"\n` +
     `Topik penelitian: "${topic}"\n` +
     anchorBlock +
     known +
-    `\nBuat 1-${MAX_ANGLES} sudut pencarian (angles) yang paling mencakup dan berbeda.`;
+    `\nBuat 1-${MAX_ANGLES} sudut pencarian (angles) yang paling mencakup dan berbeda — WAJIB berpegang pada kata-kata pertanyaan & topik pemilik,\nJANGAN membuat sudut yang jauh dari topik pertanyaan.`;
   const g = await llmRespond(env, prompt, {
     topic,
     context: [{ role: "system", content: researcherSystem(OWNER_SOVEREIGNTY) }],
@@ -466,11 +540,7 @@ async function runResearcher(
     return again?.reply ?? null;
   });
   if (!plan) return { angles: [shortenAngle(topic)] };
-  const angles = plan.angles
-    .map((a) => shortenAngle(cleanStr(a)))
-    .filter(Boolean)
-    .slice(0, MAX_ANGLES);
-  return { angles: angles.length ? angles : [shortenAngle(topic)] };
+  return { angles: alignAngles(userText, topic, plan.angles) };
 }
 
 // ---- writer sub-agent (1 LLM call) --------------------------------------
@@ -485,11 +555,16 @@ async function runWriter(
   narrow = false,
 ): Promise<string | null> {
   const context = await recentContext(env, owner, 4);
-  const mems = await searchMemory(env, topic, 4);
+  // Topic-focus: memori lama dengan subjek lain tidak boleh menggeser subjek
+  // jawaban menjauh dari pertanyaan saat ini — hanya memori yang berbagi kata
+  // kunci dengan query/topic yang ikut sebagai konteks.
+  const focusTokens = significantTokens(`${userText} ${topic}`);
+  const mems = (await searchMemory(env, topic, 4).catch(() => []))
+    .filter((m) => focusTokens.length === 0 || overlaps(significantTokens(m.content), focusTokens));
   if (mems.length > 0) {
     context.push({
       role: "assistant",
-      content: "Kenang-kenangan relevan: " + mems.map((m) => m.content).join(" | ").slice(0, 1200),
+      content: "Kenang-kenangan relevan (KONTEKS SAJA — jangan mengganti subjek pertanyaan saat ini dengannya): " + mems.map((m) => m.content).join(" | ").slice(0, 1200),
     });
   }
   const behaviorContext = await getAnswerBehaviorContext(env, topic);
