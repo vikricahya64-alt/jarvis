@@ -20,6 +20,7 @@ Synchronous on purpose (Vercel serverless rejects asyncio.run -> EBUSY).
 import os
 import json
 import time
+import hmac
 import hashlib
 import logging
 from http.server import BaseHTTPRequestHandler
@@ -33,6 +34,24 @@ logger = logging.getLogger("simulator")
 # ------------------------------------------------------------------
 # Module-level helpers (must exist here; cannot be self._ methods)
 # ------------------------------------------------------------------
+def _authorized(headers):
+    """Fail-closed internal auth. Calls must present INTERNAL_AUTH_TOKEN as
+    `Authorization: Bearer <token>` or `X-Internal-Token: <token>`.
+    If the env var is unset the request is DENIED (no silent open mode)."""
+    secret = os.getenv("INTERNAL_AUTH_TOKEN", "")
+    if not secret:
+        logger.error("INTERNAL_AUTH_TOKEN unset - denying request (fail-closed)")
+        return False
+    provided = headers.get("Authorization", "") or ""
+    if provided.startswith("Bearer "):
+        provided = provided[len("Bearer "):].strip()
+    elif headers.get("X-Internal-Token"):
+        provided = headers.get("X-Internal-Token").strip()
+    else:
+        provided = ""
+    return hmac.compare_digest(provided, secret)
+
+
 def _read_json(handler):
     length = int(handler.headers.get("Content-Length", 0) or 0)
     body = handler.rfile.read(length) if length else b""
@@ -214,6 +233,8 @@ class handler(BaseHTTPRequestHandler):
         _send_json(self, {"ok": True, "service": "jarvis-simulate"}, 200)
 
     def do_POST(self):
+        if not _authorized(self.headers):
+            return _send_json(self, {"ok": False, "error": "unauthorized"}, 401)
         try:
             body = _read_json(self)
             code = body.get("code", "")

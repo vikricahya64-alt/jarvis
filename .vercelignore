@@ -4,3 +4,6 @@ sql/
 .git/
 __pycache__/
 *.pyc
+# Fly.io ASGI entry — not a Vercel endpoint; ignoring keeps the deploy at 12
+# serverless functions (Vercel Hobby cap).
+api/fly_app.py

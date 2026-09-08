@@ -243,13 +243,10 @@ async function testHardeningWiring() {
   });
   assert.strictEqual(zt.requireCert(okReq).ok, true, "operator cert must pass requireCert");
 
-  // (4) Queue escalation is wired: processMessage + escalateToDms are exported
-  //     from task_processor and referenced by index.ts's queue handler.
-  const tp = await import("../src/workers/task_processor");
-  assert.strictEqual(typeof tp.processMessage, "function");
-  assert.strictEqual(typeof tp.escalateToDms, "function");
+  // (4) Index exposes the live cron/health surfaces only — the queue consumer
+  //     (task_processor) was removed as dead code (queue bindings disabled).
   const indexSrc = readFileSync(new URL("../src/index.ts", import.meta.url), "utf-8");
-  assert.ok(/escalateToDms\(/.test(indexSrc), "queue handler must call escalateToDms on last attempt");
+  assert.ok(!/queue\(/.test(indexSrc), "index must not contain a queue consumer (bindings disabled)");
   assert.ok(/auditIntegrity\(/.test(indexSrc), "index must expose auditIntegrity (/audit_status)");
 }
 

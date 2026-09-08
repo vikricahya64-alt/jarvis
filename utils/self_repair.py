@@ -19,6 +19,7 @@ import os
 import re
 import json
 import time
+import shlex
 import logging
 import subprocess
 
@@ -101,7 +102,10 @@ def diagnose(log_fragment: str) -> dict:
 # Sandbox test (E2B or local subprocess)
 # ------------------------------------------------------------------
 def _run_test(command: str, timeout: int = 45) -> bool:
-    """Run a test command in a sandbox. Prefer E2B; fall back to local bash."""
+    """Run a test command in a sandbox. Prefer E2B; fall back to a local,
+    NO-SHELL whitelisted test runner. The command originates from an LLM, so
+    shell=True was an RCE risk (metacharacter execution); we now split argv
+    explicitly and only allow known test runners."""
     if not command:
         return False
     # Try E2B sandbox first (isolated, no local side-effects) if configured.
@@ -113,10 +117,14 @@ def _run_test(command: str, timeout: int = 45) -> bool:
             return bool(ok)
     except Exception:
         pass
-    # Local fallback (read-only test invocation).
+    # Local fallback: explicit argv only (no shell), allowlisted binaries.
     try:
-        proc = subprocess.run(command, shell=True, capture_output=True,
-                              text=True, timeout=timeout, cwd=REPO_PATH)
+        argv = shlex.split(command)
+        # Guard against pip stealing the test, and require a known runner.
+        if not argv or argv[0] not in ("python", "python3", "pytest", "ruff"):
+            return False
+        proc = subprocess.run(argv, capture_output=True, text=True,
+                              timeout=timeout, cwd=REPO_PATH)
         return proc.returncode == 0
     except Exception:
         return False

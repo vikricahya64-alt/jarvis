@@ -11,6 +11,7 @@ The cron route is protected by a shared secret header so only Vercel can
 invoke it.
 """
 import os
+import hmac
 import json
 import logging
 from http.server import BaseHTTPRequestHandler
@@ -117,10 +118,11 @@ def process_swarm_one() -> dict:
 class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-        # Require the cron secret header (set via CRON_SECRET env var).
+        # Fail-closed cron secret check (set via CRON_SECRET env var). When
+        # unset the cron is DENIED — never silently open.
         token = self.headers.get("Authorization", "").replace("Bearer ", "")
         secret = os.getenv("CRON_SECRET", "")
-        if secret and token != secret:
+        if not secret or not hmac.compare_digest(token, secret):
             self._send_json({"ok": False, "error": "Unauthorized"}, 401)
             return
 

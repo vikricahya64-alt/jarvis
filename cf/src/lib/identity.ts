@@ -74,3 +74,10 @@ export const JARVIS_IDENTITY = {
  */
 export const SELF_REF_RE =
   /(?:^|\b)(?:siapa (?:kamu|kamu ini|anda)|kamu (?:siapa|adalah|bisa apa|bisa ngapain|bisa buat apa)|apa\s+(?:ya\s+|sih\s+|nih\s+|dong\s+|lho\s+|deh\s+|kok\s+|kan\s+|toh\s+)?yang bisa kamu (?:lakukan|bantu|buat)|apa uang bisa kamu (?:lakukan|bantu|buat)|apa kemampuanmu|apa fungsi kamu|what can you (?:do|help)|who are you|what are you)(?:\b|$)/i;
+
+/**
+ * Learned-content poisoning filter — single source of truth, shared by
+ * evolution.ts and predictive.ts. Excludes insights/preferences whose text
+ * carries the old "uang"→"yang" typo (self-ref questions learned as facts).
+ */
+export const BUG_PATTERNS = /uang bisa kamu|uang dapat digunakan|apa uang bisa/i;

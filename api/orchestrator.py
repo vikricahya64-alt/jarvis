@@ -15,6 +15,7 @@ background thread owned by webhook.py.
 """
 import os
 import json
+import hmac
 import logging
 from http.server import BaseHTTPRequestHandler
 
@@ -26,6 +27,24 @@ from utils import misc_tools, todos
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("orchestrator")
+
+
+def _authorized(headers):
+    """Fail-closed internal auth. Calls must present INTERNAL_AUTH_TOKEN as
+    `Authorization: Bearer <token>` or `X-Internal-Token: <token>`.
+    If the env var is unset the request is DENIED (no silent open mode)"""
+    secret = os.getenv("INTERNAL_AUTH_TOKEN", "")
+    if not secret:
+        logger.error("INTERNAL_AUTH_TOKEN unset - denying request (fail-closed)")
+        return False
+    provided = headers.get("Authorization", "") or ""
+    if provided.startswith("Bearer "):
+        provided = provided[len("Bearer "):].strip()
+    elif headers.get("X-Internal-Token"):
+        provided = headers.get("X-Internal-Token").strip()
+    else:
+        provided = ""
+    return hmac.compare_digest(provided, secret)
 
 
 def _extract_tool_calls(response):
@@ -464,7 +483,10 @@ class handler(BaseHTTPRequestHandler):
         Accepts a webhook payload matching the tasks row shape:
           {"record": {id, telegram_id, input, status, ...}}
         or simply {"id": ..., "telegram_id": ..., "input": ...}.
+        Requires INTERNAL_AUTH_TOKEN (Bearer or X-Internal-Token).
         """
+        if not _authorized(self.headers):
+            return self._send_json({"ok": False, "error": "unauthorized"}, 401)
         try:
             payload = self._read_json()
             record = payload.get("record", payload)

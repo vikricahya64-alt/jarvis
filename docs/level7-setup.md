@@ -134,10 +134,12 @@ vercel env add JARVIS_EDGE_AUTH   production   # token rahasia
 vercel deploy --prod --yes
 ```
 
-Lalu pastikan ladder aktif via health:
+Lalu pastikan ladder aktif via health (endpoint kini meminta `INTERNAL_AUTH_TOKEN`):
 ```bash
 curl -s -X POST https://jarvis-sigma-navy.vercel.app/api/simulator_proxy \
-  -H 'Content-Type: application/json' -d '{"mode":"private_edge","__health":true}'
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $INTERNAL_AUTH_TOKEN" \
+  -d '{"mode":"private_edge","__health":true}'
 # harap:  "oracle_edge": "up"   (bukan "down")
 ```
 
