@@ -522,8 +522,8 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
       const prev = new Date(Date.now() - 40 * 86400_000).toISOString().slice(0, 7);
       const cur = await env.CONFIG_KV?.get(`cost:${now}`).catch(() => null);
       const last = await env.CONFIG_KV?.get(`cost:${prev}`).catch(() => null);
-      const fmt = (s: string | null | undefined, m: string) => { if (!s) return m; try { const o = JSON.parse(s); return Object.entries(o).map(([k, v]) => `${k}=${v}`).join(" ") || m; } catch { return m; } };
-      return `💸 *Pemakaian token (ledger KV)*\n• ${now}: ${fmt(cur, "belum ada")}\n• ${prev}: ${fmt(last, "belum ada")}\n(Lihat per-provider; direset tiap bulan)`;
+      const fmt = (s: string | null | undefined, m: string) => { if (!s) return m; try { const o = JSON.parse(s); const parts = Object.entries(o).map(([k, v]) => { if (typeof v === "number" || typeof v === "string") return `${k}=${v}`; const e = (v as { used?: number; estimated?: boolean }); return `${k}=${e.used ?? 0}${e.estimated ? " (estimasi)" : ""}`; }); return parts.join(" ") || m; } catch { return m; } };
+      return `💸 *Pemakaian token (ledger KV)*\n• ${now}: ${fmt(cur, "belum ada")}\n• ${prev}: ${fmt(last, "belum ada")}\n(estimasi = diperkirakan dari chars/4 karena provider tidak melaporkan usage API)`;
     });
     return new Response("ok", { status: 200 });
   }

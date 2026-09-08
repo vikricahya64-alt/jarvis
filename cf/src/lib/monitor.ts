@@ -46,6 +46,10 @@ export async function getStatusSummary(env: Env, owner: number): Promise<any> {
     warning: quota.remainingPct < 80 && quota.remainingPct >= 50,
     critical: quota.remainingPct < 50,
     quota_pct: quota.remainingPct,
+    // Persentase kuota berasal dari model heuristik (degradation.ts:
+    // calculateUsagePercent), BUKAN angka kuota provider resmi — wajib berlabel
+    // estimasi agar dashboard tidak menyajikan perkiraan sebagai fakta.
+    quota_source: "estimasi_heuristik",
     disabled: quota.disabledFeatures,
     feature_summary: features.map((f: FeaturePriority) => ({
       name: f.name,

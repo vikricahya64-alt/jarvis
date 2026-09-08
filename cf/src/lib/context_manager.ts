@@ -281,14 +281,17 @@ function compressTurns(turns: Array<{ role: string; content: string }>): string 
     // Split into sentences (Indonesian/English punctuation)
     const sents = text.split(/(?<=[.!?])\s+/);
     if (sents.length > 0) {
-      // Take the first sentence (most likely to contain the main point)
-      sentences.push(sents[0].slice(0, 150));
+      // Take the first sentence (most likely to contain the main point). Cut
+      // at a sentence-ish boundary; when forced mid-sentence > 150 chars mark
+      // the truncation so a sliced number/claim is never read as a fact.
+      const s0 = sents[0];
+      sentences.push(s0.length > 150 ? `${s0.slice(0, 150).trimEnd()}…` : s0);
     }
     // Also extract any explicit facts (dates, numbers, names)
     const factMatch = text.match(/\b(?:tanggal|date|usia|umur|nomor|number|alamat|address|nama|name)\b[^.!?]*[.!?]/gi);
     if (factMatch) {
       for (const f of factMatch.slice(0, 2)) {
-        sentences.push(f.slice(0, 100));
+        sentences.push(f.length > 100 ? `${f.slice(0, 100).trimEnd()}…` : f);
       }
     }
   }
@@ -400,7 +403,7 @@ export async function buildEnrichedContext(
   // 1) Summary buffer (compressed older turns)
   if (session.summaryBuffer) {
     const summaryRole = "system";
-    const summaryContent = `[Ringkasan percakapan sebelumnya]: ${session.summaryBuffer}`;
+    const summaryContent = `[Ringkasan percakapan sebelumnya — soft-context, angka/klaim di sini BELUM diverifikasi ulang; jangan jadikan fakta]: ${session.summaryBuffer}`;
     context.push({ role: summaryRole, content: summaryContent });
     charBudget -= summaryContent.length;
   }
@@ -430,7 +433,7 @@ export async function buildEnrichedContext(
     const wmContent = [
       `[Memori kerja] Tugas: ${wm.currentTask}`,
       `Langkah selesai: ${wm.stepsCompleted.length}`,
-      `Fakta terkumpul: ${wm.extractedFacts.slice(-3).join("; ")}`,
+      `Catatan percakapan (belum diverifikasi): ${wm.extractedFacts.slice(-3).join("; ")}`,
       `Keyakinan: ${(wm.reasoningConfidence * 100).toFixed(0)}%`,
     ].join("\n");
     if (wmContent.length < charBudget) {
@@ -454,7 +457,7 @@ export async function buildEnrichedContext(
       const memText = mems.map((m) => m.content).join(" | ").slice(0, Math.min(1000, charBudget));
       context.push({
         role: "assistant",
-        content: `[Kenangan relevan tentang "${topic}"]: ${memText}`,
+        content: `[Kenangan relevan tentang "${topic}" — dari memori kami, belum diverifikasi ulang]: ${memText}`,
       });
       charBudget -= memText.length;
     }

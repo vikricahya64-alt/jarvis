@@ -19,7 +19,7 @@ import { buildConversationMessages, detectLanguage } from "./conversation";
 import { buildFinalReply } from "./response_formatter";
 import { detectEmotion as detectEmotionSig, inferEmotionFromContext, getMoodState, detectTopicSentiment } from "./emotion";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
-import { gateVerdict, tallyGate, repairTruncatedReply, isLikelyTruncated, type GateVerdict } from "./verifier";
+import { gateVerdict, tallyGate, repairTruncatedReply, isLikelyTruncated, sanitizeUncitedLinks, type GateVerdict } from "./verifier";
 import { budgetedRecovery } from "./failure";
 // Canonical truncation helpers now live in ./verifier; re-exported here for
 // any existing importers (single source of truth, no behavior change).
@@ -373,17 +373,25 @@ export function estimateTokens(text: string): number {
 }
 
 /** Append an estimated usage event to a rolling cost ledger in CONFIG_KV
- *  (`cost:<YYYY-MM>` → { provider: { used }}). ECC cost-aware-pipeline parity:
- *  we must SEE our free-tier budget burn per provider before it surprises us.
- *  100% best-effort + fire-and-forget — never adds latency/threats to replies. */
-export async function trackTokenUsage(env: Env, provider: string, inTokens: number, outTokens: number): Promise<void> {
+ *  (`cost:<YYYY-MM>` → { provider: { used, estimated }}). ECC cost-aware-
+ *  pipeline parity: we must SEE our free-tier budget burn per provider before
+ *  it surprises us. When a provider omits `usage`, tokens are ESTIMATED
+ *  (chars/4) — flaged `estimated: true` so /usage never presents a heuristic
+ *  as a provider-fact (“estimasi” label). 100% best-effort + fire-and-forget. */
+export async function trackTokenUsage(
+  env: Env,
+  provider: string,
+  inTokens: number,
+  outTokens: number,
+  opts: { estimated?: boolean } = {},
+): Promise<void> {
   try {
     const d = new Date();
     const key = `cost:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     const prev = await env.CONFIG_KV.get(key).catch(() => null);
-    const cur = (prev ? JSON.parse(prev) : {}) as Record<string, { used?: number }>;
+    const cur = (prev ? JSON.parse(prev) : {}) as Record<string, { used?: number; estimated?: boolean }>;
     const used = (cur[provider]?.used ?? 0) + (inTokens || 0) + (outTokens || 0);
-    cur[provider] = { used };
+    cur[provider] = { used, estimated: cur[provider]?.estimated || opts.estimated === true };
     await env.CONFIG_KV.put(key, JSON.stringify(cur), { expirationTtl: 370 * 86400 }).catch(() => {});
   } catch { /* best-effort */ }
 }
@@ -433,6 +441,7 @@ body: JSON.stringify({
       env, "groq",
       data.usage?.prompt_tokens ?? messages.reduce((a, m) => a + estimateTokens(m.content ?? ""), 0),
       data.usage?.completion_tokens ?? estimateTokens(reply),
+      { estimated: data.usage?.prompt_tokens == null || data.usage?.completion_tokens == null },
     ).catch(() => {});
     return { ok: true, status: res.status };
   });
@@ -489,6 +498,7 @@ body: JSON.stringify({
       env, "openrouter",
       data.usage?.prompt_tokens ?? messages.reduce((a, m) => a + estimateTokens(m.content ?? ""), 0),
       data.usage?.completion_tokens ?? estimateTokens(reply),
+      { estimated: data.usage?.prompt_tokens == null || data.usage?.completion_tokens == null },
     ).catch(() => {});
     return { ok: true, status: res.status };
   });
@@ -551,6 +561,7 @@ export async function geminiRespond(
         env, "gemini",
         data.usageMetadata?.promptTokenCount ?? estimateTokens(prompt),
         data.usageMetadata?.candidatesTokenCount ?? estimateTokens(reply),
+        { estimated: data.usageMetadata?.promptTokenCount == null || data.usageMetadata?.candidatesTokenCount == null },
       ).catch(() => {});
       return { ok: true, status: res.status };
     });
@@ -1154,7 +1165,7 @@ export async function searchAndSynthesize(
   if (mems.length > 0) {
     context.push({
       role: "system",
-      content: "Kenang-kenangan relevan: " + mems.map((m) => m.content).join(" | ").slice(0, 1200),
+      content: "Kenang-kenangan relevan (dari memori kami sendiri — belum diverifikasi ulang, jangan jadikan angka/klaim di sini sebagai kepastian): " + mems.map((m) => m.content).join(" | ").slice(0, 1200),
     });
   }
   // ECC deep-research parity: the raw web result AND the citable sources are
@@ -1224,6 +1235,12 @@ export async function searchAndSynthesize(
       llmBudget: 1,
     });
     let generated = step.text;
+    // ANTI-HALUSINASI (audit): hanya URL dari sumber yang benar-benar
+    // dikembalikan mesin pencari boleh sampai ke pemilik — tautan fabrikasi
+    // LLM dipotong deterministik (bukan instruksi prompt belaka).
+    if (hits.length > 0) {
+      generated = sanitizeUncitedLinks(generated, hits.map((h) => h.url));
+    }
     // SELF-LEARNING: Store the synthesized knowledge for future queries
     if (searchResult) {
       await storeLearnedKnowledge(env, topic, searchResult, "web_search_synthesized").catch(() => {});

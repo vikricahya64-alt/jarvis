@@ -203,6 +203,45 @@ export function gateVerdict(text: string, anchor = ""): GateVerdict {
   return "ok";
 }
 
+// ==== Fabricated-link gate (ground-truth URL validation) ====================
+
+/** Normalize a URL for membership comparison: no scheme, no trailing slash,
+ *  no www + fragment/query — so "https://example.com/a/" matches
+ *  "example.com/a#sec" for allow-listing. Pure helper. */
+export function normalizeLinkForCompare(url: string): string {
+  return (url ?? "")
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .split(/[?#]/)[0]
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
+/** Strip every URL that is NOT present in `allowedUrls` — the anti-fabrication
+ *  rail: an LLM reply may only cite sources the search actually returned.
+ *  Fail-closed: a fabricated link is dropped (markdown "[[label](url)]"
+ *  keeps the label as plain text), everything else stays untouched. Never
+ *  throws; never blocks a full reply; pure + deterministic. */
+export function sanitizeUncitedLinks(text: string, allowedUrls: string[]): string {
+  const t = (text ?? "").trim();
+  if (!t || !allowedUrls?.length) return t;
+  const allowed = new Set(allowedUrls.map(normalizeLinkForCompare).filter(Boolean));
+  if (allowed.size === 0) return t;
+
+  // Markdown links: [label](url)
+  let out = t.replace(/\[([^\]]*)\]\(\s*(https?:\/\/[^\s)]+)\)/g, (_all, label: string, rawUrl: string) => {
+    if (allowed.has(normalizeLinkForCompare(rawUrl))) return `[${label}](${rawUrl})`;
+    const lbl = (label ?? "").trim();
+    return lbl ? `[${lbl}]` : "";
+  });
+  // Bare URLs (not already inside parentheses, incl. trailing punctuation)
+  out = out.replace(/(?<=^|\s)(https?:\/\/[^\s()]+[^\s.,;:)!?'")\]}\]])/g, (rawUrl: string) =>
+    allowed.has(normalizeLinkForCompare(rawUrl)) ? rawUrl : "",
+  );
+  return out.replace(/[ \t]+/g, " ").replace(/ ?\n ?/g, "\n").trim();
+}
+
 // ==== Observability: gap→upgrade metric ====================================
 
 /** Best-effort KV tally of NON-ok verdicts per path per day, so the

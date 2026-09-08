@@ -11,9 +11,9 @@
 import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
 import { isTranslateCapRequest, matchWebhookPreCapability, capabilityIntent, getCapability, approachForIntent, describeCapabilities } from "../src/lib/capability_registry";
-import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate } from "../src/lib/ai";
+import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate, trackTokenUsage } from "../src/lib/ai";
 import { recoveryPlan, classifyOperational, budgetedRecovery, tallyFailure, readFailureTally, readFailureLedger, ledgerDayKey } from "../src/lib/failure";
-import { gateVerdict, tallyGate } from "../src/lib/verifier";
+import { gateVerdict, tallyGate, sanitizeUncitedLinks, normalizeLinkForCompare } from "../src/lib/verifier";
 import { runGapUpgradeLoop, resolveGapProposal, listGapProposals, describeGapProposals, capIdForPath, GAP_MIN_7D } from "../src/lib/gap_upgrade";
 import { isPromptMasterRequest, isPromptShaped, sanitizePromptDeliverable } from "../src/lib/prompt_master";
 import { isContext7Request, context7FailureMessage, lookupLibraryDocs } from "../src/lib/context7";
@@ -1109,6 +1109,43 @@ async function testFailureRollup() {
   assert.ok(kv.size >= 2, "both KV ledgers written");
 }
 
+async function testAntiHallucinationRails() {
+  // (1) Sanitizer tautan: hanya URL yang benar-benar dikembalikan mesin pencari
+  // boleh lolos — tautan fabrikasi LLM dipotong deterministik, label markdown
+  // tetap dipertahankan sebagai teks.
+  const allowed = ["https://example.com/a", "https://docs.python.org/3/"];
+  const kept = sanitizeUncitedLinks("Baca di [dokumen](https://example.com/a) ya.", allowed);
+  assert.ok(kept.includes("[dokumen](https://example.com/a)"), "allowed markdown link kept");
+  const dropped = sanitizeUncitedLinks("Menurut [sumber ini](https://bikin.com/hoax) jawabannya X.\nSumber lain: https://tipu.org/klik ini", allowed);
+  assert.ok(!dropped.includes("https://bikin.com/hoax"), "fabricated markdown URL dropped");
+  assert.ok(dropped.includes("[sumber ini]"), "markdown label kept after dropping URL");
+  assert.ok(!dropped.includes("https://tipu.org"), "fabricated bare URL dropped");
+  assert.ok(dropped.includes("jawabannya X") && dropped.includes("Sumber lain"), "surrounding prose untouched");
+  const slash = sanitizeUncitedLinks("Lihat https://example.com/a/ dengan trailing slash.", allowed);
+  assert.ok(slash.includes("https://example.com/a/"), "trailing-slash normalization keeps allowed URL");
+  assert.strictEqual(normalizeLinkForCompare("https://WWW.Example.com/a/#frag?q=1"), "example.com/a", "URL normalized for compare");
+  assert.strictEqual(sanitizeUncitedLinks("satu tautan saja https://example.com/a", ["https://example.com/a"]), "satu tautan saja https://example.com/a", "allowed bare URL kept");
+  assert.strictEqual(sanitizeUncitedLinks("No links at all to speak of, fine.", ["https://a.b"]), "No links at all to speak of, fine.", "no URLs untouched");
+
+  // (2) Ledger token: pemakaian yang diestimasi (chars/4, provider tanpa usage)
+  // berflag `estimated: true` supaya /usage tidak menyajikannya sebagai angka
+  // resmi provider.
+  const kv = new Map<string, string>();
+  const env = {
+    CONFIG_KV: {
+      get: async (k: string) => kv.get(k) ?? null,
+      put: async (k: string, v: string) => { kv.set(k, v); },
+    },
+  } as never;
+  await trackTokenUsage(env, "groq", 100, 50); // usage resmi → tanpa flag
+  await trackTokenUsage(env, "openrouter", 10, 10, { estimated: true }); // estimasi
+  const month = new Date().toISOString().slice(0, 7);
+  const ledger = JSON.parse(kv.get(`cost:${month}`) ?? "{}") as Record<string, { used?: number; estimated?: boolean }>;
+  assert.ok(ledger.groq && ledger.groq.estimated === false, "etted real usage not marked estimated");
+  assert.strictEqual(ledger.groq?.used, 150, "usage accumulated");
+  assert.ok(ledger.openrouter?.estimated === true, "estimated usage flagged");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -1150,6 +1187,7 @@ async function main() {
   testContext7FailClosed();
   testNormalizeLibraryToken();
   await testContext7ResolveVerifier();
+  await testAntiHallucinationRails();
   console.log("LOGIC TESTS PASSED");
 }
 
