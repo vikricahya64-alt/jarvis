@@ -11,7 +11,7 @@
 import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
 import { isTranslateCapRequest, matchWebhookPreCapability, capabilityIntent, getCapability, approachForIntent, describeCapabilities } from "../src/lib/capability_registry";
-import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate, trackTokenUsage } from "../src/lib/ai";
+import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate, trackTokenUsage, detectConfusableTopic } from "../src/lib/ai";
 import { recoveryPlan, classifyOperational, budgetedRecovery, tallyFailure, readFailureTally, readFailureLedger, ledgerDayKey } from "../src/lib/failure";
 import { gateVerdict, tallyGate, sanitizeUncitedLinks, normalizeLinkForCompare } from "../src/lib/verifier";
 import { cleanSubReply, alignAngles, significantTokens } from "../src/lib/subagents";
@@ -1175,6 +1175,32 @@ function overlapAny(a: string[], b: string[]): boolean {
   return a.some((t) => b.includes(t));
 }
 
+function testDetectConfusableTopic() {
+  // Deteksi typo "tembaga" → koreksi ke "lembaga"
+  const typo = detectConfusableTopic("kebutuhan pasar dan referensinya menurut tembaga riset lokal");
+  assert.ok(typo, "tembaga terdeteksi sebagai confusable");
+  assert.strictEqual(typo!.original, "tembaga");
+  assert.strictEqual(typo!.corrected, "lembaga");
+
+  // Topik normal tanpa confusable → null
+  assert.strictEqual(detectConfusableTopic("kebutuhan pasar dan referensinya menurut lembaga riset lokal"), null,
+    "lembaga (kanonik) tidak trigger");
+  assert.strictEqual(detectConfusableTopic("artikel tren pasar konsumsi 2026"), null,
+    "topik normal → null");
+  assert.strictEqual(detectConfusableTopic("cara pakai drizzle orm"), null,
+    "topik teknis → null");
+
+  // Confusable lain
+  const inst = detectConfusableTopic("daftar universitas riset terbaru");
+  assert.ok(inst && inst.original === "universitas" && inst.corrected === "institusi",
+    "universitas → institusi");
+
+  // Kata confusable muncul di luar konteks riset → tetap terdeteksi
+  // (caller yang filter, bukan fungsi ini)
+  const stray = detectConfusableTopic("harga tembaga hari ini");
+  assert.ok(stray && stray.original === "tembaga", "tembaga terdeteksi di konteks apapun");
+}
+
 async function testSmartReplyDelivery() {
   // Jaminan "jangan pernah senyap": kirim balasan sekali, retry sekali jika
   // gagal, dan bila keduanya gagal beri pemilik diagnostik (tidak di-drop
@@ -1337,6 +1363,7 @@ async function main() {
   await testSmartReplyDelivery();
   testCleanSubReply();
   testAlignAngles();
+  testDetectConfusableTopic();
   console.log("LOGIC TESTS PASSED");
 }
 
