@@ -502,8 +502,20 @@ class handler(BaseHTTPRequestHandler):
             if not (task_id and telegram_id and user_input):
                 return self._send_json({"ok": False, "error": "Missing fields"}, 400)
 
-            _run_pipeline(task_id, telegram_id, user_input,
-                          autonomous=autonomous)
+            try:
+                _run_pipeline(task_id, telegram_id, user_input,
+                              autonomous=autonomous)
+            except Exception as exc:
+                logger.exception("Orchestrator failed")
+                # Self-healing: never leave the task stuck in PROCESSING.
+                try:
+                    supabase_client.update_task(task_id, {
+                        "status": "FAILED",
+                        "error": f"orchestrator_error: {str(exc)[:500]}",
+                    })
+                except Exception as update_exc:
+                    logger.error(f"Could not persist FAILED status: {update_exc}")
+                return self._send_json({"ok": False, "error": str(exc)}, 500)
 
             return self._send_json({"ok": True, "task_id": task_id}, 200)
         except Exception as exc:
