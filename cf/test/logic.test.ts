@@ -14,7 +14,7 @@ import { isTranslateCapRequest, matchWebhookPreCapability, capabilityIntent, get
 import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate, trackTokenUsage } from "../src/lib/ai";
 import { recoveryPlan, classifyOperational, budgetedRecovery, tallyFailure, readFailureTally, readFailureLedger, ledgerDayKey } from "../src/lib/failure";
 import { gateVerdict, tallyGate, sanitizeUncitedLinks, normalizeLinkForCompare } from "../src/lib/verifier";
-import { cleanSubReply } from "../src/lib/subagents";
+import { cleanSubReply, alignAngles, significantTokens } from "../src/lib/subagents";
 import { runGapUpgradeLoop, resolveGapProposal, listGapProposals, describeGapProposals, capIdForPath, GAP_MIN_7D } from "../src/lib/gap_upgrade";
 import { isPromptMasterRequest, isPromptShaped, sanitizePromptDeliverable } from "../src/lib/prompt_master";
 import { isContext7Request, context7FailureMessage, lookupLibraryDocs } from "../src/lib/context7";
@@ -1130,6 +1130,51 @@ function testCleanSubReply() {
   assert.ok(!/<<<|>>>/.test(clean), "wrapper pembatas hilang");
 }
 
+function testAlignAngles() {
+  const userText = "Artikel kebutuhan pasar dan referensinya menurut lembaga riset Lokal";
+  const topic = "kebutuhan pasar dan referensinya menurut lembaga riset lokal";
+  const focus = significantTokens(`${userText} ${topic}`);
+  assert.ok(focus.includes("artikel") && focus.includes("pasar") && focus.includes("riset"),
+    "kata kunci signifikan diekstrak");
+  assert.ok(!focus.includes("dan") && !focus.includes("yang"), "stopword dibuang");
+
+  // Kasus live yang gagal: researcher membajak ke riset "pasar tembaga" (memori
+  // lama). Semua sudut tembaga harus diganti sudut turunan fokus.
+  const hijack = [
+    "permintaan pasar tembaga indonesia",
+    "penawaran produksi tembaga",
+    "harga tren internasional tembaga",
+    "laporan resmi pemerintah bkpm esdm",
+    "analisis industri riset pasar tembaga lokal",
+  ];
+  const aligned = alignAngles(userText, topic, hijack);
+  assert.ok(aligned.length >= 1 && aligned.length <= 3, "jumlah sudut terkendali");
+  for (const a of aligned) {
+    assert.ok(!/tembaga|bkpm|produksi|industri/.test(a), `sudut tidak menyimpang: "${a}"`);
+    assert.ok(overlapAny(significantTokens(a), focus), `sudut memakai kata fokus: "${a}"`);
+  }
+
+  // Sudut sah yang tetap pada fokus pertanyaan harus dipertahankan.
+  const onTopic = [
+    "artikel kebutuhan pasar tren konsumsi",
+    "referensi lembaga riset terbaru",
+    "kebutuhan pasar indonesia data",
+  ];
+  const kept = alignAngles(userText, topic, onTopic);
+  for (const a of kept) {
+    assert.ok(overlapAny(significantTokens(a), focus), `sudut sah tetap dipakai: "${a}"`);
+  }
+  assert.ok(kept[0] && /artikel/.test(kept[0]), "angle pertama yang sah dipertahankan");
+
+  // Tanpa angle sama sekali -> fallback turunan fokus, tetap relevan.
+  const empty = alignAngles(userText, topic, []);
+  assert.ok(empty.length >= 1 && overlapAny(significantTokens(empty[0]), focus), "fallback relevan");
+}
+
+function overlapAny(a: string[], b: string[]): boolean {
+  return a.some((t) => b.includes(t));
+}
+
 async function testSmartReplyDelivery() {
   // Jaminan "jangan pernah senyap": kirim balasan sekali, retry sekali jika
   // gagal, dan bila keduanya gagal beri pemilik diagnostik (tidak di-drop
@@ -1291,6 +1336,7 @@ async function main() {
   await testSalesReportBasis();
   await testSmartReplyDelivery();
   testCleanSubReply();
+  testAlignAngles();
   console.log("LOGIC TESTS PASSED");
 }
 
