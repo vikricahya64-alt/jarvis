@@ -19,6 +19,7 @@ export interface Env {
   GEMINI_MODEL?: string;
   OPENROUTER_API_KEY?: string;
   OPENROUTER_MODEL?: string;
+  CONTEXT7_API_KEY?: string;
   AGENT_TOKEN?: string;
   GITHUB_TOKEN?: string;
   GITHUB_REPO?: string;

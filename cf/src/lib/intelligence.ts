@@ -43,6 +43,7 @@ import {
   isDesignIntent,
 } from "./subagents";
 import { isPromptMasterRequest, writeExpertPrompt } from "./prompt_master";
+import { isContext7Request, lookupLibraryDocs } from "./context7";
 import { reflectOnTurn, getAnswerBehaviorContext } from "./evolution";
 import { buildFinalReply } from "./response_formatter";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
@@ -65,7 +66,7 @@ export interface Perception {
 
 /** Intent classification result. */
 export interface IntentResult {
-  type: "question" | "command" | "search" | "chat" | "emergency" | "translation" | "design" | "self_referential" | "understand" | "prompt_writer";
+  type: "question" | "command" | "search" | "chat" | "emergency" | "translation" | "design" | "self_referential" | "understand" | "prompt_writer" | "context7";
   urgency: "low" | "medium" | "high";
   formality: "casual" | "neutral" | "formal";
   confidence: number;
@@ -74,7 +75,7 @@ export interface IntentResult {
 
 /** Strategy decision — how the brain will handle this message. */
 export interface Strategy {
-  approach: "simple_llm" | "search_synthesize" | "orchestrate_research" | "orchestrate_design" | "translate" | "self_referential" | "understand_intent" | "prompt_master";
+  approach: "simple_llm" | "search_synthesize" | "orchestrate_research" | "orchestrate_design" | "translate" | "self_referential" | "understand_intent" | "prompt_master" | "context7_docs";
   depth: "shallow" | "medium" | "deep";
   providerPreference: "any" | "fast" | "thorough";
   riskLevel: "safe" | "caution" | "blocked";
@@ -227,6 +228,10 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
     return { type: "prompt_writer", urgency: "low", formality: "neutral", confidence: 0.85, entities: { topic: text.slice(0, 100) } };
   }
 
+  if (isContext7Request(text)) {
+    return { type: "context7", urgency: "low", formality: "neutral", confidence: 0.8, entities: { topic: text.slice(0, 100) } };
+  }
+
   // Design engineering intent. Synonymous design keywords (video, film, clip,
   // reels, tiktok, dll.) also carry non-design meanings — so keep pure
   // recommendation/descriptive questions ("film apa yang bagus?") on the
@@ -320,6 +325,16 @@ export function decide(perception: Perception): Strategy {
       approach: "prompt_master",
       depth: "medium",
       providerPreference: "thorough",
+      riskLevel: "safe",
+    };
+  }
+
+  // Library docs → Context7 (up-to-date documentation grounding)
+  if (intent.type === "context7") {
+    return {
+      approach: "context7_docs",
+      depth: "medium",
+      providerPreference: "any",
       riskLevel: "safe",
     };
   }
@@ -502,6 +517,22 @@ export async function act(
         return { reply: fallback.reply, source: fallback.source ?? "llm" };
       }
       return { reply: "Maaf, saya belum bisa menyusun prompt itu sekarang. Coba lagi ya.", source: "prompt_master_fallback" };
+    }
+
+    case "context7_docs": {
+      const ctx7 = await lookupLibraryDocs(env, text, enrichedContext);
+      if (ctx7.ok && ctx7.reply) {
+        return { reply: ctx7.reply, source: "context7" };
+      }
+      const fallback = await llmRespond(env, text, {
+        topic: topic ?? undefined,
+        context: enrichedContext,
+        contextIsEnriched: true,
+      });
+      if (fallback.reply) {
+        return { reply: fallback.reply, source: fallback.source ?? "llm" };
+      }
+      return { reply: "Maaf, saya belum bisa mengambil dokumentasi library itu sekarang. Coba lagi sebentar.", source: "context7_fallback" };
     }
 
     case "simple_llm":
