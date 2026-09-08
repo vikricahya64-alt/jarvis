@@ -33,7 +33,7 @@
 
 import { Env, searchMemory, recentContext } from "./db";
 import { llmRespond, searchTopResults, deepReadPage } from "./ai";
-import { gateVerdict } from "./verifier";
+import { gateVerdict, sanitizeUncitedLinks } from "./verifier";
 import { budgetedRecovery } from "./failure";
 import { getAnswerBehaviorContext } from "./evolution";
 import { fetchPageText } from "./extract";
@@ -330,9 +330,11 @@ async function gatherAngle(env: Env, angle: string, topicHint = ""): Promise<Ang
   // Relevance rail: short phrase queries usually land well, but rotten engine
   // output (dictionary entries, unrelated domains) must not poison the writer.
   // Keep only hits sharing >=1 significant keyword with the angle/topic; never
-  // starve the pipeline — if nothing passes, carry the raw top results anyway.
+  // starve the pipeline — if nothing passes, carry ONLY the single top raw
+  // result (not the whole junk pile, which lets one trash search flood the
+  // writer).
   const relevant = hits.filter((h) => scoreRelevance(h, `${topicHint} ${angle}`, angle) > 0);
-  const usable = relevant.length >= 2 ? relevant : hits;
+  const usable = relevant.length >= 1 ? relevant : hits.slice(0, 1);
   const findings: Finding[] = usable.slice(0, MAX_FINDINGS_PER_ANGLE).map((h) => ({
     title: h.title.slice(0, 180),
     url: h.url.slice(0, 200),
@@ -407,6 +409,8 @@ function writerSystem(ownerSovereignty: string): string {
     "Gunakan info dari referensi yang BERBEDA untuk memperkaya; jangan hanya mengulang satu sumber.",
     "Jangan mengarang fakta yang tidak didukung bukti; tambahkan baris terakhir 'Belum terverifikasi:' untuk klaim yang hanya berupa tren umum tanpa angka pasti.",
     "Pertahankan kepadatan informasi (padat, jangan bertele-tele).",
+    "DILARANG menulis label kerja internal seperti '<<<UNTRUSTED_EXTERNAL_CONTENT>>>'/'UNTRUSTED_EXTERNAL_CONTENT' dan DILARANG memakai tanda kurung siku 【 】 atau skor kepercayaan seperti 【high】/【medium】 di dalam jawaban.",
+    "Kutip sumber dengan MENYALIN URL persis dari daftar referensi di atas, sebagai [label](url) atau URL polos — jangan pernah membuat/mengubah URL baru.",
   ].join("\n");
 }
 
@@ -591,6 +595,27 @@ async function runVerifier(env: Env, userText: string, reply: string): Promise<V
   });
 }
 
+// ---- output cleaning rail (anti-fabrication) -----------------------------
+/** Deterministic cleanup for ANY sub-agent reply before it reaches the owner:
+ *  1) strip leaked internal working notes — 【high】-style confidence bracket
+ *     tags, leftover `<<<UNTRUSTED_EXTERNAL_CONTENT>>>` spotlight wrappers and
+ *     the quoted `UNTRUSTED_EXTERNAL_CONTENT` label the writer must never print
+ *  2) drop every URL that was NOT actually returned by a search (the same
+ *     anti-fabrication rail the single-pass path uses, applied here too).
+ *  Pure + deterministic, never throws, never blocks the reply. */
+export function cleanSubReply(reply: string, realUrls: string[]): string {
+  let t = String(reply ?? "").trim();
+  if (!t) return t;
+  // Wrapper spotlight (pembuka DAN penutup — yang kedua diawali <<<END_).
+  t = t.replace(/<<<\s*\w*_?UNTRUSTED[_ ]?EXTERNAL[_ ]?CONTENT[\s\S]*?>>>/gi, " ");
+  // Tag kurung siku kepercayaan/URL yang bocor dari gaya kerja sub-agen.
+  t = t.replace(/【[^】]{0,80}】/g, " ");
+  // Label kerja yang dikutip mentah oleh writer (mis. "Sumber: UNTRUSTED_...").
+  t = t.replace(/\s*[,;:()）]*\bUNTRUSTED[_ ]?EXTERNAL[_ ]?CONTENT\b[^\n]*/gi, "");
+  t = t.replace(/[ \t]+/g, " ").replace(/ ?\n ?/g, "\n").replace(/\n{3,}/g, "\n\n");
+  return sanitizeUncitedLinks(t, realUrls);
+}
+
 /** Run the bounded orchestrator-worker pipeline for a research-class query.
  *  Returns the writer's reply (optionally verified) or null, so the caller
  *  can degrade to the single-pass path. Always fail-closed to a real answer. */
@@ -682,14 +707,26 @@ export async function orchestrateResearch(
     // 6) Verifier (optional output rail) — only for non-trivial replies AND only
     //    when LLM-call headroom remains (deep research may have used the budget).
     const att = attributionSuffix(gathers);
-    const finalReply = reply.trim() + (/\bhttps?:\/\//.test(reply) || !att ? "" : att);
+    // Anti-fabrication (verified live 2026-09): sub-agent replies went to the
+    // owner UNSANITIZED and leaked invented URLs + internal working notes
+    // (【high】, UNTRUSTED_EXTERNAL_CONTENT). Clean EVERY path deterministically.
+    const realUrls: string[] = [];
+    for (const g of gathers)
+      for (const f of g.findings) {
+        const u = (f.url || "").trim();
+        if (/^https?:\/\//i.test(u)) realUrls.push(u);
+      }
+    const finish = (raw: string): string => cleanSubReply(raw, realUrls);
+    const cleaned = finish(reply.trim());
+    const finalReply = cleaned + (/\bhttps?:\/\//.test(cleaned) || !att ? "" : att);
     if (calls < MAX_TOTAL_LLM_CALLS && reply.length > MAX_VERIFIER_REPLY_LEN) {
       const verdict = await runVerifier(env, userText, reply);
       calls += 1;
       if (verdict) {
         if (verdict.approved) return finalReply;
         const safe = (verdict.safeReply?.trim() || reply).trim();
-        return safe + (/\bhttps?:\/\//.test(safe) || !att ? "" : att); // fall back to original if no safe rewrite
+        const safeCleaned = finish(safe);
+        return safeCleaned + (/\bhttps?:\/\//.test(safeCleaned) || !att ? "" : att); // fall back to original if no safe rewrite
       }
     }
     // OUTPUT GATE (Phase-3 budgeted recovery): after the optional LLM verifier
@@ -710,7 +747,8 @@ export async function orchestrateResearch(
       });
       calls += step.llmSpent;
       if (step.text !== finalReply && step.text.trim().length >= 40) {
-        return step.text.trim() + (/\bhttps?:\/\//.test(step.text) || !att ? "" : att);
+        const revived = finish(step.text.trim());
+        return revived + (/\bhttps?:\/\//.test(revived) || !att ? "" : att);
       }
     }
     return finalReply;
