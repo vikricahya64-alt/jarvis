@@ -295,27 +295,244 @@ export function extractTopic(text: string): string | null {
   return topic.length >= 3 ? topic.slice(0, 120) : null;
 }
 
-// ── Confusable-word detection (M8-v23) ────────────────────────────────
+// ── Confusable-word detection (M8-v23 → M8-v27) ───────────────────────
 // A one-character-mutation typo (tembaga↔lembaga) silently hijacks an
 // entire research chain. Deterministic: checks topic tokens against a
-// curated confusable dictionary; returns null when no action needed.
-// Keys are the TYPO forms; values are the CORRECT canonical forms.
-const CONFUSABLE_PAIRS: Record<string, string> = {
-  tembaga: "lembaga",
-  universitas: "institusi",
-  kementrian: "kementerian",
+// curated confusable dictionary and scores the surrounding CONTEXT for a
+// reading bias — following the orthographic-neighbor literature: a
+// high-frequency neighbor (lembaga) is typically seen/mis-typed as its
+// low-frequency lookalike (tembaga), and the supporting context (HFON +
+// top-down context) decides which reading the user most likely intended.
+// Keys are the TYPO forms; `corrected` is the canonical form. Notice the
+// detection itself stays context-independent (the caller decides whether to
+// flag), while `bias` narrows the confirmation prompt for the human.
+const CONFUSABLE_PAIRS: Record<string, {
+  corrected: string;
+  domain?: string;
+  hintsForCorrected?: string[];
+  hintsForOriginal?: string[];
+}> = {
+  tembaga: {
+    corrected: "lembaga",
+    domain: "institusi",
+    // Context that supports the institutional reading (research institutions).
+    hintsForCorrected: [
+      "riset", "kajian", "penelitian", "institusi", "referensinya", "perfikasinya",
+      "menurut", "lokal", "jurnal", "kampus", "universitas", "lembaga", "sumber",
+    ],
+    // Context that supports keeping the commodity reading (copper).
+    hintsForOriginal: [
+      "logam", "tambang", "nikel", "komoditas", "bijih", "kawat", "bahan",
+      "harga", "ekspor", "impor", "bursa", "saham", "tembaga",
+    ],
+  },
+  universitas: {
+    corrected: "institusi",
+    domain: "institusi",
+    hintsForCorrected: ["riset", "penelitian", "pendidikan", "kampus", "akademis", "lembaga"],
+  },
+  kementrian: {
+    corrected: "kementerian",
+    domain: "pemerintah",
+    hintsForCorrected: ["menteri", "pemerintah", "regulasi", "aturan", "keputusan"],
+  },
+  gubenur: {
+    corrected: "gubernur",
+    domain: "pemerintah",
+    hintsForCorrected: ["provinsi", "pemerintah", "pilkada", "daerah"],
+  },
+  kabupatan: {
+    corrected: "kabupaten",
+    domain: "pemerintah",
+    hintsForCorrected: ["pemerintah", "daerah", "kecamatan", "bupati"],
+  },
+  reset: {
+    corrected: "riset",
+    domain: "riset",
+    // Context that supports the research reading (this bot's core business).
+    hintsForCorrected: [
+      "pasar", "bisnis", "menurut", "artikel", "laporan", "kebutuhan", "referensinya",
+      "peluang", "kompetitor", "analisis", "konsumsi",
+    ],
+    // Context that supports the English reboot reading.
+    hintsForOriginal: [
+      "ulang", "factory", "default", "ponsel", "hp", "aplikasi", "password", "akun",
+      "jaringan", "pengaturan", "android", "iphone",
+    ],
+  },
 };
-export function detectConfusableTopic(
-  topic: string,
-): { original: string; corrected: string } | null {
-  const words = topic.split(/\s+/);
+
+export type ConfusableDetection = {
+  original: string;
+  corrected: string;
+  /** Which reading the local context supports. `null` = neutral → ask. */
+  bias: "corrected" | "original" | null;
+};
+
+export function detectConfusableTopic(topic: string): ConfusableDetection | null {
+  const words = topic.toLowerCase().split(/\s+/);
   for (const w of words) {
-    const canonical = CONFUSABLE_PAIRS[w];
-    if (canonical) {
-      return { original: w, corrected: canonical };
+    const entry = CONFUSABLE_PAIRS[w];
+    if (!entry) continue;
+    let correctedScore = 0;
+    let originalScore = 0;
+    for (const t of words) {
+      if (t === w) continue;
+      if (entry.hintsForCorrected?.includes(t)) correctedScore++;
+      if (entry.hintsForOriginal?.includes(t)) originalScore++;
     }
+    // A bias needs a non-zero signal and must not be self-cancelling; ties and
+    // hint-free queries stay neutral so the human still decides (fail-closed).
+    const bias: ConfusableDetection["bias"] =
+      correctedScore > originalScore && correctedScore > 0 ? "corrected"
+        : originalScore > correctedScore && originalScore > 0 ? "original"
+          : null;
+    return { original: w, corrected: entry.corrected, bias };
   }
   return null;
+}
+
+// ── Institutional research frame (M8-v27) ───────────────────────────────
+// When the user asks "…menurut lembaga riset lokal", a generic web search
+// silently drops the LEMBAGA constraint and answers from random opinion blogs.
+// Deterministic frame (fail-closed, no LLM guesswork):
+//   1. Registry mapping canonical Indonesian research institutions → their
+//      own domains, so every query becomes an authoritative `site:` search.
+//   2. Parser detects either a NAMED institution (registry alias) or a generic
+//      "menurut lembaga riset" qualifier, and derives a CLEAN search core by
+//      stripping the qualifier (extractTopic leaves "lembaga riset lokal" in
+//      the topic, which would pollute the search query).
+//   3. Hits are tagged with the institution they came from so the synthesis
+//      can attribute every claim ("menurut BPS", "data SMERU") and never cite
+//      outside the institutional pool (fail-closed: no hit → honest "belum
+//      ada data lembaga resmi" instead of guessing).
+type InstitutionDef = {
+  name: string;
+  domain: string;
+  aliases: string[];
+  focus: string;
+};
+
+const INSTITUTION_REGISTRY: InstitutionDef[] = [
+  { name: "BPS (Badan Pusat Statistik)", domain: "bps.go.id", aliases: ["bps", "badan pusat statistik"], focus: "statistik resmi nasional" },
+  { name: "BRIN", domain: "brin.go.id", aliases: ["brin", "badan riset dan inovasi nasional", "lipi"], focus: "riset & inovasi nasional" },
+  { name: "SMERU", domain: "smeru.or.id", aliases: ["smeru", "lembaga riset smeru"], focus: "riset kebijakan & kemiskinan" },
+  { name: "LPEM FEB UI", domain: "lpem.org", aliases: ["lpem", "lpem ui", "lpem feb ui"], focus: "riset ekonomi makro & industri" },
+  { name: "CSIS", domain: "csis.or.id", aliases: ["csis", "centre for strategic and international studies"], focus: "kajian strategis & kebijakan publik" },
+  { name: "Indef", domain: "indef.or.id", aliases: ["indef", "institute for development of economics and finance"], focus: "riset ekonomi" },
+  { name: "BKF Kemenkeu", domain: "fiskal.kemenkeu.go.id", aliases: ["bkf", "badan kebijakan fiskal"], focus: "kebijakan fiskal" },
+  { name: "Bank Indonesia", domain: "bi.go.id", aliases: ["bank indonesia"], focus: "moneter & ekonomi nasional" },
+  { name: "OJK", domain: "ojk.go.id", aliases: ["ojk", "otoritas jasa keuangan"], focus: "pasar & jasa keuangan" },
+  { name: "Bappenas", domain: "bappenas.go.id", aliases: ["bappenas", "kementerian perencanaan pembangunan nasional"], focus: "perencanaan pembangunan nasional" },
+  { name: "Kemenperin", domain: "kemenperin.go.id", aliases: ["kemenperin", "kementerian perindustrian"], focus: "kebijakan industri" },
+  { name: "ASEAN", domain: "asean.org", aliases: ["asean"], focus: "data & ekonomi regional" },
+];
+
+// Deterministic default pool for the GENERIC "lembaga riset lokal" ask — three
+// institutions whose domains are stable and whose output spans statistika,
+// kebijakan publik, and riset nasional. Bounded to 3 = 3 extra site: subrequests.
+const GENERIC_LOCAL_INSTITUTIONS: InstitutionDef[] = [
+  INSTITUTION_REGISTRY[0], // BPS
+  INSTITUTION_REGISTRY[1], // BRIN
+  INSTITUTION_REGISTRY[2], // SMERU
+];
+
+// Qualifiers that mark a generic institutional ask (Indonesian, tail-position:
+// "<core> menurut lembaga riset lokal") plus a standalone mention form.
+const INST_QUALIFIER_RE = /(\b(?:menurut|berdasarkan|kata|menurutmu)\s+lembaga\s+(?:riset|kajian|penelitian)\b[^\n]*|\blembaga\s+(?:riset|kajian|penelitian)\s+(?:lokal|setempat|indonesia|nasional)\b[^\n]*)/i;
+
+// Low-information tokens dropped when building the site: search phrase.
+const INST_STOPWORDS = new Set([
+  "dan", "yang", "dengan", "untuk", "dari", "di", "ke", "pada", "itu", "apa", "akan", "ini",
+  "adalah", "tentang", "mengenai", "dalam", "saja", "juga", "atau", "karena", "agar", "supaya",
+  "secara", "tersebut", "seperti", "beserta", "antara", "bagi", "sebuah", "atas", "bisa", "masih",
+]);
+
+export type InstitutionalRequest = {
+  institutions: InstitutionDef[];
+  core: string;                 // clean search core (qualifier stripped)
+  matchedQualifier: string;     // the exact qualifier phrase found
+  generic: boolean;             // true = generic "lembaga riset" ask
+};
+
+const escRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export function detectInstitutionalRequest(userText: string, topic: string): InstitutionalRequest | null {
+  const low = ` ${userText.toLowerCase()} `;
+  // 1) NAMED institution — a registry alias appears in the request.
+  const named = INSTITUTION_REGISTRY.filter((inst) =>
+    inst.aliases.some((a) => new RegExp(`\\b${escRe(a)}\\b`, "i").test(low)),
+  );
+  if (named.length) {
+    return buildInstitutionalRequest(userText, topic, named[0].name, false);
+  }
+  // 2) GENERIC qualifier — "menurut lembaga riset lokal" without a name.
+  const m = low.match(INST_QUALIFIER_RE);
+  if (m?.[1]) {
+    return buildInstitutionalRequest(userText, topic, m[1].trim(), true);
+  }
+  return null;
+}
+
+function buildInstitutionalRequest(
+  userText: string,
+  topic: string,
+  matchedQualifier: string,
+  generic: boolean,
+): InstitutionalRequest {
+  const institutions = generic ? GENERIC_LOCAL_INSTITUTIONS
+    : INSTITUTION_REGISTRY.filter((inst) => inst.aliases.some((a) => new RegExp(`\\b${escRe(a)}\\b`, "i").test(` ${userText.toLowerCase()} `))).slice(0, 3);
+  const stripQual = (s: string): string =>
+    s
+      .replace(/\s*\b(?:menurut|berdasarkan|kata|menurutmu)\s+[^\n]*?lembaga\s+(?:riset|kajian|penelitian)[^\n]*$/i, " ")
+      .replace(/\s*\blembaga\s+(?:riset|kajian|penelitian)[^\n]*$/i, " ")
+      .replace(/\s*\b(?:menurut|berdasarkan)\s+[^\n]{2,120}$/i, " ")
+      .trim();
+  let core = stripQual(topic);
+  // extractTopic captures "lembaga riset lokal" as the whole topic — if the
+  // residual is only qualifier leftovers, derive the core from the FULL request.
+  const contentWords = (s: string): number =>
+    s.split(/\s+/).filter((w) => w.length > 2 && !INST_STOPWORDS.has(w)).length;
+  if (contentWords(core) < 3) {
+    core = stripQual(userText)
+      .replace(/^(?:bantu|tolong|buatkan|please|let me|lagi|dong|sudah|untuk|itu|yang|kah|adalah|tentang|mengenai|cari|riset|search|informasi|artikel|kajian|studi|menurut)\s+/i, "")
+      .trim();
+  }
+  const finalCore = (core.length >= 3 ? core.slice(0, 120) : matchedQualifier) || matchedQualifier;
+  return { institutions, core: finalCore, matchedQualifier, generic };
+}
+
+function institutionalQuery(core: string, inst: InstitutionDef): string {
+  const tokens = core.toLowerCase().split(/\s+/).filter((w) => w.length > 2 && !INST_STOPWORDS.has(w));
+  const phrase = tokens.slice(0, 4).join(" ");
+  return `"${phrase}" site:${inst.domain}`;
+}
+
+/** Site:-scoped institutional search: up to 3 institutions × one fan-out
+ *  search each, every hit tagged with its institution. Fail-closed → []. */
+export async function institutionalSearchHits(env: Env, req: InstitutionalRequest, limit = 6): Promise<SearchHit[]> {
+  const out: SearchHit[] = [];
+  const seen = new Set<string>();
+  for (const inst of req.institutions.slice(0, 3)) {
+    const hits = await searchTopResults(env, institutionalQuery(req.core, inst), 3).catch(() => [] as SearchHit[]);
+    for (const h of hits) {
+      if (isJunkSource(h.url)) continue;
+      const key = h.url.split("?")[0];
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push({ title: h.title, url: h.url, snippet: h.snippet, institution: inst.name });
+    }
+  }
+  return out.slice(0, limit);
+}
+
+/** LLM digest of institutional hits — names the institution per item so the
+ *  synthesis can attribute claims deterministically. */
+export function institutionalDigest(hits: SearchHit[]): string {
+  return hits
+    .map((h, i) => `${i + 1}. [${h.institution ?? "web"}] ${h.title}\n   ${h.snippet}`)
+    .join("\n\n")
+    .slice(0, 1600);
 }
 
 /** Parse a translation request: "Terjemahkan <teks>" or "Terjemahkan ke
@@ -859,6 +1076,8 @@ export interface SearchHit {
   title: string;
   url: string;
   snippet: string;
+  /** Canonical institution name this hit came from (institutional frame only). */
+  institution?: string;
 }
 
 /** Structured search hits WITH URLs (used for citations). Fail-closed: always
@@ -1121,6 +1340,13 @@ export async function searchAndSynthesize(
     return { reply: JARVIS_IDENTITY.selfRefReply, source: "self_ref" };
   }
 
+  // M8-v27 INSTITUTIONAL FRAME — "…menurut lembaga riset lokal" must not
+  // degrade into a generic opinion-blog search. Detect it once here; the frame
+  // (named registry → site: query → attributed synthesis) replaces the generic
+  // search/hits AND bypasses the sub-agent orchestrator, which would otherwise
+  // re-run generic searches and drown out the institutional results.
+  const instReq = detectInstitutionalRequest(userText, topic);
+
   // L14: for COMPLEX, multi-facet research queries, escalate through the
   // bounded orchestrator-worker sub-agent pipeline (researcher -> per-angle
   // searcher -> writer [-verified]), which yields a structured, evidence-
@@ -1156,12 +1382,14 @@ export async function searchAndSynthesize(
     const kv = await readResearchAnchor(env, owner).catch(() => null);
     if (kv && topicOverlaps(topic, kv.topic)) followupAnchor = kv.prior;
   }
-  if (isResearchClass(topic, userText)) {
+  if (!instReq && isResearchClass(topic, userText)) {
     // Iron Man JARVIS: complex design/research queries go through the bounded
     // orchestrator pipeline (research + design outline). The separate video
     // design spec was removed — flux renders images via generateImage, so any
     // visual request lands on the image path. Fail-closed: if orchestration
     // returns null, fall through to single-pass (never burns budget twice).
+    // M8-v27: institutional asks bypass orchestration → deterministic single-pass
+    // with site:-filtered institutional hits (the frame owns the whole pipeline).
     const sub = await orchestrateResearch(env, owner, userText, topic, followupAnchor);
     if (sub) {
       if (sub.length > 120) void reflectOnTurn(env, userText, sub, []).catch(() => {});
@@ -1173,14 +1401,28 @@ export async function searchAndSynthesize(
   // D1 read / network call, so serializing them wastes latency on every query).
   // L18: SELF-LEARNING — Check if topic is already known before searching.
   // If high-confidence memories exist, use them directly (no web search needed).
+  // M8-v27: institutional asks always search (never reuse stale memory); known-
+  // topics shortcut applies only to non-institutional queries.
   const topicKnown = await isTopicKnown(env, topic, 2.0).catch(() => false);
-  
+  const skipSearch = topicKnown && !instReq;
+
   // Run all independent pre-LLM I/O in parallel: web search + conversation
   // history + memory retrieval + answer-behavior context (each is a separate
   // D1 read / network call, so serializing them wastes latency on every query).
-  const [searchResult, hits, context, mems, behaviorContext] = await Promise.all([
-    topicKnown ? Promise.resolve(null) : ddgSearch(env, topic), // Skip search if known
-    topicKnown ? Promise.resolve([] as SearchHit[]) : ddgSearchHits(env, topic),
+  // M8-v27: institutional frame runs ONE shared site:-scoped fan-out (the same
+  // promise is awaited so search + digest agree; empty institutional pool
+  // degrades to the generic DDG path).
+  const instHitsP = instReq
+    ? institutionalSearchHits(env, instReq, 6).catch(() => [] as SearchHit[])
+    : Promise.resolve([] as SearchHit[]);
+  const [instArr, searchResult, hits, context, mems, behaviorContext] = await Promise.all([
+    instHitsP,
+    skipSearch ? Promise.resolve(null)
+      : instReq ? instHitsP.then((ih) => (ih.length ? institutionalDigest(ih) : ddgSearch(env, topic)))
+        : ddgSearch(env, topic),
+    skipSearch ? Promise.resolve([] as SearchHit[])
+      : instReq ? instHitsP.then((ih) => (ih.length ? ih : ddgSearchHits(env, topic)))
+        : ddgSearchHits(env, topic),
     followupAnchor && anchorCtx ? Promise.resolve(anchorCtx.slice(-4)) : recentContext(env, owner, 4),
     searchMemory(env, topic, 4).catch(() => []),
     getAnswerBehaviorContext(env, topic).catch(() => null),
@@ -1204,6 +1446,21 @@ export async function searchAndSynthesize(
     context.push({
       role: "system",
       content: `Daftar sumber sah yang boleh disitasi:\n${formatSourceList(hits, 5)}`,
+    });
+  }
+  // M8-v27 INSTITUTIONAL FRAME — attributes every claim to the institution whose
+  // site produced the evidence (deterministic, no invented citations). Fail-
+  // closed: empty institutional pool → the honest "belum ada data lembaga
+  // resmi" answer instead of a fabricated attribution.
+  if (instReq || hits.some((h) => h.institution)) {
+    const instNames = instReq?.institutions.map((i) => i.name).join(", ") ?? "lembaga riset";
+    context.push({
+      role: "system",
+      content:
+        `Pemilik minta jawaban bersumber LEMBAGA RISET (${instNames}). ` +
+        `Gunakan hanya temuan dari situs lembaga di daftar sumber sah; untuk setiap angka/klaim sebut nama lembaganya ` +
+        `("menurut BPS", "data SMERU"). JANGAN menambah nama lembaga atau tautan di luar daftar sumber. ` +
+        `Jika tidak ada hasil dari lembaga resmi untuk bagian itu, katakan jujur bahwa belum ada data lembaga resmi — jangan menebak.`,
     });
   }
   // L13: inject accumulated insights + owner preferences into the reply
