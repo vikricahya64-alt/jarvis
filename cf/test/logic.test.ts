@@ -986,9 +986,18 @@ function testPromptMasterContract() {
   assert.ok(isPromptShaped("SASARAN: LLM text\nPROMPT: ..."), "header without fence shaped");
   assert.ok(!isPromptShaped("Berikut program Python untuk menghitung luas lingkaran: import math"), "direct solution is NOT prompt-shaped");
   assert.ok(!isPromptShaped(""), "empty not shaped");
-  // Real failure shape from the live test: the answer STARTED with "Target:"
-  // so the shape-guard cannot catch the "answered instead of prompted" drift —
-  // that case is covered by the strengthened system-prompt contract instead.
+  // Real failure shape from the live m8-v15 run: headers WERE present but the
+  // PROMPT block contained the program implementation ("import math"/"def ...")
+  // instead of instructions — the shape-guard now rejects code-bearing bodies
+  // so the bounded retry fires instead of delivering the deformation.
+  assert.ok(
+    !isPromptShaped(
+      "SASARAN: Python\nPROMPT:\npython\nBuat program untuk menghitung luas lingkaran\nimport math\n\ndef hitungluaslingkaran(r):\n  luas = math.pi * (r ** 2)\n  return luas",
+    ),
+    "PROMPT block containing code is NOT prompt-shaped (the m8-v15 live failure)",
+  );
+  // Clean instruction-only body stays shaped (even without a fenced block).
+  assert.ok(isPromptShaped("SASARAN: Python\nPROMPT:\nBuat program Python yang menghitung luas lingkaran dari input pengguna dan tampilkan hasil dengan 2 angka desimal."), "instruction body shaped");
   assert.ok(isPromptShaped("Target: Python\nTugas: buat program lingkaran..."), "target header keeps it shaped (no retry)");
   // A plain answer without ANY prompt scaffold IS a deformation → retry path.
   assert.ok(!isPromptShaped("Berikut program Python untuk menghitung luas lingkaran: import math"), "bare prose deform");
