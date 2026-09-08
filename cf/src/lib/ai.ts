@@ -378,6 +378,22 @@ export function repairTruncatedReply(reply: string): string {
   return `${out}\n\n📌 Jawaban saya terpotong oleh batas panjang — ketik \u201clanjut\u201d untuk bagian berikutnya.`;
 }
 
+/** True when a reply most likely got cut mid-sentence by the provider, even
+ *  when no finish_reason / pinned-token signal is reported. Long answers that
+ *  end on a bare heading or an unpunctuated statement line are the classic
+ *  silent-cut signature (e.g. trailing "Proses Machine Learning" with nothing
+ *  after it). Short answers and list items / explicit end-punctuation are
+ *  trusted as complete. */
+export function isLikelyTruncated(text: string): boolean {
+  const t = (text ?? "").trim();
+  if (t.length < 120) return false;
+  const lastLine = (t.split(/\r?\n/).pop() ?? "").trim();
+  if (!lastLine) return false;
+  if (/[.!?…;：:]$|["'’)」》>`]|\]\s*$/u.test(lastLine)) return false;
+  if (/^[-*•·]|\d+[.)]/.test(lastLine)) return false;
+  return true;
+}
+
 /** Rough prompt/response token estimate (chars/4) for the free-tier cost
  *  ledger. Cheap and never throws — precision is not the goal. */
 export function estimateTokens(text: string): number {
@@ -429,18 +445,18 @@ export async function groqRespond(
         "Content-Type": "application/json",
         Authorization: `Bearer ${key}`,
       },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        temperature: 0.6,
-        messages,
-        max_tokens: 1400,
-      }),
+body: JSON.stringify({
+          model: GROQ_MODEL,
+          temperature: 0.6,
+          messages,
+          max_tokens: 2200,
+        }),
     }, timeoutMs);
     if (!res.ok) return { ok: false, status: res.status };
     const data = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
     const content = data.choices?.[0]?.message?.content?.trim() ?? "";
     if (!content) return { ok: false, status: res.status };
-    reply = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(content) : content;
+    reply = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(content) : isLikelyTruncated(content) ? repairTruncatedReply(content) : content;
     void trackTokenUsage(
       env, "groq",
       data.usage?.prompt_tokens ?? messages.reduce((a, m) => a + estimateTokens(m.content ?? ""), 0),
@@ -485,18 +501,18 @@ export async function openrouterRespond(
         "HTTP-Referer": "https://jarvis-sovereign.vikricahya64.workers.dev",
         "X-Title": "JARVIS-Sovereign",
       },
-      body: JSON.stringify({
-        model,
-        temperature: 0.6,
-        messages,
-        max_tokens: 1400,
-      }),
+body: JSON.stringify({
+          model,
+          temperature: 0.6,
+          messages,
+          max_tokens: 2200,
+        }),
     }, timeoutMs);
     if (!res.ok) return { ok: false, status: res.status };
     const data = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
     const content = data.choices?.[0]?.message?.content?.trim() ?? "";
     if (!content) return { ok: false, status: res.status };
-    reply = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(content) : content;
+    reply = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(content) : isLikelyTruncated(content) ? repairTruncatedReply(content) : content;
     void trackTokenUsage(
       env, "openrouter",
       data.usage?.prompt_tokens ?? messages.reduce((a, m) => a + estimateTokens(m.content ?? ""), 0),
@@ -549,7 +565,7 @@ export async function geminiRespond(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.6, maxOutputTokens: 1200 },
+            generationConfig: { temperature: 0.6, maxOutputTokens: 1800 },
           }),
         },
         timeoutMs,
@@ -558,7 +574,7 @@ export async function geminiRespond(
       const data = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>; usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number } };
       const content = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
       if (!content) return { ok: false, status: res.status };
-      reply = data.candidates?.[0]?.finishReason === "MAX_TOKENS" ? repairTruncatedReply(content) : content;
+      reply = data.candidates?.[0]?.finishReason === "MAX_TOKENS" ? repairTruncatedReply(content) : isLikelyTruncated(content) ? repairTruncatedReply(content) : content;
       void trackTokenUsage(
         env, "gemini",
         data.usageMetadata?.promptTokenCount ?? estimateTokens(prompt),
@@ -604,17 +620,17 @@ export async function workersAiRespond(
     // AI.run() is not simple fetch; proxy it with a timeout guard.
     return await new Promise<{ ok: boolean; status: number }>((resolve) => {
       const timer = setTimeout(() => resolve({ ok: false, status: 0 }), timeoutMs);
-      env.AI.run(model, { messages, max_tokens: 900, temperature: 0.6 })
+      env.AI.run(model, { messages, max_tokens: 1600, temperature: 0.6 })
         .then((res) => {
           clearTimeout(timer);
           const r = (res as { response?: string; usage?: { input_tokens?: number; output_tokens?: number } }).response?.trim();
           if (r) {
             // Workers AI reports no finish_reason — infer truncation from usage:
-            // output tokens pinned at the 900 budget ⇒ treat as "length" so the
-            // answer gets the same honest continuation hint as the other tiers
-            // (M7 cost-aware pipeline: silent 900-token cuts are a capability leak).
+            // output tokens pinned at the 1600 budget, or a mid-sentence tail,
+            // ⇒ treat as "length" so the answer gets the same honest
+            // continuation hint as the other tiers (silent cuts are a leak).
             const outTok = (res as { usage?: { output_tokens?: number } }).usage?.output_tokens ?? estimateTokens(r);
-            reply = outTok >= 880 ? repairTruncatedReply(r) : r;
+            reply = outTok >= 1560 || isLikelyTruncated(r) ? repairTruncatedReply(r) : r;
             void trackTokenUsage(
               env, "workers_ai",
               (res as { usage?: { input_tokens?: number } }).usage?.input_tokens
@@ -1158,6 +1174,10 @@ export async function searchAndSynthesize(
     context.push({
       role: "system",
       content: `Analisis yang sudah saya berikan sebelumnya pada sesi ini (gali angka & kesimpulannya sebagai acuan; konsisten, jangan bertentangan):\n${followupAnchor.slice(-1400)}`,
+    });
+    context.push({
+      role: "system",
+      content: "Ini permintaan LANJUTAN: JANGAN mengulang bagian yang sudah dijelaskan di analisis sebelumnya. Fokus menambah detail, contoh, atau penjelasan BARU yang belum tercakup.",
     });
   }
   // ECC token-budget-advisor parity: when the owner explicitly asks for a
