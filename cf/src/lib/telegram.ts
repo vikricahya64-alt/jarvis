@@ -264,9 +264,14 @@ export async function setWebhook(
   env: { TELEGRAM_TOKEN?: string },
   url: string,
   secret?: string,
+  allowedUpdates?: string[],
 ): Promise<unknown> {
   const body: Record<string, unknown> = { url };
   if (secret) body.secret_token = secret;
+  // Explicitly include callback_query so inline-button flows (consent, clarify,
+  // typo confirm) are guaranteed to reach the worker even if a previous webhook
+  // config filtered them out.
+  if (allowedUpdates) body.allowed_updates = allowedUpdates;
   return call(env, "setWebhook", body);
 }
 
@@ -291,7 +296,7 @@ export async function setMyCommands(env: { TELEGRAM_TOKEN?: string }): Promise<b
 
 export async function getWebhookInfo(
   env: { TELEGRAM_TOKEN?: string },
-): Promise<{ url: string; has_custom_certificate: boolean; pending_update_count: number; last_error_date?: number; last_error_message?: string }> {
+): Promise<{ url: string; has_custom_certificate: boolean; pending_update_count: number; last_error_date?: number; last_error_message?: string; allowed_updates?: string[] }> {
   return call(env, "getWebhookInfo", {}) as Promise<any>;
 }
 

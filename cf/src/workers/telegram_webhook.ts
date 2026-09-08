@@ -17,7 +17,7 @@ import {
   createOrder, listOrders, getOrder, updateOrderStatus, salesReport,
   type Product, type Order, type OrderInput,
 } from "../lib/db";
-import { sendMessage, sendPhoto, sendVoice, editMessageReplyMarkup, answerCallbackQuery, TelegramUpdate, TelegramMessage, downloadTelegramFile, deliverSmartReply } from "../lib/telegram";
+import { sendMessage, sendPhoto, sendVoice, editMessageReplyMarkup, answerCallbackQuery, getWebhookInfo, setWebhook, TelegramUpdate, TelegramMessage, downloadTelegramFile, deliverSmartReply } from "../lib/telegram";
 import { withResilience, fetchWithTimeout } from "../lib/resilience";
 import { synthesizeSpeech } from "../lib/tts";
 import {
@@ -109,38 +109,32 @@ async function safeDBReply<T>(
  *  >30s research run can never kill an interactive bot call before the answer
  *  is delivered. Job keys are claimed (deleted) then processed; on a catchable
  *  failure the key is restored so the next tick retries. */
-export async function drainPendingTypoRuns(env: Env): Promise<number> {
+/** M8-v25: self-heal the Telegram webhook config — if callback_query is
+ *  filtered out of allowed_updates (or the URL is unset), re-register the
+ *  webhook WITH an explicit allowed_updates list so inline-button flows
+ *  (consent/clarify) and future confirmations actually reach this worker.
+ *  No-op when the config is already correct. */
+export async function ensureWebhook(env: Env): Promise<boolean> {
   try {
-    const { keys } = await env.CONFIG_KV.list({ prefix: "typo_run:", limit: 5 });
-    let done = 0;
-    for (const k of keys) {
-      const raw = await env.CONFIG_KV.get(k.name, "json").catch<unknown>(() => null) as
-        null | { text?: string; topic?: string; owner?: number };
-      if (!raw || !raw.text || !raw.owner) {
-        await env.CONFIG_KV.delete(k.name).catch(() => {});
-        continue;
-      }
-      await env.CONFIG_KV.delete(k.name).catch(() => {}); // claim before run
-      try {
-        const topic = raw.topic || raw.text;
-        const r = await searchAndSynthesize(env, raw.owner, raw.text, topic);
-        await appendMemory(env, raw.owner, "user", raw.text, topic).catch(() => {});
-        await appendMemory(env, raw.owner, "assistant", r.reply, topic).catch(() => {});
-        saveObservation(env, raw.owner, `User menanyakan tentang: ${topic}`, "interest").catch(() => {});
-        updateSession(raw.owner, raw.text, r.reply, topic, "research");
-        await recordTaskCounters(env, "standard", raw.owner);
-        await storeResearchAnchor(env, raw.owner, topic, r.reply).catch(() => {});
-        await deliverSmartReply(env, raw.owner, r.reply);
-        done++;
-      } catch (e) {
-        console.error("[typo_drain] search failed, requeue", (e as Error).message);
-        await env.CONFIG_KV.put(k.name, JSON.stringify(raw), { expirationTtl: 900 }).catch(() => {});
-      }
-    }
-    return done;
+    const target = `${env.WORKER_URL ?? "https://jarvis-sovereign.vikricahya64.workers.dev"}/webhook`;
+    const wh = await getWebhookInfo(env);
+    const okUrl = typeof wh.url === "string" && wh.url.length > 0;
+    const hasCb =
+      !Array.isArray(wh.allowed_updates) ||
+      wh.allowed_updates.length === 0 ||
+      wh.allowed_updates.includes("callback_query");
+    if (okUrl && hasCb) return true;
+    const ALLOWED = [
+      "message", "edited_message", "channel_post",
+      "callback_query", "inline_query", "chosen_inline_result",
+      "my_chat_member", "chat_member",
+    ];
+    await setWebhook(env, target, env.TELEGRAM_SECRET, ALLOWED);
+    console.log(`[ensureWebhook] webhook re-registered (callback_query=${hasCb}, okUrl=${okUrl})`);
+    return true;
   } catch (e) {
-    console.error("[typo_drain] listing failed", (e as Error).message);
-    return 0;
+    console.error("[ensureWebhook] failed", (e as Error).message);
+    return false;
   }
 }
 
@@ -200,38 +194,10 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
       await env.CONFIG_KV.delete(`clarify:${parts[1]}`).catch(() => {/* best-effort */});
       return new Response("ok");
     }
-    // Typo confirmation: typo_confirm:<id>:<0=corrected|1=original|2=cancel>
-    if (parts[0] === "typo_confirm" && parts.length === 3) {
-      const idx = parts[2];
-      const raw = await env.CONFIG_KV.get(`typo_confirm:${parts[1]}`, "json").catch<unknown>(() => null) as
-        null | { text?: string; correctedText?: string; owner?: number };
-      if (cq.message) {
-        await fire(editMessageReplyMarkup(env, cq.message.chat.id, cq.message.message_id, { inline_keyboard: [] }));
-      }
-      if (!raw || !raw.text || !raw.correctedText || !raw.owner) {
-        await fire(answerCallbackQuery(env, cq.id, "Konteks konfirmasi kedaluwarsa. Kirim ulang."));
-        return new Response("ok");
-      }
-      const chosen = idx === "0" ? raw.correctedText : idx === "1" ? raw.text : null;
-      await env.CONFIG_KV.delete(`typo_confirm:${parts[1]}`).catch(() => {/* best-effort */});
-      if (!chosen) {
-        await fire(answerCallbackQuery(env, cq.id, "Dibatalkan."));
-        return new Response("ok");
-      }
-      // Defer the heavy search to the minute cron (drainPendingTypoRuns) so a
-      // >30s research run can never kill this webhook request before the answer
-      // is delivered. Self-healing: the job key persists until processed.
-      const topic = extractTopic(chosen) ?? chosen;
-      const jobId = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
-      await env.CONFIG_KV.put(
-        `typo_run:${jobId}`, JSON.stringify({ text: chosen, topic, owner: raw.owner, ts: Date.now() }),
-        { expirationTtl: 900 },
-      ).catch(() => {/* degrade: re-add inline fallback below */});
-      await fire(sendMessage(env, raw.owner,
-        `🔍 Riset untuk *${topic.slice(0, 80)}* sedang dijalankan — jawaban menyusul sebentar (< 1 menit).`));
-      await fire(answerCallbackQuery(env, cq.id, idx === "0" ? "Diproses dengan topik koreksi." : "Diproses dengan topik asli."));
-      return new Response("ok");
-    }
+    // Typo confirmation is resolved via the NORMAL message path (M8-v25):
+    // the worker asks with a plain-text prompt and the owner replies "1"/"2",
+    // which flows through handleUpdate → message interceptor. No inline button
+    // is used, so a callback_query pipeline failure can never strand the flow.
     await fire(answerCallbackQuery(env, cq.id, "Tidak dikenal."));
     return new Response("ok");
   }
@@ -256,6 +222,36 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     // legit messages must not look like a lost reply. Nudge visibly instead.
     await fire(sendMessage(env, from, "⏳ Santai — aku proses satu per satu, kirim ulang sebentar ya."));
     return new Response("ok", { status: 200 });
+  }
+
+  // M8-v25: text-based typo confirmation. When EXECUTE detected a confusable
+  // topic word, the worker stored typo_wait:<owner> and asked a plain-text
+  // question ("Balas 1 … atau 2 …"). The owner's reply comes through the NORMAL
+  // message path (proven reliable) — no callback_query dependency. Any other
+  // message discards the wait state and is processed as a fresh query.
+  const pendingTypo = await env.CONFIG_KV.get(`typo_wait:${from}`, "json").catch<unknown>(() => null) as
+    null | { text?: string; correctedText?: string; original?: string; corrected?: string; ts?: number };
+  if (pendingTypo && pendingTypo.original && pendingTypo.correctedText) {
+    const reply = text.trim().toLowerCase();
+    const wantsCorrected =
+      reply === "1" || reply === "ya" || reply.startsWith("lembaga") || reply.startsWith("institusi");
+    const wantsOriginal =
+      reply === "2" || reply === "tidak" || reply === "bukan" || reply.startsWith("tembaga");
+    if (wantsCorrected || wantsOriginal) {
+      await env.CONFIG_KV.delete(`typo_wait:${from}`).catch(() => {});
+      const chosenText = (wantsCorrected ? pendingTypo.correctedText : pendingTypo.text) ?? "";
+      const label = wantsCorrected ? pendingTypo.corrected : pendingTypo.original;
+      await fire(sendMessage(env, from,
+        `✅ Topik dikunci: *${(label ?? chosenText).slice(0, 80)}*. Menyusun riset...`));
+      console.log(`[typo_wait] resolved owner=${from} choice=${wantsCorrected ? "corrected" : "original"}`);
+      await runResearch(env, from, chosenText).catch(async (e) => {
+        console.error("[typo_wait] riset gagal", (e as Error).message);
+        await fire(sendMessage(env, from, "Maaf, riset sedang bermasalah — coba lagi sebentar."));
+      });
+      return new Response("ok", { status: 200 });
+    }
+    // Bukan jawaban konfirmasi → perlakukan sebagai query baru.
+    await env.CONFIG_KV.delete(`typo_wait:${from}`).catch(() => {});
   }
 
   // Best-effort activity touch — a transient D1 error must NEVER silently drop
@@ -834,6 +830,29 @@ async function resolveConsent(env: Env, owner: number, corr: string, decision: s
   return true;
 }
 
+/** Shared EXECUTE research pipeline: DDG search + Groq synthesis, explicit
+ *  memory + session persistence, and delivery. Single writer for this legacy
+ *  path; used by the normal topic query AND the typo-confirmation resolution.
+ *  Fail-closed: any pipeline exception still yields a real message. */
+async function runResearch(env: Env, owner: number, text: string, forcedTopic?: string): Promise<void> {
+  const topic = forcedTopic ?? (extractTopic(text) ?? text.trim().slice(0, 120));
+  try {
+    const r = await searchAndSynthesize(env, owner, text, topic);
+    await appendMemory(env, owner, "user", text, topic).catch(() => {});
+    await appendMemory(env, owner, "assistant", r.reply, topic).catch(() => {});
+    // Observasi: user tertarik pada topik ini (untuk personalisasi di masa depan)
+    saveObservation(env, owner, `User menanyakan tentang: ${topic}`, "interest").catch(() => {});
+    updateSession(owner, text, r.reply, topic, "research");
+    await recordTaskCounters(env, "standard", owner);
+    await storeResearchAnchor(env, owner, topic, r.reply).catch(() => {});
+    await deliverSmartReply(env, owner, r.reply);
+  } catch (e) {
+    console.error("[webhook] search path failed", (e as Error).message);
+    await fire(sendMessage(env, owner,
+      `Maaf, pencarian tentang *${topic.slice(0, 60)}* sedang bermasalah — coba lagi sebentar.`));
+  }
+}
+
 /** Simplified action path for a normal (non-diagnostic) text command. */
 async function act(env: Env, owner: number, text: string): Promise<void> {
   const res = await routeCommand(env, owner, text);
@@ -969,12 +988,15 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
       }
       const topic = extractTopic(text);
       if (topic) {
-        // M8-v23: Typo confirmation — when topic contains a word that is a
-        // one-character mutation of a common institution/research word, ask
-        // the user to confirm before burning LLM budget on a wrong search.
+        // M8-v25: Typo confirmation via the plain-text message path. When topic
+        // contains a word that is a one-character mutation of a common
+        // institution/research word, ask the user to confirm ("1"/"2" reply)
+        // before burning LLM budget on a wrong search. NO inline buttons: this
+        // production webhook demonstrably drops callback_query updates, so the
+        // confirmation and the owner's answer both travel through the reliable
+        // message channel (see the typo_wait interceptor above).
         const confusable = detectConfusableTopic(topic);
         if (confusable) {
-          const corrId = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
           const correctedText = text.replace(
             new RegExp(`\\b${confusable.original}\\b`, "i"),
             confusable.corrected,
@@ -984,18 +1006,14 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
             confusable.corrected,
           );
           await env.CONFIG_KV.put(
-            `typo_confirm:${corrId}`,
-            JSON.stringify({ text, correctedText, owner, topic, correctedTopic, ts: Date.now() }),
-            { expirationTtl: 300 },
+            `typo_wait:${owner}`,
+            JSON.stringify({ text, correctedText, original: confusable.original, corrected: confusable.corrected, ts: Date.now() }),
+            { expirationTtl: 600 },
           ).catch(() => {/* degrade: no confirm, run as-is */});
           await fire(sendMessage(env, owner,
             `🔍 Topik terdeteksi: *${topic.slice(0, 80)}*\n\n` +
-            `Apakah yang dimaksud: *${correctedTopic.slice(0, 80)}*?`,
-            { replyMarkup: { inline_keyboard: [
-              [{ text: `✅ Ya, ${confusable.corrected}`, callback_data: `typo_confirm:${corrId}:0` }],
-              [{ text: `❌ Tetap ${confusable.original}`, callback_data: `typo_confirm:${corrId}:1` }],
-              [{ text: "🚫 Batalkan", callback_data: `typo_confirm:${corrId}:2` }],
-            ] } }));
+            `Apakah yang dimaksud: *${correctedTopic.slice(0, 80)}*?\n` +
+            `Balas \`1\` untuk *${confusable.corrected}* (koreksi), atau \`2\` untuk tetap *${confusable.original}*.`));
           break;
         }
         // Friendly info/query EXECUTE → real search + synthesis. This webhook
@@ -1004,21 +1022,7 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
         // session is updated explicitly too (mood/turn/activeTopic parity).
         // Fail-closed: any exception in the LLM/search pipeline still yields a
         // real message — a silent drop is never acceptable for the owner.
-        try {
-          const r = await searchAndSynthesize(env, owner, text, topic);
-          await appendMemory(env, owner, "user", text, topic).catch(() => {});
-          await appendMemory(env, owner, "assistant", r.reply, topic).catch(() => {});
-          // Observasi: user tertarik pada topik ini (untuk personalisasi di masa depan)
-          saveObservation(env, owner, `User menanyakan tentang: ${topic}`, "interest").catch(() => {});
-          updateSession(owner, text, r.reply, topic, "research");
-          await recordTaskCounters(env, "standard", owner);
-          await storeResearchAnchor(env, owner, topic, r.reply).catch(() => {});
-          await deliverSmartReply(env, owner, r.reply);
-        } catch (e) {
-          console.error("[webhook] search path failed", (e as Error).message);
-          await fire(sendMessage(env, owner,
-            `Maaf, pencarian tentang *${topic.slice(0, 60)}* sedang bermasalah — coba lagi sebentar.`));
-        }
+        await runResearch(env, owner, text, topic);
         break;
       }
       // Level 15 FOLLOW-UP: an explicit follow-up request that carries no fresh
