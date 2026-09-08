@@ -368,6 +368,17 @@ function leetspeakNormalize(s: string): string {
 }
 
 /**
+ * Span yang mengikat identifier LIBRARY/REPO ke trigger context7/docs.
+ * Token ini adalah proper noun teknis (nama library/package), BUKAN kata
+ * Indonesia biasa: spelling corrector dilarang menyentuhnya. Bug live m8-v15:
+ * "cara pakai hono" dinormalisasi jadi "cara pakai sono" → Context7 resolve ke
+ * library Sonos → jawaban percaya diri tapi salah subjek. Span ditangkap KLEN
+ * (termasuk trigger) lalu ditanamkan kembali VERBATIM setelah pipeline.
+ */
+const LIBRARY_TOKEN_RE =
+  /(?:ctx7|context7)\s*:?\s+[a-z0-9][\w./-]{1,60}\b|\b(?:cara pakai|cara memakai|cara menggunakan|cara pemakaian|how to use|how do i use|how do you use|docs?|dokumentasi|api)\s+(?:untuk|dari|of|for|pada)?\s*[a-z0-9][\w./-]{1,60}\b/gi;
+
+/**
  * Normalisasi input bebas teks owner sebelum routing/classification.
  *   - strip prefix "Username:" yang ditambahkan bot Telegram group
  *   - trim + collapse spasi berlebih
@@ -377,11 +388,21 @@ function leetspeakNormalize(s: string): string {
  *   - ekspansi slang/abbreviation Indonesia + English ke bentuk kanonis
  *   - spelling correction via Damerau-Levenshtein untuk typo umum
  *   - TIDAK PERNAH rewrite prefix "/" command (verbatim)
+ *   - Library identifier (context7/docs trigger) selalu verbatim — spelling
+ *     correction hanya berlaku untuk kata BAHASA, bukan nama teknis.
  *   - Language-aware: detect bahasa dan apply normalisasi yang sesuai
  * Mengembalikan string ternormalisasi (tidak pernah throw). */
 export function normalizeInput(raw: string): string {
   if (!raw) return "";
-  return raw
+  // Karantina span library (private-use placeholder immune to every rewrite
+  // di bawah: bukan slash, tak ada digit, panjang 3 → lolos tanpa koreksi).
+  const held = new Map<string, string>();
+  const quarantined = raw.replace(LIBRARY_TOKEN_RE, (m) => {
+    const ph = `\uE000${held.size}\uE000`;
+    held.set(ph, m);
+    return ph;
+  });
+  const normalized = quarantined
     .replace(/\s+/g, " ")
     .trim()
     // Strip "Username: msg" prefix of Telegram group bots — colon MUST be
@@ -397,6 +418,12 @@ export function normalizeInput(raw: string): string {
     .split(" ")
     .map(detectAndNormalize)
     .join(" ");
+  // Kembalikan span library verbatim (lowercase-only, spasi dicollapse).
+  let out = normalized;
+  for (const [ph, lit] of held) {
+    out = out.replaceAll(ph, lit.trim().toLowerCase().replace(/\s+/g, " "));
+  }
+  return out;
 }
 
 /** Detect language of input text for normalization purposes. */
