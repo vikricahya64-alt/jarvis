@@ -1,0 +1,133 @@
+import type { Env } from "./db";
+import { llmRespond } from "./ai";
+import { fetchWithTimeout } from "./resilience";
+
+const CTX7_API = "https://context7.com/api";
+
+export function isContext7Request(text: string): boolean {
+  if (!text) return false;
+  const t = text.trim();
+  if (/\b(?:ctx7|context7)\b/i.test(t)) return true;
+  if (/\b(?:cara pakai|cara memakai|cara menggunakan|cara pemakaian|how to use|how do i use|how do you use|implement .* with)\s+[a-z0-9][\w-]*/i.test(t)) return true;
+  if (/\b(?:docs?|dokumentasi|api)\s+(?:untuk|dari|of|for|pada)?\s*[a-z0-9][\w-]{1,}/i.test(t)) return true;
+  return false;
+}
+
+const CHATTER = new Set([
+  "bagaimana", "cara", "pakai", "memakai", "menggunakan", "pemakaian", "tolong",
+  "mohon", "jelaskan", "bisa", "dokumentasi", "docs", "documentation", "api", "untuk",
+  "tentang", "about", "yang", "saya", "aku", "mau", "ingin", "berapa", "apa", "sih",
+  "please", "how", "to", "use", "do", "i", "you", "with", "the", "a", "an", "deploy",
+]);
+
+function cleanLibrary(raw: string): string {
+  let s = (raw ?? "").trim().replace(/^[,，:：.;—-]+/, "");
+  s = s.split(/\s+(?:untuk|supaya|agar|biar|yang|dari|di|dengan|pada|ke|of|for|to|and)\s+/i)[0];
+  const tokens = s.split(/\s+/).filter(Boolean);
+  while (tokens.length > 0 && CHATTER.has(tokens[0].toLowerCase())) tokens.shift();
+  let out = tokens.slice(0, 2).join(" ").toLowerCase();
+  out = out.replace(/[^a-z0-9_./@ -]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!out.startsWith("/") && out.includes(" ")) {
+    const parts = out.split(" ");
+    const sawSpace = /^(?:cloudflare|google|microsoft|vercel|aws|apache|openai|meta|supabase|stripe|shopify|wordpress|github|netlify|digitalocean|amazon|ibm|ora|oracle|redis|django|react|vue|angular|node|next|nuxt|svelte|laravel|dotnet|flutter|swift|kotlin|deno|bun|python|typescript|javascript|ruby|go|rust|java|php)$/i.test(parts[0].trim());
+    if (!sawSpace) out = parts[0];
+  }
+  return out.slice(0, 60);
+}
+
+function extractLibrary(text: string): { nameOrId: string; isId: boolean } {
+  const slashM = text.match(/\b(?:ctx7|context7|library id)\s*:?\s+(\/[\w./-]{1,50})/i);
+  if (slashM) {
+    const v = cleanLibrary(slashM[1]);
+    if (v.startsWith("/")) return { nameOrId: v, isId: true };
+  }
+  for (const re of [
+    /\b(?:cara pakai|cara memakai|cara menggunakan|cara pemakaian|how to use|how do i use|how do you use|implement .* with)\s+([a-z0-9][\w]*(?:\s+[a-z0-9][\w]*){0,2})/i,
+    /\b(?:docs?|dokumentasi|api)\s+(?:untuk|dari|of|for|pada)?\s*([a-z0-9][\w]*(?:\s+[a-z0-9][\w]*){0,2})/i,
+  ]) {
+    const m = text.match(re);
+    if (m) {
+      const v = cleanLibrary(m[1]);
+      if (v.length >= 2) return { nameOrId: v, isId: false };
+    }
+  }
+  const markM = text.match(/\b(?:ctx7|context7)\b[\s:]+([a-z0-9][\w]*(?:\s+[a-z0-9][\w]*){0,2})/i);
+  if (markM) {
+    const v = cleanLibrary(markM[1]);
+    if (v.length >= 2) return { nameOrId: v, isId: false };
+  }
+  return { nameOrId: "", isId: false };
+}
+
+async function ctx7Fetch(env: Env, path: string): Promise<string | null> {
+  const key = env.CONTEXT7_API_KEY;
+  const headers: Record<string, string> = { "User-Agent": "jarvis-ai-assistant/1.0" };
+  if (key) headers.Authorization = `Bearer ${key}`;
+  const res = await fetchWithTimeout(`${CTX7_API}${path}`, { headers }, 15000);
+  if (!res.ok) return null;
+  return res.text();
+}
+
+async function resolveLibrary(env: Env, libraryName: string, query: string): Promise<string | null> {
+  const q = encodeURIComponent(query.slice(0, 200));
+  const n = encodeURIComponent(libraryName);
+  const body = await ctx7Fetch(env, `/v2/libs/search?query=${q}&libraryName=${n}`);
+  if (!body) return null;
+  try {
+    const d = JSON.parse(body) as { results?: Array<{ id?: string }>; error?: string };
+    if (d.error || !d.results?.length) return null;
+    return d.results[0].id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export interface Context7Result {
+  reply: string | null;
+  ok: boolean;
+}
+
+export async function lookupLibraryDocs(
+  env: Env,
+  userText: string,
+  context: Array<{ role: string; content: string }> = [],
+): Promise<Context7Result> {
+  const { nameOrId, isId } = extractLibrary(userText);
+  if (!nameOrId) return { reply: null, ok: false };
+
+  let libraryId = isId ? nameOrId : null;
+  if (!libraryId) {
+    libraryId = await resolveLibrary(env, nameOrId, userText);
+  }
+  if (!libraryId) return { reply: null, ok: false };
+
+  const docs = await ctx7Fetch(env, `/v2/context?query=${encodeURIComponent(userText.slice(0, 200))}&libraryId=${encodeURIComponent(libraryId)}`);
+  if (!docs || !docs.trim()) return { reply: null, ok: false };
+
+  const system =
+    `Kamu adalah J.A.R.V.I.S. yang memakai Context7 untuk menjawab pertanyaan pemilik tentang library/API. ` +
+    `Dokumentasi TERBARU dari sumber resmi diberikan di bawah. Jawab pertanyaan pemilik BERDASARKAN dokumentasi ini saja — ` +
+    `jangan menambahkan fungsi, parameter, atau API yang TIDAK ADA di dokumentasi (anti-halusinasi). ` +
+    `Bila relevan sertakan contoh kode dalam blok kode. Bahasa: gunakan bahasa pemilik (Indonesia/Inggris), gaya J.A.R.V.I.S. yang kompeten, hangat, lugas. Ringkas tapi lengkap.\n\n` +
+    `=== DOKUMENTASI (Context7) — library ${libraryId} ===\n${docs.slice(0, 8000)}`;
+
+  const r = await llmRespond(env, userText, {
+    topic: `context7-${libraryId}`,
+    contextIsEnriched: true,
+    context,
+    systemOverride: system,
+  }).catch(() => null);
+
+  const reply = (r?.reply ?? "").trim();
+  if (!reply) return { reply: null, ok: false };
+  return { reply: reply.slice(0, 3600), ok: true };
+}
+
+export async function tryContext7(
+  env: Env,
+  userText: string,
+  context: Array<{ role: string; content: string }> = [],
+): Promise<string | null> {
+  const res = await lookupLibraryDocs(env, userText, context).catch(() => ({ reply: null, ok: false } as const));
+  return res.ok && res.reply ? res.reply : null;
+}

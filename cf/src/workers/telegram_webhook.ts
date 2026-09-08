@@ -35,6 +35,7 @@ import { saveSessionToKV, loadSessionFromKV, touchSession, updateSession } from 
 import { saveObservation } from "../lib/db";
 import { processMessage, type MessageContext } from "../lib/jarvis_core";
 import { isPromptMasterRequest } from "../lib/prompt_master";
+import { isContext7Request } from "../lib/context7";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "../lib/identity";
 import { covenantStatusText, signClause } from "../lib/covenant_core";
 import { identityStatusText } from "../lib/identity_anchor";
@@ -808,6 +809,10 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
         // Nothing to translate: fall through to generic (will show "Ok.")
       }
       if (isPromptMasterRequest(text)) {
+        await fire(sendMessage(env, owner, await applyDefault(env, owner, res, text)));
+        break;
+      }
+      if (isContext7Request(text)) {
         await fire(sendMessage(env, owner, await applyDefault(env, owner, res, text)));
         break;
       }
