@@ -19,7 +19,7 @@ import { isPromptMasterRequest, isPromptShaped, sanitizePromptDeliverable } from
 import { isContext7Request, context7FailureMessage, lookupLibraryDocs } from "../src/lib/context7";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
-import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
+import { normForMatch, todoDeleteKey, deleteTodoByText, salesReport } from "../src/lib/db";
 import { isBareTodoVerb, parseReminder, tidyVisionReply } from "../src/workers/telegram_webhook";
 import { parseTranslate } from "../src/lib/ai";
 import { isLikelyTruncated, repairTruncatedReply, gateVerdict, isRawDumpText, isRepetitiveText } from "../src/lib/verifier";
@@ -1109,6 +1109,40 @@ async function testFailureRollup() {
   assert.ok(kv.size >= 2, "both KV ledgers written");
 }
 
+async function testSalesReportBasis() {
+  // Basis laba konsisten: Omzet tetap = apa yang customer bayar (SUM orders.total,
+  // sudah net diskon + ongkir); ongkir diperlakukan pass-through sehingga TIDAK
+  // menggelembungkan laba (duhulu profit = SUM(orders.total) - item_cost).
+  const rows: Record<string, any> = {};
+  const db = {
+    prepare: (_sql: string) => ({
+      bind: () => ({
+        first: async () => {
+          if (_sql.includes("FROM orders") && _sql.includes("SUM(total)")) {
+            return { cnt: 2, revenue: 2500, shipping: 500 };
+          }
+          if (_sql.includes("order_items")) return { item_rev: 2400, item_cost: 800 };
+          return null;
+        },
+        all: async () => ({
+          results: [
+            { name: "Kopi Arabika", qty: 4, revenue: 2000 },
+            { name: "Teh Melati", qty: 2, revenue: 400 },
+          ],
+        }),
+      }),
+    }),
+  };
+  const env = { DB: db } as never;
+  const rep = await salesReport(env, 1, 0, Date.now());
+  assert.strictEqual(rep.total_orders, 2, "order count");
+  assert.strictEqual(rep.total_revenue, 2500, "omzet = SUM orders.total (net diskon+ongkir)");
+  assert.strictEqual(rep.total_cost, 1300, "biaya = harga pokok (800) + ongkir pass-through (500)");
+  assert.strictEqual(rep.profit, 1200, "laba = omzet - pokok - ongkir (tidak digelembungkan ongkir)");
+  assert.strictEqual(rep.avg_order, 1250, "rata-rata omzet per pesanan");
+  assert.strictEqual(rep.top_products.length, 2, "top products rendered");
+}
+
 async function testAntiHallucinationRails() {
   // (1) Sanitizer tautan: hanya URL yang benar-benar dikembalikan mesin pencari
   // boleh lolos — tautan fabrikasi LLM dipotong deterministik, label markdown
@@ -1188,6 +1222,7 @@ async function main() {
   testNormalizeLibraryToken();
   await testContext7ResolveVerifier();
   await testAntiHallucinationRails();
+  await testSalesReportBasis();
   console.log("LOGIC TESTS PASSED");
 }
 
