@@ -295,6 +295,29 @@ export function extractTopic(text: string): string | null {
   return topic.length >= 3 ? topic.slice(0, 120) : null;
 }
 
+// ── Confusable-word detection (M8-v23) ────────────────────────────────
+// A one-character-mutation typo (tembaga↔lembaga) silently hijacks an
+// entire research chain. Deterministic: checks topic tokens against a
+// curated confusable dictionary; returns null when no action needed.
+// Keys are the TYPO forms; values are the CORRECT canonical forms.
+const CONFUSABLE_PAIRS: Record<string, string> = {
+  tembaga: "lembaga",
+  universitas: "institusi",
+  kementrian: "kementerian",
+};
+export function detectConfusableTopic(
+  topic: string,
+): { original: string; corrected: string } | null {
+  const words = topic.split(/\s+/);
+  for (const w of words) {
+    const canonical = CONFUSABLE_PAIRS[w];
+    if (canonical) {
+      return { original: w, corrected: canonical };
+    }
+  }
+  return null;
+}
+
 /** Parse a translation request: "Terjemahkan <teks>" or "Terjemahkan ke
  *  <bahasa> <teks>" (and likewise for "translate"/"translate to"). Returns the
  *  source text and an optional target language, or null if this isn't a

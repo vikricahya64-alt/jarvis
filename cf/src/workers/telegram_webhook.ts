@@ -26,7 +26,7 @@ import {
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus, recordTaskCounters, recentContext, appendMemory } from "../lib/db";
-import { searchAndSynthesize, extractTopic, parseTranslate, translateText, isFollowUpQuery, resolveFollowUpAnchor, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, isPureContinuation, storeResearchAnchor, readResearchAnchor } from "../lib/ai";
+import { searchAndSynthesize, extractTopic, parseTranslate, translateText, isFollowUpQuery, resolveFollowUpAnchor, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, isPureContinuation, storeResearchAnchor, readResearchAnchor, detectConfusableTopic } from "../lib/ai";
 import { continueAnalysis } from "../lib/ai";
 import { getWeatherText } from "../lib/weather";
 
@@ -158,6 +158,42 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
         await fire(answerCallbackQuery(env, cq.id, "Dibatalkan."));
       }
       await env.CONFIG_KV.delete(`clarify:${parts[1]}`).catch(() => {/* best-effort */});
+      return new Response("ok");
+    }
+    // Typo confirmation: typo_confirm:<id>:<0=corrected|1=original|2=cancel>
+    if (parts[0] === "typo_confirm" && parts.length === 3) {
+      const idx = parts[2];
+      const raw = await env.CONFIG_KV.get(`typo_confirm:${parts[1]}`, "json").catch<unknown>(() => null) as
+        null | { text?: string; correctedText?: string; owner?: number };
+      if (cq.message) {
+        await fire(editMessageReplyMarkup(env, cq.message.chat.id, cq.message.message_id, { inline_keyboard: [] }));
+      }
+      if (!raw || !raw.text || !raw.correctedText || !raw.owner) {
+        await fire(answerCallbackQuery(env, cq.id, "Konteks konfirmasi kedaluwarsa. Kirim ulang."));
+        return new Response("ok");
+      }
+      const chosen = idx === "0" ? raw.correctedText : idx === "1" ? raw.text : null;
+      await env.CONFIG_KV.delete(`typo_confirm:${parts[1]}`).catch(() => {/* best-effort */});
+      if (!chosen) {
+        await fire(answerCallbackQuery(env, cq.id, "Dibatalkan."));
+        return new Response("ok");
+      }
+      await fire(answerCallbackQuery(env, cq.id, idx === "0" ? "Topik dikoreksi." : "Menggunakan topik asli."));
+      try {
+        const topic = extractTopic(chosen) ?? chosen;
+        const r = await searchAndSynthesize(env, raw.owner, chosen, topic);
+        await appendMemory(env, raw.owner, "user", chosen, topic).catch(() => {});
+        await appendMemory(env, raw.owner, "assistant", r.reply, topic).catch(() => {});
+        saveObservation(env, raw.owner, `User menanyakan tentang: ${topic}`, "interest").catch(() => {});
+        updateSession(raw.owner, chosen, r.reply, topic, "research");
+        await recordTaskCounters(env, "standard", raw.owner);
+        await storeResearchAnchor(env, raw.owner, topic, r.reply).catch(() => {});
+        await deliverSmartReply(env, raw.owner, r.reply);
+      } catch (e) {
+        console.error("[typo_confirm] search failed", (e as Error).message);
+        await fire(sendMessage(env, raw.owner,
+          `Maaf, pencarian sedang bermasalah — coba lagi sebentar.`));
+      }
       return new Response("ok");
     }
     await fire(answerCallbackQuery(env, cq.id, "Tidak dikenal."));
@@ -897,6 +933,35 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
       }
       const topic = extractTopic(text);
       if (topic) {
+        // M8-v23: Typo confirmation — when topic contains a word that is a
+        // one-character mutation of a common institution/research word, ask
+        // the user to confirm before burning LLM budget on a wrong search.
+        const confusable = detectConfusableTopic(topic);
+        if (confusable) {
+          const corrId = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+          const correctedText = text.replace(
+            new RegExp(`\\b${confusable.original}\\b`, "i"),
+            confusable.corrected,
+          );
+          const correctedTopic = topic.replace(
+            new RegExp(`\\b${confusable.original}\\b`, "i"),
+            confusable.corrected,
+          );
+          await env.CONFIG_KV.put(
+            `typo_confirm:${corrId}`,
+            JSON.stringify({ text, correctedText, owner, topic, correctedTopic, ts: Date.now() }),
+            { expirationTtl: 300 },
+          ).catch(() => {/* degrade: no confirm, run as-is */});
+          await fire(sendMessage(env, owner,
+            `🔍 Topik terdeteksi: *${topic.slice(0, 80)}*\n\n` +
+            `Apakah yang dimaksud: *${correctedTopic.slice(0, 80)}*?`,
+            { replyMarkup: { inline_keyboard: [
+              [{ text: `✅ Ya, ${confusable.corrected}`, callback_data: `typo_confirm:${corrId}:0` }],
+              [{ text: `❌ Tetap ${confusable.original}`, callback_data: `typo_confirm:${corrId}:1` }],
+              [{ text: "🚫 Batalkan", callback_data: `typo_confirm:${corrId}:2` }],
+            ] } }));
+          break;
+        }
         // Friendly info/query EXECUTE → real search + synthesis. This webhook
         // path bypasses the brain's reflect stage, so user+assistant turns are
         // persisted EXPLICITLY here (single writer for this legacy path) and the
