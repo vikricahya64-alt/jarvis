@@ -12,6 +12,8 @@ import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
 import { isTranslateCapRequest, matchWebhookPreCapability, capabilityIntent, getCapability, approachForIntent, describeCapabilities } from "../src/lib/capability_registry";
 import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate } from "../src/lib/ai";
+import { recoveryPlan, classifyOperational, budgetedRecovery, tallyFailure, readFailureTally } from "../src/lib/failure";
+import { tallyGate } from "../src/lib/verifier";
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText } from "../src/lib/db";
@@ -834,6 +836,117 @@ function testCapabilityRegistry() {
   assert.ok(describeCapabilities().includes("Capabilities J.A.R.V.I.S."), "describeCapabilities renders header");
 }
 
+function testFailureTaxonomy() {
+  // Every gate verdict maps to a documented strategy + LLM budget (Phase-3
+  // contract: recovery never loops and never inflates the free-tier bill).
+  const pTrunc = recoveryPlan("truncated");
+  assert.strictEqual(pTrunc.strategy, "repair", "truncated → deterministic repair");
+  assert.strictEqual(pTrunc.llmBudget, 0, "repair spends zero LLM calls");
+  assert.ok(pTrunc.deterministic, "repair is provider-free");
+  for (const v of ["raw_dump", "non_answer"] as const) {
+    const p = recoveryPlan(v);
+    assert.strictEqual(p.strategy, "rewrite", `${v} → rewrite`);
+    assert.strictEqual(p.llmBudget, 1, `${v} → exactly one LLM call`);
+  }
+  assert.strictEqual(recoveryPlan("repetitive", 200).needsAnchor, true, "repetitive with long anchor grounded");
+  assert.strictEqual(recoveryPlan("repetitive", 0).needsAnchor, false, "repetitive without anchor downgraded");
+  for (const op of ["empty", "timeout", "blocked", "stale"] as const) {
+    const p = recoveryPlan(op);
+    assert.strictEqual(p.strategy, "degrade", `${op} → degrade (no retry)`);
+    assert.strictEqual(p.llmBudget, 0, `${op} → zero budget`);
+  }
+  assert.strictEqual(recoveryPlan("ok").strategy, "none", "ok → no-op");
+  // Operational classifier vocabulary matches capability_registry errorCodes.
+  assert.strictEqual(classifyOperational(new Error("fetch timed out")), "timeout", "timeout class");
+  assert.strictEqual(classifyOperational(new Error("Error 403 rate limit")), "blocked", "blocked class");
+  assert.strictEqual(classifyOperational(new Error("no fresh results")), "stale", "stale class");
+  assert.strictEqual(classifyOperational(new Error("empty body")), "empty", "empty class");
+  assert.strictEqual(classifyOperational(new Error("zz unknown")), "empty", "fallback default");
+}
+
+async function testBudgetedRecovery() {
+  const kv = new Map<string, string>();
+  const env = {
+    CONFIG_KV: {
+      get: async (k: string) => kv.get(k) ?? null,
+      put: async (k: string, v: string) => {
+        kv.set(k, v);
+      },
+    },
+  } as never;
+
+  // Deterministic repair path (truncated): zero LLM calls, gate-clean output.
+  let longNoPunct = "Model dilatih dengan data berlabel sehingga memetakan input ke output " + "x".repeat(120);
+  const truncated = await budgetedRecovery(env, {
+    userText: "analisis ml",
+    bad: longNoPunct,
+    anchor: "",
+    verdict: "truncated",
+    topic: "ml",
+    path: "search_synth",
+    llmBudget: 1,
+  });
+  assert.strictEqual(truncated.llmSpent, 0, "repair spends no LLM calls");
+  assert.ok(/📌/.test(truncated.text), "repair appends the honest truncation hint");
+  assert.strictEqual(truncated.outcome, "ok", "repaired text passes the gate");
+  assert.ok(truncated.recovered, "repair recovers");
+
+  // Rewrite path with NO budget: falls back to the caller's canonical cascade.
+  const noBudget = await budgetedRecovery(env, {
+    userText: "apa itu",
+    bad: "Lihat: https://example.com",
+    anchor: "",
+    verdict: "non_answer",
+    topic: "x",
+    path: "search_synth",
+    llmBudget: 0,
+  });
+  assert.strictEqual(noBudget.llmSpent, 0, "no budget → no LLM call");
+  assert.strictEqual(noBudget.text, "Lihat: https://example.com", "bad reply returned untouched");
+  assert.ok(!noBudget.recovered, "not recovered without budget");
+
+  // Empty input short-circuit.
+  const empty = await budgetedRecovery(env, {
+    userText: "x", bad: "", anchor: "", verdict: "non_answer",
+    topic: "", path: "search_synth", llmBudget: 1,
+  });
+  assert.strictEqual(empty.llmSpent, 0, "empty bad → no work");
+
+  // ok verdict → no-op: must not append anything to the ledger.
+  const beforeOk = kv.size;
+  const ok = await budgetedRecovery(env, {
+    userText: "x", bad: "jawaban bagus.", anchor: "", verdict: "ok",
+    topic: "", path: "search_synth", llmBudget: 1,
+  });
+  assert.strictEqual(ok.outcome, "ok", "ok verdict passthrough");
+  assert.strictEqual(kv.size, beforeOk, "ok verdict records nothing");
+}
+
+async function testFailureRollup() {
+  const kv = new Map<string, string>();
+  const env = {
+    CONFIG_KV: {
+      get: async (k: string) => kv.get(k) ?? null,
+      put: async (k: string, v: string) => {
+        kv.set(k, v);
+      },
+    },
+    SESSION_RAG: {},
+  } as never;
+  // Gate tally + operational tally roll up into one 24h readout.
+  await tallyGate(env, "search_synth", "truncated");
+  await tallyGate(env, "search_synth", "non_answer");
+  await tallyGate(env, "subagents", "raw_dump");
+  await tallyFailure(env, "translate", "timeout");
+  await tallyFailure(env, "translate", "blocked");
+  const readout = await readFailureTally(env);
+  assert.ok(readout.includes("gate failures: 3"), `gate rollup: ${readout}`);
+  assert.ok(readout.includes("non_answer=1"), `gate class detail: ${readout}`);
+  assert.ok(readout.includes("operational failures: 2"), `op rollup: ${readout}`);
+  assert.ok(readout.includes("blocked=1"), `op class detail: ${readout}`);
+  assert.ok(kv.size >= 2, "both KV ledgers written");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -867,6 +980,9 @@ async function main() {
   testGateNonAnswer();
   testGateRepetition();
   testCapabilityRegistry();
+  testFailureTaxonomy();
+  await testBudgetedRecovery();
+  await testFailureRollup();
   console.log("LOGIC TESTS PASSED");
 }
 

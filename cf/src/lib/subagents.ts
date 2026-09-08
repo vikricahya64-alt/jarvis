@@ -32,8 +32,9 @@
 //=====================================================================
 
 import { Env, searchMemory, recentContext } from "./db";
-import { llmRespond, searchTopResults, deepReadPage, recoverReply } from "./ai";
-import { gateVerdict, tallyGate } from "./verifier";
+import { llmRespond, searchTopResults, deepReadPage } from "./ai";
+import { gateVerdict } from "./verifier";
+import { budgetedRecovery } from "./failure";
 import { getAnswerBehaviorContext } from "./evolution";
 import { fetchPageText } from "./extract";
 import { isObj, parseStructured, cleanStr } from "./structured";
@@ -691,19 +692,25 @@ export async function orchestrateResearch(
         return safe + (/\bhttps?:\/\//.test(safe) || !att ? "" : att); // fall back to original if no safe rewrite
       }
     }
-    // OUTPUT GATE (deterministic rail, budget-bounded): even after the optional
-    // LLM verifier (or when it was skipped), flag raw dumps / non-answers /
-    // anchor repetition and regenerate ONCE with a corrective instruction.
-    // Truncation is already handled at provider level — not re-triggered here.
+    // OUTPUT GATE (Phase-3 budgeted recovery): after the optional LLM verifier
+    // (or when it was skipped), flag raw dumps / non-answers / anchor repetition
+    // and repay them ONCE within the remaining LLM budget (failure.ts). Truncation
+    // is already handled at provider level — not re-triggered here, mirroring the
+    // pre-Phase-3 rail so the honest "terpotong" hint is never appended twice.
     const gate = gateVerdict(finalReply, anchor);
     if (gate !== "ok" && gate !== "truncated") {
-      void tallyGate(env, "subagents", gate).catch(() => {});
-      if (calls < MAX_TOTAL_LLM_CALLS) {
-        const rec = await recoverReply(env, userText, finalReply, [], anchor, gate, topic);
-        calls += 1;
-        if (rec && rec.trim().length >= 40) {
-          return rec.trim() + (/\bhttps?:\/\//.test(rec) || !att ? "" : att);
-        }
+      const step = await budgetedRecovery(env, {
+        userText,
+        bad: finalReply,
+        anchor,
+        verdict: gate,
+        topic,
+        path: "subagents",
+        llmBudget: calls < MAX_TOTAL_LLM_CALLS ? 1 : 0,
+      });
+      calls += step.llmSpent;
+      if (step.text !== finalReply && step.text.trim().length >= 40) {
+        return step.text.trim() + (/\bhttps?:\/\//.test(step.text) || !att ? "" : att);
       }
     }
     return finalReply;

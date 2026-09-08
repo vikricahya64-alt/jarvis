@@ -83,5 +83,5 @@ export async function processMessage(
 
 /** Get system status for /status command. */
 export async function getSystemStatus(env: Env, owner: number): Promise<string> {
-  return getBrainStatus(owner);
+  return getBrainStatus(owner, env);
 }
