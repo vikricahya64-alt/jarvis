@@ -1981,8 +1981,20 @@ export async function detectGarbledInput(
     `yang TIDAK PERNAH muncul di konteks percakapan dan kamu tidak benar-benar YAKIN itu nyata?\n` +
     `3. Seberapa yakin kamu (0-1) bahwa maksud pesan ini jelas dan bisa dijawab dari ` +
     `perbendaharaanmu + konteks, TANPA mengarang platform/istilah baru?\n\n` +
-    `ATURAN: kalau ada platform/istilah yang tidak dikenal atau tidak muncul di konteks, ` +
-    `JANGAN berasumsi itu nyata — anggap tidak jelas (clear=false) dan sebut istilah itu. ` +
+    `ATURAN KRITIS:\n` +
+    `- TYPO GLOBAL: Typo ringan (huruf dobel/terbalik seperti "memebuat"→"membuat", ` +
+    `"sofware"→"software") yang BISA dipahami dari SELURUH konteks percakapan ` +
+    `(semua topik, bukan hanya topik aktif) harus dianggap JELAS (clear=true, ` +
+    `confidence tinggi). Koreksi dalam hati — JANGAN minta klarifikasi untuk typo ` +
+    `ringan yang bisa dipahami konteks.\n` +
+    `- PLATFORM/ISTILAH ASING: kalau ada platform/istilah yang tidak dikenal atau ` +
+    `tidak muncul di konteks percakapan, JANGAN berasumsi itu nyata — anggap tidak ` +
+    `jelas (clear=false) dan sebut istilah itu.\n` +
+    `- LARANGAN ECHO: JANGAN PERNAH mengulang atau mengutip blok internal markup ` +
+    `seperti "[Memori kerja]", "[Kenangan relevan]", "[Ringkasan]" — itu konteks ` +
+    `internal untukmu, bukan untuk user. Kalau user bertanya tentang topik dan ` +
+    `kamu punya jawaban dari pengetahuan, JAWAB LANGSUNG tanpa menyebut blok ` +
+    `internal.\n\n` +
     `Ballas HANYA JSON: {"clear": true/false, "confidence": 0-1, "uncertain": "<istilah yang kurang jelas, atau kosong>"}. ` +
     `clear=true DILARANG kalau confidence < 0.8 (jangan pernah menjawab dengan raguan tinggi).`;
 
