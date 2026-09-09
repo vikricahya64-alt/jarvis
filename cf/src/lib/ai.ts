@@ -175,7 +175,13 @@ export async function readResearchAnchor(
  *  web search. The prior reply (already sourced) is the only input, so the
  *  continuation stays on the exact same topic/structure and NEVER degrades into
  *  a clarifying question ("kota Malang ..." bug — M7). Fail-closed: null when
- *  no provider answers, so the caller falls back to a fresh search reply. */
+ *  no provider answers, so the caller falls back to a fresh search reply.
+ *
+ *  M9-v9: the previous instruction set FORCED a system-report style ("judul
+ *  Bold, poin bernomor") and forbade asking back — this is exactly what leaked
+ *  "Kecerdasan Buatan & Pembelajaran Mesin" headers + numbered bullets + the
+ *  "beri tahu saya" template closer into production. Continuation now inherits
+ *  the SAME flowing human-prose voice as the main writer, never a report. */
 export async function continueAnalysis(
   env: Env,
   prior: string,
@@ -186,10 +192,10 @@ export async function continueAnalysis(
     "Kamu J.A.R.V.I.S., asisten setia pemilik. Tugas: MELANJUTKAN analisis/riset yang terpotong di atas.",
     "Aturan:",
     "1. JANGAN mengulang atau meringkas bagian yang sudah ditulis.",
-    "2. LANGSUNG lanjutkan ke bagian berikutnya sesuai struktur yang sudah mulai (mis. jika baru sampai 'Kelebihan', lanjut 'Kekurangan', 'Langkah Memulai', dst. sampai tuntas).",
-    "3. PERTAHANKAN gaya penjawab di atas (judul Bold, poin bernomor, Bahasa Indonesia).",
-    "4. JANGAN bertanya balik ke pemilik di akhir.",
-    "5. Jika semua bagian sudah tuntas, akhiri dengan satu paragraf 'Kesimpulan' yang menutup topik.",
+    "2. LANGSUNG lanjutkan ke bagian berikutnya agar jawaban tuntas sampai akhir.",
+    "3. Tulis lanjutannya dalam PROSA MENGALIR alami, persis gaya yang sudah dipakai penjawab di atas — seperti orang menjelaskan ke teman. DILARANG judul seksi tebal, poin bernomor/berurutan, dan kalimat penutup templat.",
+    "4. Bahasa Indonesia santai, jangan memakai kata 'Anda'.",
+    "5. Jika semua bagian sudah tuntas, akhiri dengan satu paragraf penutup singkat yang merangkum inti topik.",
   ].join("\n");
   const messages = [
     { role: "system", content: system },

@@ -121,7 +121,15 @@ export function adaptLength(
 
 /** Clean up common LLM artifacts. */
 export function cleanLLMArtifacts(text: string): string {
-  return text
+  if (!text) return text;
+  let t = text;
+  // Protect intact markdown links so the repairs below can never mangle them.
+  const intact: string[] = [];
+  t = t.replace(/\[([^\[\]]+)\]\(\s*(https?:\/\/[^\s)]+)\)/g, (m: string) => {
+    intact.push(m);
+    return `\uE003${intact.length - 1}\uE004`;
+  });
+  t = t
     // Remove "As an AI..." disclaimers
     .replace(/(?:Sebagai|As)\s+(?:AI|model|bahasa|language)[^.]*\./gi, "")
     // Remove "I hope this helps..." fillers
@@ -130,11 +138,18 @@ export function cleanLLMArtifacts(text: string): string {
     .replace(/^[-–—]{3,}\s*$/gm, "")
     // Remove duplicate line breaks (max 2)
     .replace(/\n{3,}/g, "\n\n")
-    // Remove leading/trailing whitespace
-    .trim()
     // Repair mangled markdown links the LLM sometimes emits: "(url](url)"
     // or "(url](url))" → single clean "(url)".
-    .replace(/\((https?:\/\/[^\s)\]]+)\]\(https?:\/\/[^\s)\]]+\)+/g, "($1)");
+    .replace(/\((https?:\/\/[^\s)\]]+)\]\(https?:\/\/[^\s)\]]+\)+/g, "($1)")
+    // Repair "[label](url)" links that lost their opening "[" — the observed
+    // production leak is "url](url)" (a URL-like label), so bind the label to
+    // a single whitespace-delimited token and re-emit valid markdown instead
+    // of leaving raw mangled brackets visible in Telegram.
+    .replace(/(?<=^|\s)([^\s\[\]]+)\]\(\s*(https?:\/\/[^\s)]+)\)/g, (_m, label: string, url: string) => `[${label}](${url})`);
+  return t
+    // Restore the protected intact links.
+    .replace(/\uE003(\d+)\uE004/g, (_m, i: string) => intact[Number(i)] ?? _m)
+    .trim();
 }
 
 /** Format citations in research responses.

@@ -25,6 +25,11 @@ import { isBareTodoVerb, parseReminder, tidyVisionReply } from "../src/workers/t
 import { deliverSmartReply } from "../src/lib/telegram";
 import { parseTranslate } from "../src/lib/ai";
 import { isLikelyTruncated, repairTruncatedReply, gateVerdict, isRawDumpText, isRepetitiveText } from "../src/lib/verifier";
+import { cleanLLMArtifacts } from "../src/lib/response_formatter";
+import {
+  detectRelevanceAmbiguity, resolveRelevanceConfirmation,
+  parkPendingRelevance, readPendingRelevance, clearPendingRelevance,
+} from "../src/lib/relevance";
 
 async function testPredictiveUrgencyRanking() {
   // Deterministic ranking: approval (open/expiring proposals) must rank first,
@@ -1300,6 +1305,19 @@ async function testAntiHallucinationRails() {
   assert.strictEqual(sanitizeUncitedLinks("satu tautan saja https://example.com/a", ["https://example.com/a"]), "satu tautan saja https://example.com/a", "allowed bare URL kept");
   assert.strictEqual(sanitizeUncitedLinks("No links at all to speak of, fine.", ["https://a.b"]), "No links at all to speak of, fine.", "no URLs untouched");
 
+  // M9-v9 fail-closed: KETIKA mesin pencari TIDAK mengembalikan apa-apa
+  // (allowedUrls kosong), SEMUA URL dihapus — referensi karangan seperti arXiv
+  // 2305.12345 palsu tidak boleh lolos hanya karena kolom bukti kosong.
+  const noev = sanitizeUncitedLinks(
+    "Menurut arXiv:2305.12345 (https://arxiv.org/abs/2305.12345) hasilnya A. [sumber](https://unesco.org/ai-ethics-report)",
+    [],
+  );
+  assert.ok(!noev.includes("http"), "daftar sumber kosong → semua URL dihapus");
+  assert.ok(noev.includes("arXiv:2305.12345"), "teks label di sekitar URL tetap ada");
+  assert.ok(noev.includes("[sumber]"), "label markdown tetap dipertahankan");
+  assert.strictEqual(sanitizeUncitedLinks("teks biasa tanpa url di dalamnya", []),
+    "teks biasa tanpa url di dalamnya", "teks tanpa URL tidak berubah walau bukti kosong");
+
   // (2) Ledger token: pemakaian yang diestimasi (chars/4, provider tanpa usage)
   // berflag `estimated: true` supaya /usage tidak menyajikannya sebagai angka
   // resmi provider.
@@ -1317,6 +1335,111 @@ async function testAntiHallucinationRails() {
   assert.ok(ledger.groq && ledger.groq.estimated === false, "etted real usage not marked estimated");
   assert.strictEqual(ledger.groq?.used, 150, "usage accumulated");
   assert.ok(ledger.openrouter?.estimated === true, "estimated usage flagged");
+}
+
+function testCleanLLMArtifacts() {
+  // M9-v9: tautan "[label](url)" yang kehilangan kurung buka "[" ("url](url)")
+  // diperbaiki jadi markdown VALID — Telegram merender link sungguhan, bukan
+  // sisa kurung tekstual yang rusak.
+  const repaired = cleanLLMArtifacts("Detail di sini https://example.com/x](https://example.com/y) dan selesai");
+  assert.ok(repaired.includes("[https://example.com/x](https://example.com/y)"),
+    "url](url) diperbaiki jadi link markdown valid");
+  const repaired2 = cleanLLMArtifacts("rujukan lembaga https://lembaga.or.id/laporan](https://lembaga.or.id/laporan)");
+  assert.ok(repaired2.includes("[https://lembaga.or.id/laporan](https://lembaga.or.id/laporan)"),
+    "label berupa URL juga diperbaiki");
+  // Link yang sudah utuh TIDAK dirusak oleh perbaikan.
+  const intact = cleanLLMArtifacts("baca [dokumen](https://example.com/a) dan [sumber](https://example.com/b) ya");
+  assert.ok(intact.includes("[dokumen](https://example.com/a)"), "link utuh A dipertahankan");
+  assert.ok(intact.includes("[sumber](https://example.com/b)"), "link utuh B dipertahankan");
+  assert.strictEqual(cleanLLMArtifacts("teks biasa, Semoga ini membantu!"), "teks biasa,",
+    "fillers dibersihkan seperti sebelumnya");
+}
+
+function testRelevanceGate() {
+  // Konfusable "tembaga"→"lembaga" dalam konteks riset (bias corrected) →
+  // gerbang relevansi AKTIF: ajukan satu pertanyaan konfirmasi, bukan langsung
+  // mengeksekusi riset dengan bacaan sendiri.
+  const amb = detectRelevanceAmbiguity(
+    "kebutuhan pasar dan referensinya menurut tembaga riset lokal",
+    "riset kebutuhan pasar menurut tembaga riset lokal",
+    "search",
+  );
+  assert.ok(amb.ambiguous, "confusable riset memicu gerbang");
+  assert.ok(amb.question!.includes("tembaga") && amb.question!.includes("lembaga"),
+    "pertanyaan berisi opsi asli vs koreksi");
+  assert.strictEqual(amb.pending!.corrected, "lembaga", "pending menyimpan kata koreksi");
+  assert.strictEqual(amb.pending!.intentType, "search", "pending membawa jenis intent");
+
+  // Bias original ("harga tembaga") → TIDAK ditanyai, eksekusi langsung.
+  assert.ok(!detectRelevanceAmbiguity("harga tembaga hari ini", "cari harga tembaga hari ini", "search").ambiguous,
+    "confusable dengan konteks original → tanpa gate");
+  // Topik jelas tanpa confusable → tanpa gate.
+  assert.ok(!detectRelevanceAmbiguity("artikel tren pasar konsumsi 2026", "cari artikel tren pasar 2026", "search").ambiguous,
+    "topik jelas → eksekusi langsung");
+  assert.ok(!detectRelevanceAmbiguity("", "", "chat").ambiguous, "teks kosong → tanpa gate");
+
+  // Ambiguitas UMUM (prinsip relevansi pemilik): permintaan ambisius dengan
+  // topik menjuntai/samar → tanya dulu, jangan tebak topik lalu eksekusi.
+  const thin = detectRelevanceAmbiguity("itu", "riset itu", "search");
+  assert.ok(thin.ambiguous, "cuma 'itu' tanpa subjek → gerbang umum AKTIF");
+  assert.ok(thin.question!.toLowerCase().includes("tulis ulang"), "pertanyaan umum menawarkan tulis ulang");
+  assert.strictEqual(thin.pending!.corrected, "", "pending umum tidak membawa koreksi kamus");
+  assert.ok(!detectRelevanceAmbiguity("kode python", "jelaskan apa itu kode python", "code").ambiguous,
+    "topik code konkret → tanpa gate");
+  assert.ok(!detectRelevanceAmbiguity("video promosi produk", "buat video promosi produk", "design").ambiguous,
+    "desain dengan objek jelas → tanpa gate");
+
+  // Resolusi konfirmasi: 1 = koreksi, 2/ya = asli, selain itu = bukan konfirmasi
+  // (fail-closed: jangan pernah melanjutkan tebakan tanpa jawaban yang jelas).
+  const p = amb.pending;
+  assert.ok(resolveRelevanceConfirmation("1", p).confirmed && resolveRelevanceConfirmation("1", p).applyCorrection,
+    "1 → pilih koreksi");
+  assert.ok(resolveRelevanceConfirmation("2", p).confirmed && !resolveRelevanceConfirmation("2", p).applyCorrection,
+    "2 → tetap asli");
+  assert.ok(resolveRelevanceConfirmation("ya", p).confirmed && !resolveRelevanceConfirmation("ya", p).applyCorrection,
+    "ya → tetap asli");
+  assert.ok(!resolveRelevanceConfirmation("bagaimana cara daftar beasiswa", p).confirmed,
+    "kalimat pertanyaan baru → bukan konfirmasi");
+  assert.ok(!resolveRelevanceConfirmation("tidak", p).confirmed, "tidak → bukan konfirmasi");
+  assert.ok(!resolveRelevanceConfirmation("", null).confirmed, "tanpa pending → bukan konfirmasi");
+  // Pending umum (tanpa koreksi): "1"/"ya" = konfirmasi topik apa adanya, tanpa
+  // mencoba menerapkan koreksi kosong.
+  const tp = thin.pending;
+  assert.ok(resolveRelevanceConfirmation("1", tp).confirmed && !resolveRelevanceConfirmation("1", tp).applyCorrection,
+    "pending umum → 1 = lanjut, bukan koreksi");
+  assert.ok(resolveRelevanceConfirmation("ya", tp).confirmed && !resolveRelevanceConfirmation("ya", tp).applyCorrection,
+    "pending umum → ya = lanjut");
+}
+
+async function testRelevancePersistence() {
+  const kv = new Map<string, string>();
+  const env = {
+    CONFIG_KV: {
+      get: async (k: string, fmt?: unknown) => {
+        const v = kv.get(k);
+        if (v == null) return null;
+        return fmt === "json" ? JSON.parse(v) : v;
+      },
+      put: async (k: string, v: string) => { kv.set(k, v); },
+      delete: async (k: string) => { kv.delete(k); },
+    },
+  } as never;
+  const owner = 123;
+  await parkPendingRelevance(env, owner, {
+    text: "riset kebutuhan pasar menurut tembaga riset lokal",
+    topic: "kebutuhan pasar dan referensinya menurut tembaga riset lokal",
+    correctedText: "riset kebutuhan pasar menurut lembaga riset lokal",
+    correctedTopic: "kebutuhan pasar dan referensinya menurut lembaga riset lokal",
+    original: "tembaga",
+    corrected: "lembaga",
+    intentType: "search",
+    ts: Date.now(),
+  });
+  const back = await readPendingRelevance(env, owner);
+  assert.ok(back && back.corrected === "lembaga", "pending tersimpan & terbaca ulang dari KV");
+  assert.strictEqual(await readPendingRelevance(env, owner + 1), null, "pending pemilik lain tidak tertukar");
+  await clearPendingRelevance(env, owner);
+  assert.strictEqual(await readPendingRelevance(env, owner), null, "pending terhapus setelah dibersihkan");
 }
 
 async function main() {
@@ -1366,6 +1489,9 @@ async function main() {
   testCleanSubReply();
   testAlignAngles();
   testDetectConfusableTopic();
+  testCleanLLMArtifacts();
+  testRelevanceGate();
+  await testRelevancePersistence();
   console.log("LOGIC TESTS PASSED");
 }
 
