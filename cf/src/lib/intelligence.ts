@@ -69,6 +69,10 @@ export interface Perception {
   topic: string | null;
   mode: SessionState["conversationMode"];
   isFollowUp: boolean;
+  /** m9-v10 humane continuity: message references the prior turn WITHOUT a
+   *  trigger word (detectTopicContinuity's anaphoric/relative + overlap
+   *  signals). When set, cheap chat paths keep the ACTIVE topic as frame. */
+  isContinuation: boolean;
   enrichedContext: Array<{ role: string; content: string }>;
 }
 
@@ -201,6 +205,7 @@ export async function perceive(
     topic,
     mode,
     isFollowUp,
+    isContinuation: topicResult.isContinuation,
     enrichedContext,
   };
 }
@@ -566,6 +571,17 @@ export async function act(
         topic: topic ?? undefined,
         context: enrichedContext,
         contextIsEnriched: true,
+        // m9-v10 HUMANE CONTINUITY FRAME: when the message continues the prior
+        // topic WITHOUT a trigger word (isContinuation), anchor the LLM to the
+        // active topic explicitly — otherwise short relative replies ("kalau
+        // untuk perseorangan?", "itu gimana caranya?") drift to a generic
+        // unrelated answer. Frame defers to a genuinely new question.
+        systemOverride: perception.isContinuation && topic
+          ? `Pemilik MENERUSKAN percakapan yang sedang berlangsung — pesan ini ringkas dan tidak menyebut ulang topiknya. ` +
+            `Topik aktif yang sedang dibicarakan: "${topic}". ` +
+            `Jawab sebagai LANJUTAN dari percakapan itu, langsung ke pokok, bahasa santai seperti biasa. ` +
+            `Namun jika pesan itu ternyata benar-benar menanyakan hal baru, jawab hal barunya dengan natural.`
+          : undefined,
         // Hard-lift comprehension for code questions: OpenRouter's free
         // reasoning model reads ambiguous wording far more accurately.
         deep: perception.intent.type === "code",

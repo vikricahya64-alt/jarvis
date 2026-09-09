@@ -216,7 +216,18 @@ export async function loadSessionFromKV(env: Env, owner: number): Promise<Sessio
 }
 
 /** Detect if the current message is a continuation of a prior topic
- *  or a fresh topic switch. Uses keyword overlap + recency decay. */
+ *  or a fresh topic switch. Uses keyword overlap + recency decay.
+ *
+ *  m9-v10 HUMANE CONTINUITY: humans keep a conversation going WITHOUT typing
+ *  trigger words ("lebih dalam", "lanjut"). Catching a continuation must not
+ *  depend on a fixed phrase list alone — a short relative message ("kalau di
+ *  rumah?", "yang mana paling cocok?", "itu gimana caranya?", "bisa buat
+ *  jualan juga?") that references the prior turn still continues the SAME
+ *  topic. So we ALSO mark as continuation any message that (a) carries an
+ *  anaphoric/relative token, (b) has no fresh-topic / topic-switch marker,
+ *  and (c) follows a substantive prior assistant turn. A brand-new factual
+ *  question with its own noun subject and no anaphor ("berapa harga saham
+ *  bca?") does NOT qualify, so it still starts a fresh topic. */
 export function detectTopicContinuity(
   currentText: string,
   priorContext: Array<{ role: string; content: string }>,
@@ -232,7 +243,14 @@ export function detectTopicContinuity(
     return { isContinuation: false, topic: null, confidence: 0 };
   }
 
-  const prior = (lastAssistant?.content ?? lastUser?.content ?? "").toLowerCase();
+  // No prior substance → nothing to continue (chitchat reply of <30 chars
+  // doesn't count as an anchor; rejecting here prevents false continuations).
+  const priorSubstance = (lastAssistant?.content ?? lastUser?.content ?? "");
+  if (priorSubstance.trim().length < 30) {
+    return { isContinuation: false, topic: null, confidence: 0 };
+  }
+
+  const prior = priorSubstance.toLowerCase();
   const current = currentText.toLowerCase();
 
   // Extract key nouns/concepts (simple: words >= 4 chars)
@@ -250,15 +268,28 @@ export function detectTopicContinuity(
   const followUpMarkers = /\b(lebih dalam|lanjut|terus|yang tadi|detail|expand|selanjutnya|kemudian|lalu|itupun|itu jug)\b/i;
   const isFollowUp = followUpMarkers.test(current);
 
-  // Topic switch markers
-  const switchMarkers = /\b(switch|ganti|beda|lain|sekarang|skrg|next|move on|coba|gimana kalau|how about|what about)\b/i;
-  const isSwitch = switchMarkers.test(current);
+  // Topic switch markers + FRESH-TOPIC markers (a phrase introducing its own
+  // subject — "cari X", "riset X", "apa itu X" — always starts fresh).
+  const switchMarkers = /\b(switch|ganti|beda|lain|sekarang|skrg|next|move on|gimana kalau|how about|what about)\b/i;
+  const freshMarkers = /\b(cari|riset|jelaskan?|jelasin|bandingkan|analisis|analisa|buatkan?|bikin|sebutkan|daftarkan?)\b/i;
+  const isSwitch = switchMarkers.test(current) || freshMarkers.test(current);
 
   if (isFollowUp) {
     return { isContinuation: true, topic: null, confidence: 0.9 };
   }
   if (isSwitch) {
     return { isContinuation: false, topic: null, confidence: 0.8 };
+  }
+
+  // ANAPHORIC / RELATIVE continuation — the humane "no trigger word" case.
+  // "kalau untuk…", "yang mana…", "itu gimana…", "…juga", "…lagi" all keep
+  // pointing at the prior turn; combined with a substantive prior reply they
+  // mean: keep talking about the same thing.
+  const relativeMarkers = /\b(itu|ini|yang\s+(?:tadi|itu|mana|paling)|kalau|kalo|gimana|bagaimana\s+kalau|berarti|abis\s+itu|habis\s+itu|setelah\s+itu|dari\s+tadi|tadi\s+itu|juga|lagi|dong|sama\s+itu|caranya|carany)\b/i;
+  const isRelative = relativeMarkers.test(current);
+
+  if (isRelative && current.length <= 90) {
+    return { isContinuation: true, topic: null, confidence: 0.75 };
   }
 
   if (overlapRatio >= 0.3) {
