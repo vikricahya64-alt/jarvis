@@ -119,6 +119,60 @@ export function adaptLength(
   return reply;
 }
 
+/** Research rails (owner principle: "prosa naratif + URL terverifikasi saja").
+ *  Deterministic post-processor that turns LLM research output into BODY prose:
+ *  - Unwraps every markdown link "[label](url)" → plain "url" text. Because the
+ *    caller only feeds this text AFTER sanitizeUncitedLinks, every surviving URL
+ *    is already verified against the real search hits; plain URLs render
+ *    clickably in Telegram and can never show mangled "](...)" brackets.
+ *  - Flattens bullet/header artifacts into sentences and strips the
+ *    report-style openers/closers ("Berikut rangkuman…", "Intinya, …").
+ *  - Never touches fenced code blocks (code answers keep their structure).
+ *  Pure, idempotent, never throws. */
+export function proseifyResearch(text: string): string {
+  if (!text) return text;
+  let t = text;
+
+  // 1. Quarantine fenced code so the link/bullet rules never touch code.
+  const fences: string[] = [];
+  t = t.replace(/```[\s\S]*?```/g, (m: string) => {
+    fences.push(m);
+    return `\uE010FENCE${fences.length - 1}\uE011`;
+  });
+
+  // 2. Markdown links → plain verified URL. Repair the observed production
+  //    leak shape first: a URL-like token followed by "](url)" (the opening
+  //    "[" was swallowed by sanitization), then unwrap well-formed links.
+  t = t.replace(/([^\s\[\]]+)\]\(\s*(https?:\/\/[^\s)]+)\)/g, (_m, _label: string, url: string) => url);
+  t = t.replace(/\[([^\]]*)\]\(\s*(https?:\/\/[^\s)]+)\)/g, (_m, _label: string, url: string) => url);
+
+  // 3. Header lines: strip bold/italic markers so a line like
+  //    "**Misi utama:** …" becomes "Misi utama: …" (reads as prose, not a
+  //    report heading). Supports both "**Label:**" and "**Label:**" colons.
+  t = t.replace(/^[*_]{1,2}\s*([^*_\n]{1,120}?)\s*(:?)\s*[*_]{1,2}\s*/gm, (_m, label: string, colon: string) => `${label}${colon} `);
+
+  // 4. Bullet markers → plain sentences.
+  t = t.replace(/^\s*(?:[-*•–]|\d+[.)])\s+/gm, "");
+
+  // 5. Report-style openers/closers (Indonesian + English, context-safe).
+  t = t
+    .replace(/^\s*Berikut\s+(?:adalah\s+)?(?:rangkuman|ringkasan|hasil|informasi)[^\n]*\n{1,3}/im, "")
+    .replace(/^\s*Intinya[^\n]*\n{1,2}/im, "")
+    .replace(/^\s*Semoga\s+[^\n]*\.\s*\n?/gim, "")
+    .replace(/\n*\s*Intinya,?[^\n]*\.?\s*$/im, "");
+  t = t.replace(/^\s*Singkatnya[^\n]*\n{1,2}/im, "");
+  t = t.replace(/\n*\s*Begitulah[^\n]*\.?\s*$/im, "");
+
+  // 6. Collapse whitespace & blank-line runs (max 2), drop any orphan square
+  //    brackets (nothing bracket-y survives in prose research), keep fences.
+  t = t
+    .replace(/[\[\]]/g, "")
+    .replace(/\n{3,}/g, "\n\n").replace(/[ \t]+/g, " ").replace(/ ?\n ?/g, "\n").trim();
+
+  // 7. Restore fenced code.
+  return t.replace(/\uE010FENCE(\d+)\uE011/g, (_m, i: string) => fences[Number(i)] ?? _m);
+}
+
 /** Clean up common LLM artifacts. */
 export function cleanLLMArtifacts(text: string): string {
   if (!text) return text;
@@ -153,18 +207,24 @@ export function cleanLLMArtifacts(text: string): string {
 }
 
 /** Format citations in research responses.
- *  Converts bare URLs and source mentions into Markdown links. */
-function formatCitations(text: string): string {
+ *  Converts bare URLs and source mentions into Markdown links (unless the
+ *  caller is the prose-rails research path, where URLs are already
+ *  whitelisted + plain and MUST NOT be re-wrapped into "[url](url)" — that
+ *  rewrite produced the leaked m9-v9 "itu.int](...)" failure). */
+function formatCitations(text: string, wrapLinks: boolean): string {
   // Convert "Source: <url>" or "Sumber: <url>" to Markdown links
-  text = text.replace(
-    /(?:Source|Sumber|Referensi|Link):\s*(https?:\/\/\S+)/gi,
-    "[$1]($1)",
-  );
+  if (wrapLinks) {
+    text = text.replace(
+      /(?:Source|Sumber|Referensi|Link):\s*(https?:\/\/\S+)/gi,
+      "[$1]($1)",
+    );
+  }
 
   // Convert inline URLs to clickable links
   text = text.replace(
     /\b(https?:\/\/[^\s,)]+)/g,
     (url) => {
+      if (!wrapLinks) return url;
       // Don't re-format already formatted links
       if (text.includes(`[${url}]`)) return url;
       return `[${url}](${url})`;
@@ -195,9 +255,10 @@ export function formatForTelegram(
   // Adapt length
   text = adaptLength(text, mode, opts.userText ?? "", opts.preferredLength);
 
-  // Format citations for research mode
+  // Format citations for research mode (prose rails: plain verified URLs,
+  // no "[url](url)" markdown re-wrapping).
   if (config.includeCitations) {
-    text = formatCitations(text);
+    text = formatCitations(text, mode !== "research");
   }
 
   // Emoji filtering for formal contexts
@@ -263,7 +324,12 @@ export function buildFinalReply(
     userText?: string;
   } = {},
 ): string {
+  // Owner principle (m9-v9): research output must be NARRATIVE PROSE with only
+  // verified URLs (already whitelisted by sanitizeUncitedLinks at the caller).
+  // proseifyResearch runs here so NO research reply can leak report styling or
+  // mangled "[label](url)" markdown, regardless of which caller produced it.
+  const prose = mode === "research" ? proseifyResearch(rawReply) : rawReply;
   const ack = generateAcknowledgment(mode, sentiment);
-  const formatted = formatForTelegram(rawReply, mode, opts);
+  const formatted = formatForTelegram(prose, mode, opts);
   return ack ? `${ack}\n\n${formatted}` : formatted;
 }

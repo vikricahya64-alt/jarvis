@@ -26,14 +26,20 @@ import {
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus, recordTaskCounters, recentContext, appendMemory } from "../lib/db";
-import { searchAndSynthesize, extractTopic, parseTranslate, translateText, isFollowUpQuery, resolveFollowUpAnchor, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, isPureContinuation, storeResearchAnchor, readResearchAnchor, detectConfusableTopic } from "../lib/ai";
-import { continueAnalysis } from "../lib/ai";
+import { extractTopic, parseTranslate, translateText, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, storeResearchAnchor } from "../lib/ai";
 import { getWeatherText } from "../lib/weather";
 
 import { normalizeInput, isEmptyInput } from "../lib/normalize";
 import { saveSessionToKV, loadSessionFromKV, touchSession, updateSession } from "../lib/context_manager";
-import { saveObservation } from "../lib/db";
-import { processMessage, type MessageContext } from "../lib/jarvis_core";
+import { processIntelligence } from "../lib/intelligence";
+
+/** Incoming message context passed to the brain (single source, no legacy
+ *  shim in between — the webhook talks to processIntelligence directly). */
+interface MessageContext {
+  owner: number;
+  text: string;
+  source: "telegram" | "api" | "webhook";
+}
 import { matchWebhookPreCapability } from "../lib/capability_registry";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "../lib/identity";
 import { covenantStatusText, signClause } from "../lib/covenant_core";
@@ -240,34 +246,22 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
 
-  // M8-v25: text-based typo confirmation. When EXECUTE detected a confusable
-  // topic word, the worker stored typo_wait:<owner> and asked a plain-text
-  // question ("Balas 1 … atau 2 …"). The owner's reply comes through the NORMAL
-  // message path (proven reliable) — no callback_query dependency. Any other
-  // message discards the wait state and is processed as a fresh query.
-  const pendingTypo = await env.CONFIG_KV.get(`typo_wait:${from}`, "json").catch<unknown>(() => null) as
-    null | { text?: string; correctedText?: string; original?: string; corrected?: string; ts?: number };
-  if (pendingTypo && pendingTypo.original && pendingTypo.correctedText) {
+  // RELEVANCE-GATE RESUME (single brain-owned gate). When the brain parked a
+  // relevance question (relevance_wait:<owner>), the owner's plain-text
+  // confirmation ("1"/"2"/"ya"/"tidak") MUST resume the parked intent through
+  // the brain — never through a second webhook-owned research path (there is
+  // none anymore). A non-confirmation reply is processed as a fresh query; the
+  // brain discards the stale park itself (fail-closed, TTL-bounded).
+  const pendingRel = await env.CONFIG_KV.get(`relevance_wait:${from}`, "json").catch<unknown>(() => null) as
+    null | Record<string, unknown>;
+  if (pendingRel) {
     const reply = text.trim().toLowerCase();
-    const wantsCorrected =
-      reply === "1" || reply === "ya" || reply.startsWith("lembaga") || reply.startsWith("institusi");
-    const wantsOriginal =
-      reply === "2" || reply === "tidak" || reply === "bukan" || reply.startsWith("tembaga");
-    if (wantsCorrected || wantsOriginal) {
-      await env.CONFIG_KV.delete(`typo_wait:${from}`).catch(() => {});
-      const chosenText = (wantsCorrected ? pendingTypo.correctedText : pendingTypo.text) ?? "";
-      const label = wantsCorrected ? pendingTypo.corrected : pendingTypo.original;
-      await fire(sendMessage(env, from,
-        `✅ Topik dikunci: *${(label ?? chosenText).slice(0, 80)}*. Menyusun riset...`));
-      console.log(`[typo_wait] resolved owner=${from} choice=${wantsCorrected ? "corrected" : "original"}`);
-      await runResearch(env, from, chosenText).catch(async (e) => {
-        console.error("[typo_wait] riset gagal", (e as Error).message);
-        await fire(sendMessage(env, from, "Maaf, riset sedang bermasalah — coba lagi sebentar."));
-      });
+    if (reply === "1" || reply === "2" || reply === "ya" || reply === "oke"
+      || reply === "ok" || reply === "tidak" || reply === "bukan") {
+      console.log(`[relevance_resume] owner=${from} reply=${reply}`);
+      await runBrain(env, from, text);
       return new Response("ok", { status: 200 });
     }
-    // Bukan jawaban konfirmasi → perlakukan sebagai query baru.
-    await env.CONFIG_KV.delete(`typo_wait:${from}`).catch(() => {});
   }
 
   // Best-effort activity touch — a transient D1 error must NEVER silently drop
@@ -846,27 +840,25 @@ async function resolveConsent(env: Env, owner: number, corr: string, decision: s
   return true;
 }
 
-/** Shared EXECUTE research pipeline: DDG search + Groq synthesis, explicit
- *  memory + session persistence, and delivery. Single writer for this legacy
- *  path; used by the normal topic query AND the typo-confirmation resolution.
- *  Fail-closed: any pipeline exception still yields a real message. */
-async function runResearch(env: Env, owner: number, text: string, forcedTopic?: string): Promise<void> {
-  const topic = forcedTopic ?? (extractTopic(text) ?? text.trim().slice(0, 120));
+/** Single brain-owned text pipeline: research, follow-up, chat, code and
+ *  design ALL flow through processIntelligence (the brain), so the relevance
+ *  gate, fail-closed URL strip and prose rails can never be bypassed by a
+ *  parallel webhook research path. Returns true when a real reply was
+ *  delivered. */
+async function runBrain(env: Env, owner: number, text: string): Promise<boolean> {
   try {
-    const r = await searchAndSynthesize(env, owner, text, topic);
-    await appendMemory(env, owner, "user", text, topic).catch(() => {});
-    await appendMemory(env, owner, "assistant", r.reply, topic).catch(() => {});
-    // Observasi: user tertarik pada topik ini (untuk personalisasi di masa depan)
-    saveObservation(env, owner, `User menanyakan tentang: ${topic}`, "interest").catch(() => {});
-    updateSession(owner, text, r.reply, topic, "research");
-    await recordTaskCounters(env, "standard", owner);
-    await storeResearchAnchor(env, owner, topic, r.reply).catch(() => {});
-    await deliverSmartReply(env, owner, r.reply);
+    const res = await processIntelligence(env, owner, text);
+    if (res.text && res.text.trim().length > 0) {
+      await deliverSmartReply(env, owner, res.text);
+      return true;
+    }
   } catch (e) {
-    console.error("[webhook] search path failed", (e as Error).message);
+    console.error("[webhook] brain path failed", (e as Error).message);
     await fire(sendMessage(env, owner,
-      `Maaf, pencarian tentang *${topic.slice(0, 60)}* sedang bermasalah — coba lagi sebentar.`));
+      `Maaf, pemrosesan ini sedang bermasalah — coba lagi sebentar.`));
+    return false;
   }
+  return false;
 }
 
 /** Simplified action path for a normal (non-diagnostic) text command. */
@@ -1002,118 +994,12 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
         updateSession(owner, text, prompt, null, "command");
         break;
       }
-      const topic = extractTopic(text);
-      if (topic) {
-        // M8-v27: Typo confirmation via the plain-text message path. When topic
-        // contains a word that is a one-character mutation of a common
-        // institution/research word, ask the user to confirm ("1"/"2" reply)
-        // BEFORE burning LLM budget on a wrong search — UNLESS the surrounding
-        // context already supports the original-as-typed reading ("harga tembaga
-        // hari ini" → copper, bias "original" → research it as-is, no prompt;
-        // per HFON literature, ask only when context is ambiguous or points to
-        // the corrected reading). NO inline buttons: this production webhook
-        // demonstrably drops callback_query updates, so the confirmation and the
-        // owner's answer both travel through the reliable message channel (see
-        // the typo_wait interceptor above).
-        const confusable = detectConfusableTopic(topic);
-        if (confusable && confusable.bias !== "original") {
-          const correctedText = text.replace(
-            new RegExp(`\\b${confusable.original}\\b`, "i"),
-            confusable.corrected,
-          );
-          const correctedTopic = topic.replace(
-            new RegExp(`\\b${confusable.original}\\b`, "i"),
-            confusable.corrected,
-          );
-          await env.CONFIG_KV.put(
-            `typo_wait:${owner}`,
-            JSON.stringify({ text, correctedText, original: confusable.original, corrected: confusable.corrected, ts: Date.now() }),
-            { expirationTtl: 600 },
-          ).catch(() => {/* degrade: no confirm, run as-is */});
-          const biasHint = confusable.bias === "corrected"
-            ? `\nKonteks kalimatmu mengarah ke *${confusable.corrected}*.`
-            : "";
-          await fire(sendMessage(env, owner,
-            `🔍 Topik terdeteksi: *${topic.slice(0, 80)}*\n\n` +
-            `Apakah yang dimaksud: *${correctedTopic.slice(0, 80)}*?\n` +
-            `Balas \`1\` untuk *${confusable.corrected}* (koreksi), atau \`2\` untuk tetap *${confusable.original}*.${biasHint}`));
-          break;
-        }
-        // Friendly info/query EXECUTE → real search + synthesis. This webhook
-        // path bypasses the brain's reflect stage, so user+assistant turns are
-        // persisted EXPLICITLY here (single writer for this legacy path) and the
-        // session is updated explicitly too (mood/turn/activeTopic parity).
-        // Fail-closed: any exception in the LLM/search pipeline still yields a
-        // real message — a silent drop is never acceptable for the owner.
-        await runResearch(env, owner, text, topic);
-        break;
-      }
-      // Level 15 FOLLOW-UP: an explicit follow-up request that carries no fresh
-      // topic marker (e.g. "lebih dalam", "yang tadi", "terus, kan?") resolves
-      // against the most recent assistant analysis and deepens THAT answer —
-      // instead of wrongly falling to "Ok.". Fail-closed: no prior analysis or
-      // not a follow-up → fall through to the generic reply.
-      if (isFollowUpQuery(text)) {
-        const ctx = await recentContext(env, owner, 8).catch(() => []);
-        const anchor = resolveFollowUpAnchor(ctx);
-        // Continuation must extend the LAST answer WE actually gave the owner.
-        // Prefer the persistent KV anchor (written right after each substantive
-        // reply) — immune to conversation_log ordering/pollution (M7 "kota
-        // Malang" cross-latch). Fall back to the context heuristic.
-        const kvAnchor = (await readResearchAnchor(env, owner).catch(() => null)) ?? undefined;
-        const prior = kvAnchor?.prior ?? anchor?.prior;
-        const aTopic = kvAnchor?.topic ?? anchor?.topic;
-        // Anti-ramble fail-closed: ANY follow-up (pure or deepen) with NO
-        // recoverable anchor must never bounce into the generic LLM (which
-        // hallucinates an off-topic lecture). Give a short, honest pointer.
-        if (!prior || !aTopic) {
-          await fire(sendMessage(env, owner,
-            "Baik. Pembahasan sebelumnya belum tersimpan di ingatanku — apakah sudah cukup lama? Bisa sebutkan ulang topiknya (contoh: `cari bisnis kerajinan`), nanti lanjut kubuatkan bagian berikutnya."));
-          break;
-        }
-        if (prior && aTopic) {
-          // Fail-closed: ANY exception in the follow-up deepen path must still
-          // deliver a real reply (inherit the anchor as best-effort).
-          try {
-            // PURE continuation ("Lanjutkan") must EXTEND the last reply, never
-            // re-search a sentence fragment.
-            if (isPureContinuation(text)) {
-              const cont = await continueAnalysis(env, prior, text);
-              if (cont) {
-                await appendMemory(env, owner, "user", text, aTopic).catch(() => {});
-                await appendMemory(env, owner, "assistant", cont, aTopic).catch(() => {});
-                if (cont.length > 120) void reflectOnTurn(env, text, cont, []).catch(() => {});
-                updateSession(owner, text, cont, aTopic, "research");
-                await recordTaskCounters(env, "standard", owner);
-                await storeResearchAnchor(env, owner, aTopic, cont).catch(() => {});
-                await fire(sendMessage(env, owner, cont));
-                break;
-              }
-              // LLM down (M2): don't burn budget re-searching the SAME anchored
-              // topic (would duplicate the previous answer). Echo the last
-              // analysis honestly instead — a reply still flows.
-              updateSession(owner, text, prior.slice(0, 600), aTopic, "research");
-              await fire(sendMessage(env, owner,
-                "⏳ Bagian lanjutan belum berhasil kususun (layanan model sedang sibuk). Ini analisis terakhir yang sudah kubuat:\n\n" +
-                prior.slice(0, 1200)));
-              break;
-            }
-            // Single-source anchor: the SAME `prior` used above is handed to
-            // searchAndSynthesize so it does not re-derive a different anchor.
-            const r = await searchAndSynthesize(env, owner, text, aTopic, { followupPrior: prior });
-            await appendMemory(env, owner, "user", text, aTopic).catch(() => {});
-            await appendMemory(env, owner, "assistant", r.reply, aTopic).catch(() => {});
-            updateSession(owner, text, r.reply, aTopic, "research");
-            await recordTaskCounters(env, "standard", owner);
-            await storeResearchAnchor(env, owner, aTopic, r.reply).catch(() => {});
-            await fire(sendMessage(env, owner, r.reply));
-          } catch (e) {
-            console.error("[webhook] follow-up path failed", (e as Error).message);
-            await fire(sendMessage(env, owner, prior.slice(0, 1200)));
-          }
-          break;
-        }
-      }
+      // Single spine: EVERY remaining free-text EXECUTE (research topics,
+      // follow-ups, chat, code, design) flows through the brain
+      // (processIntelligence). There is deliberately NO webhook-owned research
+      // shortcut anymore — the brain owns the relevance gate, memory,
+      // fail-closed URL strip and narrative prose rails, so a topic like
+      // "riset itu" gets a confirmation FIRST instead of a guessed search.
       await fire(sendMessage(env, owner, await applyDefault(env, owner, res, text)));
       break;
     case "CLARIFY":
@@ -1197,10 +1083,10 @@ async function applyDefault(
   // the brain's own classifier. Genuine emergency slashes (/stop, /kill,
   // /override) are intercepted earlier in handleUpdate and never reach here.
   const priority = res.decision.priority;
-  if (rawText.length > 3) {
+  if (rawText.trim().length > 0) {
     try {
       const ctx: MessageContext = { owner, text: rawText, source: "telegram" };
-      const jarvisRes = await processMessage(env, ctx);
+      const jarvisRes = await processIntelligence(env, ctx.owner, ctx.text);
       if (jarvisRes.text && jarvisRes.text.length > 5) {
         // Anchor ANY substantive LLM reply too (not only search results) so a
         // later "Lanjutkan" can always continue it deterministically.
@@ -1223,7 +1109,7 @@ async function applyDefault(
 // L21 — Media understanding (voice/image).
 // Photo notes are described by Groq vision; voice notes are transcribed by
 // Workers AI Whisper. Both run through the normal conversation pipeline
-// (processMessage) so the reply is delivered in JARVIS's own voice with full
+// (processIntelligence) so the reply is delivered in JARVIS's own voice with full
 // memory/context — never a raw transcription dump. Fail-closed: any failure
 // returns null and the caller falls through to the nudge, never errors.
 // ---------------------------------------------------------------------
@@ -1518,7 +1404,7 @@ async function understandMedia(env: Env, owner: number, msg: TelegramMessage): P
     if (!transcript) return null;
     if (mediaIsTaskIntent(transcript)) return delegateNow(env, owner, transcript);
     const ctx: MessageContext = { owner, text: transcript, source: "telegram" };
-    const gl = await processMessage(env, ctx);
+    const gl = await processIntelligence(env, ctx.owner, ctx.text);
     return gl.text && gl.text.length > 5 ? gl.text : null;
   }
 
@@ -1533,7 +1419,7 @@ async function understandMedia(env: Env, owner: number, msg: TelegramMessage): P
     if ((!dl || !("bytes" in dl)) && caption) {
       if (mediaIsTaskIntent(caption)) return delegateNow(env, owner, caption);
       const ctx0: MessageContext = { owner, text: caption, source: "telegram" };
-      const g0 = await processMessage(env, ctx0);
+      const g0 = await processIntelligence(env, ctx0.owner, ctx0.text);
       return g0.text && g0.text.length > 5 ? g0.text : null;
     }
     if (!dl || !("bytes" in dl)) return null;
@@ -1556,7 +1442,7 @@ async function understandMedia(env: Env, owner: number, msg: TelegramMessage): P
     // Vision unavailable: at least let the plain LLM hear the caption.
     if (caption) {
       const ctx: MessageContext = { owner, text: caption, source: "telegram" };
-      const gl = await processMessage(env, ctx);
+      const gl = await processIntelligence(env, ctx.owner, ctx.text);
       return gl.text && gl.text.length > 5 ? gl.text : null;
     }
     return null;

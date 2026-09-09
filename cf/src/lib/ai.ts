@@ -1499,6 +1499,20 @@ export async function searchAndSynthesize(
       content: `Daftar sumber sah yang boleh disitasi:\n${formatSourceList(hits, 5)}`,
     });
   }
+  // m9-v9 PROSE RAIL (owner principle): research answers are NARRATIVE —
+  // flowing paragraphs, NO bullets, NO bold headers, NO "Berikut rangkuman…"
+  // opener, NO "Intinya, …" template closer, NO "[label](url)" markdown links.
+  // Cite a URL as PLAIN TEXT and only from the source list above. This mirrors
+  // the writer subagent rails so single-pass research can never leak report
+  // styling either.
+  context.push({
+    role: "system",
+    content:
+      `Jawablah dalam narasi yang MENGALIR seperti tulisan manusia: ` +
+      `tanpa bullet/poin, tanpa judul berformat (bold+kolon), tanpa baris pembuka "Berikut rangkuman", ` +
+      `tanpa penutup templat ("Intinya…" atau "Semoga membantu"). ` +
+      `Tulis URL cukup sebagai teks biasa (jangan pakai [label](url)), dan hanya URL dari daftar sumber sah.`,
+  });
   // M8-v27 INSTITUTIONAL FRAME — attributes every claim to the institution whose
   // site produced the evidence (deterministic, no invented citations). Fail-
   // closed: empty institutional pool → the honest "belum ada data lembaga
