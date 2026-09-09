@@ -10,7 +10,14 @@
 // - Han & Baldwin 2013: Lexical Normalization for Social Media
 // - ViLexNorm EACL '24: Vietnamese Lexical Normalization
 // - MultiLexNorm++ 2026: Detect-then-normalize untuk OOV tokens
-// - BPE/Damerau-Levenshtein: spelling correction untuk typo umum
+//
+// Filosofi m9-v8: TIDAK memakai kamus besar + korektor fuzzy (Damerau-
+// Levenshtein) yang menulis-ulang kata valid — itu meracuni makna ("kode"→
+// "mode", "tanpa"→"tanya", "hono"→"sono") dan butuh perawatan terus-menerus.
+// Yang dilakukan: ekspansi slang SHORTHAND eksak (gak→tidak) agar trigger
+// intent stabil, kolaps huruf berulang (halooo→halo), leetspeak (h3llo→hello),
+// dan membersihkan whitespace/prefix. Pemahaman bahasa asli (slang, typo,
+// istilah teknis, campur kode) diserahkan ke otak LLM/search.
 //
 // Zero dependency, deterministic, fail-open. Normalisasi TIDAK PERNAH
 // mengubah ke makna destruktif/finansial — constitutional guard tetap
@@ -114,215 +121,15 @@ const SLANG: Record<string, string> = {
 /** Kata-kata Indonesia umum untuk referensi spelling correction.
  *  Digunakan oleh Damerau-Levenshtein untuk menemukan kandidat koreksi.
  *  Juga berfungsi sebagai whitelist: kata yang ada di sini TIDAK dikoreksi. */
-const INDONESIAN_WORDS = new Set([
-  "apa", "siapa", "dimana", "kapan", "kenapa", "bagaimana", "berapa",
-  "ini", "itu", "dan", "atau", "tidak", "bisa", "ada", "adalah",
-  "akan", "sudah", "belum", "sedang", "mau", "perlu", "harus",
-  // Kata FUNGSI formal — WAJIB dipertahankan verbatim (jangan pernah dikoreksi
-  // ejaan). Tanpa daftar ini, korektor edit-distance-1 meracuni makna:
-  // tanpa→tanya, minim→minum, dengan→dengar, bukan→buka, dari→cari,
-  // tapi→topi, untuk→(loss), sampai merusak intensi/peringatan (bug live:
-  // "riset ... tanpa skill minim modal" jadi "... tanya skill minum modal").
-  "tanpa", "dengan", "untuk", "bukan", "tetapi", "tapi", "dari", "pada",
-  "kepada", "bagi", "demi", "antara", "jadi", "maka", "lalu", "kalau",
-  "ketika", "saat", "agar", "supaya", "yakni", "yaitu", "dapat", "masih",
-  "serta", "setelah", "sebelum", "terhadap", "menurut", "seperti", "sebagai",
-  "tentang", "adapun", "sebab", "karena", "jika", "meski", "walaupun", "biar",
-  "dalam", "atas", "oleh", "melalui", "sehingga", "sampai", "hanya", "saja",
-  "juga", "apakah", "memang", "sebenarnya", "merupakan", "serta",
-  // kuantitas/minimizer yang sering tertukar dengan kata kerja
-  "minim", "minimal", "besar", "kecil", "sedikit", "banyak", "semua",
-  "cukup", "singkat", "panjang", "berat", "ringan", "murah", "mahal",
-  // kata frekuensi-tinggi lain yang rawan gagal koreksi (yang→uang, pasar→kasar)
-  "yang", "uang", "pasar", "nama", "waktu", "hari", "jam", "orang",
-  "tahun", "jumlah", "harga", "tempat", "kota", "negara", "daerah",
-  "wilayah", "bisnis", "usaha", "modal", "skill", "keuntungan", "omset",
-  "tolong", "bantu", "cari", "info", "tentang", "analisis", "review",
-  "bandingkan", "ringkas", "laporan", "terjemahkan", "translate",
-  "halo", "hai", "pagi", "siang", "sore", "malam",
-  "terima kasih", "makasih", "oke", "baik", "setuju",
-  "lakukan", "jalankan", "hapus", "tambah", "atur", "buka", "tutup",
-  "kirim", "lihat", "status", "bantuan",
-  "ceritakan", "jelaskan", "tampilkan", "download",
-  "sensor", "suhu", "cuaca", "berita", "olahraga", "teknologi",
-  "kesehatan", "pendidikan", "ekonomi", "politik", "hiburan",
-  "musik", "film", "buku", "makanan", "minuman",
-  "jalan", "rumah", "kantor", "sekolah", "kampus",
-  "komputer", "handphone", "internet", "listrik", "air",
-  "uang", "harga", "belanja", "bayar", "transfer",
-  "waktu", "tanggal", "jam", "hari", "minggu", "bulan", "tahun",
-  "besok", "kemarin", "lusa", "nanti", "sekarang",
-  "cerita", "pengalaman", "pendapat", "saran", "masukan",
-  "contoh", "cara", "tips", "trik", "panduan",
-  "makna", "arti", "definisi", "penjelasan",
-  "perbedaan", "persamaan", "kelebihan", "kekurangan",
-  "rekomendasi", "opini",
-  // Kata colloquial umum yang sering dipakai tapi tidak ada di kamus formal
-  "bikin", "buat", "ngomong", " bilang", "nanya", "tanya", "denger", "dengar",
-  "liat", "lihat", "makan", "minum", "tidur", "bangun", "jalan", "lari",
-  "main", "kerja", "belajar", "baca", "tulis", "hitung", "jual", "beli",
-  "kirim", "terima", "ambil", "taruh", "simpan", "hapus", "buka", "tutup",
-  "nyalakan", "matikan", "hidupkan", "mati", "rusak", "baik", "siap",
-  "nunggu", "tunggu", "lanjut", "berhenti", "mulai", "selesai",
-  "masuk", "keluar", "naik", "turun", "dekat", "jauh",
-  "besar", "kecil", "panjang", "pendek", "lebar", "sempit",
-  "tinggi", "rendah", "berat", "ringan", "kuat", "lemah",
-  "cepat", "lambat", "baru", "lama", "muda", "tua",
-  "hangat", "dingin", "panas", "sejuk", "kering", "basah",
-  "bersih", "kotor", "hitam", "putih", "merah", "biru", "hijau", "kuning",
-  "manis", "pahit", "asin", "asam", "pedas", "gurih",
-  "keras", "lembut", "tajam", "tumpul",
-  "ramai", "sepi", "ramah", "sopan", "kasar",
-  "muda", "tua", "kaya", "miskin", "sehat", "sakit",
-  // Kata benda/verba umum yang sering salah dikoreksi
-  "toko", "kopi", "teh", "susu", "nasi", "ayam", "ikan", "sayur",
-  "buah", "roti", "kue", "mi", "mie", "telur", "daging",
-  "meja", "kursi", "kasur", "bantal", "selimut", "guling",
-  "baju", "celana", "sepatu", "topi", "kaos", "jaket",
-  "buku", "pensil", "pulpen", "kertas", "map", "tas",
-  "hp", "laptop", "tv", "ac", "kipas", "lampu",
-  "kamar", "dapur", "ruang", "taman", "garasi",
-  "kota", "desa", "jalan", "gang", "lorong",
-  "saya", "kamu", "dia", "kami", "mereka", "orang",
-  "anak", "orang tua", "ayah", "ibu", "saudara", "teman",
-  "giliran", "menit", "jam", "detik", "waktu",
-  "pesan", "chat", "telepon", "panggilan", "video",
-  "foto", "gambar", "video", "file", "dokumen",
-  "nama", "alamat", "nomor", "email", "website",
-  "uang", "harga", "biaya", "tarif", "pajak",
-  "cuaca", "hujan", "panas", "dingin", "mendung",
-  "cerah", "berawan", "banjir", "gempa",
-  "jalan", "macet", "kemacetan", "lalu lintas",
-  "tugas", "pekerjaan", "proyek", "deadline",
-  "rapat", "meeting", "presentasi", "laporan",
-  // Kata yang sering salah dikoreksi karena mirip dengan kata lain
-  "topik", "topi", "ikan", "bikin", "toko", "kopi",
-  "bulan", "bulan", "malam", "makan", "minum",
-  "pesan", "pijat", "tidur", "jarum", "kursi", "tas",
-  "kaki", "tangan", "kepala", "mata", "telinga", "hidung", "mulut",
-  "hati", "otak", "tulang", "darah", "keringat",
-  "sayur", "buah", "nasi", "roti", "kue", "mie", "mi",
-  "telur", "daging", "ayam", "sapi", "kambing", "babi",
-  "gula", "garam", "merica", "minyak", "air",
-  "meja", "lemari", "rak", "tempat", "wadah",
-  "kain", "benang", "jarum", "gunting", "pisau",
-  "api", "asap", "abu", "debu", "tanah", "batu",
-  "kayu", "besi", "emas", "perak", "tembaga",
-  "kertas", "karton", "kardus", "plastik", "kaca",
-  "rogram", "program", "aplikasi", "website", "sistem",
-  "topik", "bahasan", "pembahasan", "materi", "konten",
-  // Istilah umum English/Tech yang sering dipakai
-  "todo", "status", "update", "refresh", "submit", "cancel", "confirm",
-  "save", "load", "send", "recv", "ok", "yes", "no",
-  "list", "item", "data", "file", "type", "mode", "test", "run",
-  "set", "get", "put", "post", "delete", "patch",
-  "key", "val", "msg", "txt", "num", "id", "url", "link",
-  "app", "web", "bot", "api", "db", "sql", "css", "js",
-  "info", "warn", "err", "log", "debug", "trace",
-  "start", "stop", "end", "exit", "quit", "close",
-  "open", "show", "hide", "find", "sort", "filter",
-  "add", "del", "mod", "rem", "ins", "upd",
-  "tp", "ts", "fs", "vs",
-  "top", "hot", "new", "old", "big", "min", "max", "avg", "sum",
-  "red", "org", "grn", "blu", "wht", "blk",
-  "mon", "tue", "wed", "thu", "fri", "sat", "sun",
-  "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
-  // English common words (for international support)
-  "hello", "hi", "hey", "howdy", "greetings",
-  "please", "thank", "thanks", "sorry", "excuse",
-  "yes", "no", "maybe", "sure", "okay", "right",
-  "what", "who", "where", "when", "why", "how",
-  "this", "that", "these", "those",
-  "here", "there", "where", "everywhere",
-  "good", "bad", "great", "awesome", "terrible",
-  "help", "need", "want", "like", "love", "hate",
-  "can", "could", "would", "should", "will", "shall",
-  "is", "are", "was", "were", "be", "been", "being",
-  "have", "has", "had", "do", "does", "did",
-  "go", "come", "take", "give", "make", "do",
-  "see", "look", "watch", "read", "write",
-  "think", "know", "believe", "understand",
-  "tell", "say", "speak", "talk", "listen", "hear",
-  "work", "play", "run", "walk", "stop",
-  "time", "day", "week", "month", "year",
-  "today", "tomorrow", "yesterday",
-  "morning", "afternoon", "evening", "night",
-  "now", "then", "always", "never", "sometimes",
-  "very", "really", "just", "only", "also", "too",
-  "much", "many", "some", "any", "all", "none",
-  "one", "two", "three", "four", "five",
-  "first", "last", "next", "previous",
-  "left", "right", "up", "down", "in", "out",
-  "about", "with", "from", "to", "for", "by",
-  "and", "but", "or", "not", "if", "then", "else",
-  "because", "since", "although", "though",
-  "while", "during", "before", "after",
-  "more", "less", "most", "least", "better", "best", "worse", "worst",
-  "the", "a", "an", "some", "any", "no", "every",
-  "my", "your", "his", "her", "its", "our", "their",
-  "mine", "yours", "his", "hers", "ours", "theirs",
-  "this", "that", "these", "those",
-  "here", "there", "where", "everywhere",
-  "now", "then", "always", "never", "sometimes",
-  // Kata yang sering salah dikoreksi karena edit distance 1 dari kata valid
-  "lupa", "ingat", "pikir", "mengerti", "paham",
-  "cerita", "jelas", "terang", "gelap",
-  "sini", "sana", "sono", "sini",
-  "ini", "itu", "situ", "sini",
-]);
-
-/** Solusi Damerau-Levenshtein edit distance.
- *  Digunakan untuk spelling correction pada typo umum. */
-function damerauLevenshtein(a: string, b: string): number {
-  const la = a.length;
-  const lb = b.length;
-  const d: number[][] = Array.from({ length: la + 1 }, () => Array(lb + 1).fill(0));
-
-  for (let i = 0; i <= la; i++) d[i][0] = i;
-  for (let j = 0; j <= lb; j++) d[0][j] = j;
-
-  for (let i = 1; i <= la; i++) {
-    for (let j = 1; j <= lb; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      d[i][j] = Math.min(
-        d[i - 1][j] + 1,      // deletion
-        d[i][j - 1] + 1,      // insertion
-        d[i - 1][j - 1] + cost, // substitution
-      );
-      // Transposition (Damerau extension)
-      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
-        d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + cost);
-      }
-    }
-  }
-  return d[la][lb];
-}
-
-/** Cari kandidat koreksi spelling terbaik dari kamus Indonesia.
- *  Hanya mengoreksi jika:
- *  - Edit distance <= 2 (typo ringan)
- *  - Panjang kata asli >= 4 (jangan koreksi kata pendek)
- *  - Ada minimal 1 kandidat yang lebih baik dari input
- *
- *  Strategi: Damerau-Levenshtein + frequency ranking via common word list. */
-function findBestSpellingCandidate(word: string): string | null {
-  if (word.length < 4) return null; // terlalu pendek untuk dikoreksi
-  if (INDONESIAN_WORDS.has(word)) return null; // sudah benar
-
-  let bestCandidate: string | null = null;
-  let bestDistance = Infinity;
-
-  for (const candidate of INDONESIAN_WORDS) {
-    if (Math.abs(candidate.length - word.length) > 1) continue; // skip jika panjangnya terlalu berbeda
-    const dist = damerauLevenshtein(word, candidate);
-    if (dist < bestDistance && dist <= 1) { // threshold ketat: hanya 1 edit
-      bestDistance = dist;
-      bestCandidate = candidate;
-    }
-  }
-
-  return bestCandidate;
-}
+// ====================================================================
+// Filosofi normalisasi (m9-v8): KAMUS TIDAK PERNAH MENULIS-ULANG kata
+// yang sah. Slang shorthand eksak boleh diekspansi (gak->tidak) agar
+// trigger intent stabil, tapi TIDAK ada koreksi fuzzy (Damerau-Levenshtein,
+// INDONESIAN_WORDS) yang mengubah kata valid menjadi kata lain — bug live:
+// "kode" -> "mode", "tanpa" -> "tanya", "hono" -> "sono". Pemahaman
+// bahasa asli (slang, typo, istilah teknis, campur kode) diserahkan ke otak
+// LLM/search — lebih efisien dan tidak butuh perawatan kamus terus-menerus.
+//====================================================================
 
 /** Detect-then-normalize: pre-detection pass yang menandai token yang perlu
  *  normalisasi. Hanya mengekspansi token PENDEK (<=5 chars) yang punya
@@ -339,12 +146,9 @@ function detectAndNormalize(t: string): string {
   const longSlang = SLANG[cleaned];
   if (longSlang) return longSlang;
 
-  // Prioritas 2: spelling correction untuk kata non-slang >= 4 chars
-  if (cleaned.length >= 4 && !/^[\/\d]/.test(cleaned)) {
-    const correction = findBestSpellingCandidate(cleaned);
-    if (correction && correction !== cleaned) return correction;
-  }
-
+  // TIDAK ADA koreksi ejaan fuzzy di sini (lihat catatan filosofi di atas):
+  // kata yang sah, slang, typo ringan, dan istilah teknis dibiarkan apa adanya
+  // — otak LLM/search yang memahami artinya, bukan kamus.
   return cleaned;
 }
 

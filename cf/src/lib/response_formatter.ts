@@ -52,6 +52,15 @@ const FORMAT_PRESETS: Record<string, FormatConfig> = {
     maxWordsChat: 900,
     includeCitations: true,
   },
+  code: {
+    useEmoji: true,
+    maxParagraphs: 12,
+    useBold: false,
+    useBullets: false,
+    lineBreaks: "double",
+    maxWordsChat: 900,
+    includeCitations: false,
+  },
   command: {
     useEmoji: true,
     maxParagraphs: 1,

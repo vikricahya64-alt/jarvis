@@ -111,6 +111,13 @@ export function stripTelegramMarkdown(text: string): string {
   });
   // Protect digit-asterisk-digit (e.g. "10*5") from being read as emphasis.
   t = t.replace(PROTECT_RE, "\u{e002}");
+  // Quarantine fenced code blocks (```lang\n...\n```) so every normalization
+  // rule below leaves them untouched — code must survive verbatim.
+  const fences: string[] = [];
+  t = t.replace(/```\n?([\s\S]*?)```/g, (m) => {
+    fences.push(m);
+    return `\u{e003}${fences.length - 1}\u{e004}`;
+  });
 
   // Markdown links → "title (url)" (parenthesized plain text).
   t = t.replace(/\[([^[\]\n]{1,200})]\(([^)\n]{0,300})\)/g, (_a, title, url) => `${title} (${url})`);
@@ -126,16 +133,19 @@ export function stripTelegramMarkdown(text: string): string {
   t = t.replace(/`([^`\n]+?)`/g, "$1");
   // Any marker that didn't pair up is formatting noise → drop it.
   t = t.replace(/[*_`[\]]+/g, "");
-  // Restore protected multiplication markers.
-  t = t.replace(/[\uE002]/g, "*");
   // Heading hashes ("# Judul", "### Judul") are decorations → drop them.
   t = t.replace(/^[ \t]*#{1,6}[ \t]+/gm, "");
-  // Restore quarantined URLs.
-  t = t.replace(URL_PLACEHOLDER_RE, (m) => {
+  const cleaned = t.replace(/ {2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  // Restore fenced code blocks untouched, verbatim (AFTER whitespace collapse —
+  // code indentation must survive).
+  const withFences = cleaned.replace(/\u{e003}(\d+)\u{e004}/gu, (_m, i) => fences[Number(i)] ?? "");
+  // Restore protected multiplication markers (may live inside fences).
+  const withMult = withFences.replace(/[\uE002]/g, "*");
+  // Restore quarantined URLs (LAST — some may live inside restored fences).
+  return withMult.replace(URL_PLACEHOLDER_RE, (m) => {
     const idx = Number(m.replace(/[\uE000\uE001]/g, ""));
     return urls[idx] ?? m;
   });
-  return t.replace(/ {2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** Hard-truncate caption text (photo/voice captions aren't chunkable). */

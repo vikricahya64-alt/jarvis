@@ -69,7 +69,7 @@ export interface Perception {
 
 /** Intent classification result. */
 export interface IntentResult {
-  type: "question" | "command" | "search" | "chat" | "emergency" | "translation" | "design" | "self_referential" | "understand" | "prompt_writer" | "context7";
+  type: "question" | "command" | "search" | "chat" | "emergency" | "translation" | "design" | "self_referential" | "understand" | "prompt_writer" | "context7" | "code";
   urgency: "low" | "medium" | "high";
   formality: "casual" | "neutral" | "formal";
   confidence: number;
@@ -263,6 +263,12 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
     return { type: "search", urgency: "medium", formality: "neutral", confidence: 0.8, entities: { topic: text.slice(0, 100) } };
   }
 
+  // Programming language / code task (conservative: code vocabulary + an action
+  // verb, or an explicit ``` block — "aku suka coding" stays casual chat).
+  if (/```/.test(low) || (/\b(?:kode|code|coding|pemrograman|programming|script|skrip|syntax|sintaks|algoritm[ae]|debug)\b/i.test(low) && /\b(?:tulis|buat|bikin|jelaskan|perbaiki|debug|analisis|analisa|baca|review|cara|bagaimana|apa|kenapa|mengapa)\b/i.test(low))) {
+    return { type: "code", urgency: "low", formality: "neutral", confidence: 0.8, entities: {} };
+  }
+
   // Command
   if (/^\/|^(?:lakukan|jalankan|hapus|tambah|set|atur|buka|tutup|kirim|lihat)\b/i.test(low)) {
     return { type: "command", urgency: "medium", formality: "formal", confidence: 0.85, entities: {} };
@@ -382,6 +388,16 @@ export function decide(perception: Perception): Strategy {
       approach: cap("search"),
       depth: "medium",
       providerPreference: "any",
+      riskLevel: "safe",
+    };
+  }
+
+  // Code / programming language → quality LLM (code must be correct, not fast)
+  if (intent.type === "code") {
+    return {
+      approach: "simple_llm",
+      depth: "medium",
+      providerPreference: "thorough",
       riskLevel: "safe",
     };
   }
@@ -545,6 +561,9 @@ export async function act(
         topic: topic ?? undefined,
         context: enrichedContext,
         contextIsEnriched: true,
+        // Hard-lift comprehension for code questions: OpenRouter's free
+        // reasoning model reads ambiguous wording far more accurately.
+        deep: perception.intent.type === "code",
       });
       if (result.reply) {
         return { reply: result.reply, source: result.source ?? "llm" };
