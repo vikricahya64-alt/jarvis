@@ -46,7 +46,7 @@ const FORMAT_PRESETS: Record<string, FormatConfig> = {
   research: {
     useEmoji: false,
     maxParagraphs: 16,
-    useBold: true,
+    useBold: false,
     useBullets: false,
     lineBreaks: "double",
     maxWordsChat: 900,
@@ -122,7 +122,10 @@ export function cleanLLMArtifacts(text: string): string {
     // Remove duplicate line breaks (max 2)
     .replace(/\n{3,}/g, "\n\n")
     // Remove leading/trailing whitespace
-    .trim();
+    .trim()
+    // Repair mangled markdown links the LLM sometimes emits: "(url](url)"
+    // or "(url](url))" → single clean "(url)".
+    .replace(/\((https?:\/\/[^\s)\]]+)\]\(https?:\/\/[^\s)\]]+\)+/g, "($1)");
 }
 
 /** Format citations in research responses.
