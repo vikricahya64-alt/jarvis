@@ -22,7 +22,6 @@ import { refreshQuotaSnapshot as monitorRefresh } from "./lib/monitor";
 import { ddgSearch } from "./lib/ai";
 import { acquireCronLock, releaseCronLock } from "./lib/resilience";
 import { runDreamCycle, generateMorningBriefing, decayPreferences, runEvolutionLoop, runInsightLifecycle } from "./lib/evolution";
-import { offerSuggestions } from "./lib/predictive";
 import { runGapUpgradeLoop } from "./lib/gap_upgrade";
 import { tickAutonomy } from "./lib/maestro";
 import { syncAllSessions } from "./lib/context_manager";
@@ -571,13 +570,6 @@ version: "m9-v10",
           console.log(`[cron] morning_briefing: sent ${briefingText.length} chars`);
         } else {
           console.log(`[cron] morning_briefing: skip`);
-        }
-        const sugg = await offerSuggestions(env, owner);
-        if (sugg) {
-          await sendMessage(env, owner, sugg);
-          console.log(`[cron] suggestions: sent ${sugg.length} chars`);
-        } else {
-          console.log(`[cron] suggestions: skip`);
         }
       } else if (cron === "* * * * *") {
         const due = await checkDueReminders(env);

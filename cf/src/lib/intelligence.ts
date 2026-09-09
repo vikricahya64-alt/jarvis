@@ -596,10 +596,11 @@ export async function act(
               `tanpa jargon, tanpa poin-poin panjang, kalimat pendek mengalir, seperti menjelaskan ke teman. ` +
               `Tetap pada topik itu — JANGAN ganti topik.`;
           }
-          return `Pemilik MENERUSKAN percakapan yang sedang berlangsung — pesan ini ringkas dan tidak menyebut ulang topiknya. ` +
-            `Topik aktif yang sedang dibicarakan: "${topic}". ` +
-            `Jawab sebagai LANJUTAN dari percakapan itu, langsung ke pokok, bahasa santai seperti biasa. ` +
-            `Namun jika pesan itu ternyata benar-benar menanyakan hal baru, jawab hal barunya dengan natural.`;
+          return `Pemilik MENERUSKAN percakapan tentang "${topic}". ` +
+            `Pesan ini ringkas dan tidak menyebut ulang topiknya. ` +
+            `Jawab sebagai LANJUTAN dari percakapan tentang topik itu. ` +
+            `TETAP pada topik "${topic}" — JANGAN menyimpang ke topik lain, ` +
+            `JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas.`;
         })(),
         // Hard-lift comprehension for code questions: OpenRouter's free
         // reasoning model reads ambiguous wording far more accurately.

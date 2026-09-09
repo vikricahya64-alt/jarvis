@@ -335,47 +335,27 @@ export async function generateMorningBriefing(env: Env, owner: number): Promise<
   const now = Date.now();
   const last24h = now - 24 * 3600_000;
   const lines: string[] = [];
-  // Autonomy guard (M1): when /pause is on, the morning rundown must NOT
-  // imply new autonomous execution is happening. Same single gate the
-  // fireDueAgentRules path uses — closing the briefing↔pause open loop.
   const paused = await isAutonomyPaused(env, owner).catch(() => false);
   try {
-    const recentIterations = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM dream_cycles WHERE ran_at >= ? AND insights_extracted > 0`,
-    ).bind(last24h).first<{ n: number }>();
-    const insightCount = recentIterations?.n ?? 0;
-    if (insightCount > 0) lines.push(`💡 ${insightCount} insight baru dipelajari semalam.`);
-
-    const pendingInsights = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM insights WHERE disabled=0 AND last_validated_at=0`,
-    ).bind().first<{ n: number }>();
-    if ((pendingInsights?.n ?? 0) > 0) lines.push(`Jelajahi \`/insights\` untuk melihat ${pendingInsights?.n} pelajaran baru.`);
-
     const errors = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM request_log WHERE status='fail' AND ts >= ?`,
     ).bind(last24h).first<{ n: number }>();
-    if ((errors?.n ?? 0) > 0) lines.push(`⚠️ ${errors?.n} kegagalan layanan 24 jam terakhir — cek /ai_diag.`);
+    if ((errors?.n ?? 0) > 0) lines.push(`⚠️ ${errors?.n} kegagalan 24 jam terakhir — cek /aidiag.`);
 
-    // Drift detection (Pillar 8)
     const driftReport = await generateDriftReport(env);
     if (driftReport) lines.push(driftReport);
 
-    // Eksekutor cloud (B-series): activity from the last 24h belongs in the
-    // morning rundown — what got built, what slipped, and where to read it.
-    // While autonomy is paused: skip the (stale) executor stats; the drop
-    // line below replaces them.
     const exec = paused ? null : await statAgentTasksRecent(env, last24h);
     if (exec && (exec.done > 0 || exec.failed > 0)) {
       const bits = [];
       if (exec.done > 0) bits.push(`${exec.done} selesai`);
       if (exec.failed > 0) bits.push(`${exec.failed} gagal`);
-      const art = exec.latestArtifact ? `\nArtefak terbaru: ${exec.latestArtifact}` : "";
-      lines.push(`📦 Eksekutor cloud: ${bits.join(", ")} dalam 24 jam terakhir.${art}`);
+      lines.push(`📦 Eksekutor: ${bits.join(", ")}`);
     }
   } catch { /* availability: sing off */ }
-  if (paused) lines.unshift("⏸️ Otonomi sedang dijeda (/pause) — tidak ada gerakan eksekutor otomatis sampai /resume.");
-  if (!paused && lines.length === 0) return null; // skip: nothing notable
-  lines.unshift("🌅 *Pagi, Pemilik.* Ringkasan singkat J.A.R.V.I.S.:");
+  if (paused) lines.unshift("⏸️ Otonomi dijeda (/pause).");
+  if (!paused && lines.length === 0) return null;
+  lines.unshift("🌅 *Pagi, Pemilik.*");
   return lines.join("\n");
 }
 
@@ -668,8 +648,6 @@ export async function getAnswerBehaviorContext(
   now = Date.now(),
 ): Promise<string> {
   const parts: string[] = [];
-  // preferences, behavior affinity, and insights are independent D1 reads —
-  // batch them in parallel to cut latency on every AI reply build.
   const [prefs, evalCtx] = await Promise.all([
     getActivePreferences(env).catch(() => [] as Array<{ key: string; value: string }>),
     (async () => {
@@ -679,15 +657,25 @@ export async function getAnswerBehaviorContext(
           listInsights(env, false),
         ]);
         const kept = insights.filter((i) => (affinity[i.category] ?? BEHAVIOR_AFFINITY_NEUTRAL) >= BEHAVIOR_AFFINITY_KEEP);
-        return kept.map((i) => i.ruleText).join(" | ");
+        if (!topic) return kept.map((i) => i.ruleText).join(" | ");
+        const topicWords = new Set(topic.toLowerCase().split(/\s+/).filter((w) => w.length > 3));
+        const relevant = kept.filter((i) => {
+          const ruleLower = i.ruleText.toLowerCase();
+          for (const w of topicWords) {
+            if (ruleLower.includes(w)) return true;
+          }
+          return false;
+        });
+        if (relevant.length === 0) return kept.slice(0, 3).map((i) => i.ruleText).join(" | ");
+        return relevant.map((i) => i.ruleText).join(" | ");
       } catch {
         const insights = await listInsights(env, false).catch(() => []);
-        return insights.map((i) => i.ruleText).join(" | ");
+        return insights.slice(0, 3).map((i) => i.ruleText).join(" | ");
       }
     })(),
   ]);
   if (prefs.length) parts.push("Preferensi pemilik: " + prefs.map((p) => `${p.key}=${p.value}`).join("; "));
-  if (evalCtx) parts.push("Pelajaran yang dipelajari: " + evalCtx);
+  if (evalCtx) parts.push("Pelajaran: " + evalCtx);
   if (parts.length === 0) return "";
   return parts.join("\n").slice(0, 1500);
 }
