@@ -1,92 +1,85 @@
 # J.A.R.V.I.S. — Personal Industrial Agentic AI
 
-A personal agentic AI assistant built **100% on free-tier services**. It orchestrates
-real work: searching the web, writing and executing code, and generating file
-artifacts (CSV, JSON, PNG charts, PDF reports). You talk to it via Telegram.
+A personal agentic AI assistant built **100% on free-tier services**.
+You talk to it via Telegram; it searches the web, generates images, plans
+recurring tasks, and executes heavy cloud work on ephemeral GitHub VM runners.
 
 ## 🏗️ Architecture
 
+Single-spine Cloudflare Worker. Telegram webhook is only a *transport* —
+every update flows through one brain (`processIntelligence`):
+
 ```
-┌─────────────┐     HTTP      ┌──────────────────┐     INSERT     ┌─────────────────┐
-│   Telegram  │ ───────────▶ │  api/webhook.py   │ ────────────▶ │   Supabase      │
-│  (User)     │              │  (Vercel Func)     │              │  (tasks table)  │
-└─────────────┘              └──────────────────┘              └────────┬────────┘
-      ▲                                                                │  DB Webhook
-      │  send result                                                     ▼  (on INSERT)
-      │                                                      ┌─────────────────────────┐
-      └──────────────────────────────────────────────────── │  api/orchestrator.py     │
-                                                            │  (Vercel Func)            │
-                                                            └────────────┬─────────────┘
-                                                                         │  Groq tool-calling
-                                                       ┌─────────────────┼─────────────────┐
-                                                       │                 │                 │
-                                              ┌────────┴─────┐   ┌───────┴───────┐  ┌─────┴──────┐
-                                              │  RESEARCHER  │   │    BUILDER    │  │  PLANNER   │
-                                              │  search+scrape│  │  E2B sandbox  │  │  (Groq)    │
-                                              └──────────────┘   └───────────────┘  └────────────┘
-                                                                       │ upload files
-                                                                       ▼
-                                                              ┌──────────────────┐
-                                                              │ Supabase Storage  │
-                                                              │ (artifacts bucket)│
-                                                              └──────────────────┘
+┌────────────┐   webhook    ┌─────────────────────────────────────────────┐
+│  Telegram   │ ───────────▶ │         Cloudflare Worker (cf/src)          │
+└────────────┘              │  telegram_webhook.ts ──▶ processIntelligence │
+                            └───────┬──────────────────────────────────────┘
+                                    │
+            ┌───────────┬───────────┼───────────────┬──────────────┬───────────┐
+            ▼           ▼           ▼               ▼              ▼           ▼
+        D1 (db)     KV (cfg)    cron ×5        GitHub Actions   Vercel     Groq/
+        memori     DMS/audit   otonomi          /tugas VM      Connector   WorkersAI
+        tasks      & vault      loops          ephemeral       Figma/     cascade
+                             (dream, dms)       runner       Notion/GitHub   LLM
 ```
 
-## 🧠 3 Modular Agents
-
-| Agent | Role | Tool |
-|-------|------|------|
-| **Orchestrator (Planner)** | Decides which agent to invoke, breaks tasks into sub-steps | Groq tool-calling |
-| **Researcher** | Gathers real-time info | `search_web(query)`, `scrape_url(url)` |
-| **Builder** | Writes & runs code to generate files | `execute_code(code, lang)` via E2B |
-
-## 🔄 Orchestration Flow
-
-1. **User sends a Telegram message** → Telegram delivers it to `api/webhook.py`.
-2. **`webhook.py` verifies the secret token**, grabs the message, inserts a new row
-   into the Supabase `tasks` table with `status='PENDING'`, and **returns 200 OK** instantly.
-3. **Supabase Database Webhook** fires on the INSERT and calls `api/orchestrator.py`.
-4. **`orchestrator.py`**: marks the task `PROCESSING`, loads chat history (RAG context),
-   and calls **Groq** (`llama-3.3-70b-versatile`) with tool definitions.
-5. **Groq returns a tool call** (e.g. `search_web`, `execute_code`). The orchestrator
-   executes it:
-   - Researcher → DuckDuckGo search / scrape.
-   - Builder → E2B sandbox runs Python/JS, produces files.
-6. Any generated file is **uploaded to Supabase Storage**.
-7. Orchestrator updates the task to `DONE` (with `result_text` + `result_url`) and
-   **sends the result back to the user via Telegram Bot API**.
+| Layer | Service | Role |
+|-------|---------|------|
+| Edge | Cloudflare Worker | Single webhook→intelligence spine (100k req/day) |
+| Brain | Groq → Workers AI (keyless) → OpenRouter → Gemini | LLM cascade |
+| Memory | D1 (SQLite) + KV | Long-term memory, tasks, DMS state |
+| Interface | Telegram Bot API | Chat with the owner |
+| Heavy executor | GitHub Actions (VM, ephemeral) | `/tugas` arbitrary tasks, opencode headless |
+| Integrations | Vercel Connector (`jarvis-connector`) | Figma, Notion, GitHub dispatch, image/text |
 
 ## 📁 Folder Structure
 
 ```
 jarvis/
-├── requirements.txt
-├── vercel.json
-├── .env.example
-├── api/
-│   ├── __init__.py
-│   ├── webhook.py          # Telegram entry point
-│   └── orchestrator.py     # Main agentic logic
-├── utils/
-│   ├── __init__.py
-│   ├── groq_client.py      # LLM + tool calling
-│   ├── search_tools.py     # DuckDuckGo + scrape
-│   ├── e2b_executor.py     # Sandboxed code execution
-│   ├── supabase_client.py  # DB + Storage
-│   └── telegram.py         # Telegram Bot API
-├── sql/
-│   └── schema.sql          # Supabase migration + RLS
-└── docs/
-    └── DEPLOYMENT.md       # Full setup guide
+├── cf/                          # Live stack — Cloudflare Worker
+│   ├── src/index.ts             # Routes: /healthz, /webhook, /cron
+│   ├── src/workers/telegram_webhook.ts   # Telegram transport + commands
+│   ├── src/lib/                 # Brain (ai, intelligence, conversation, …)
+│   ├── src/daemons/             # Dead-man's switch
+│   ├── migrations/              # D1 schema migrations
+│   ├── test/                    # logic + safety test suites
+│   ├── wrangler.toml            # D1, KV, 5 cron triggers
+│   └── deploy.sh                # setup / migrate / secrets / deploy helper
+├── .github/workflows/           # deploy + autonomy + /tugas executor
+├── data/personal_constitution.md  # owner's sovereignty constitution source
+└── cf/docs/                     # SETUP + architecture reference
 ```
+
+## 🔄 Orchestration Flow
+
+1. **User sends a Telegram message** → worker webhook receives it.
+2. **`telegram_webhook.ts`** owner-gates it, classifies intent, routes commands
+   (`/tugas`, `/figma`, `/notion`, `/todo`, …) or feeds free text to the brain.
+3. **`processIntelligence`** (one brain) runs comprehension gate, memory recall,
+   research synthesis, LLM cascade, anti-fabrication verification.
+4. **Heavy work** (`/tugas`) is queued in D1 and dispatched via GitHub Actions
+   VM; the VM commits its artifact and reports back to `/agent/done`.
+5. **Autonomy** runs on 5 cron triggers (DMS, dream cycle, obedience report,
+   insight lifecycle, reminders) all guarded by a cron lock.
 
 ## 🧰 Tech Stack (all free tier)
 
 | Layer | Service | Role |
 |-------|---------|------|
-| Brain | Groq (`llama-3.3-70b-versatile`) | Reasoning + function calling |
-| Hands | E2B Code Interpreter | Secure Python/JS execution |
-| Memory | Supabase (Postgres + pgvector + Storage) | Long-term memory, RAG, artifacts |
-| Interface | Telegram Bot API (webhooks) | Chat with the user |
-| Hosting | Vercel Serverless (Python runtime) | Backend endpoints |
-| Search | DuckDuckGo (`duckduckgo-search`) | Real-time web data |
+| Edge | Cloudflare Workers + D1 + KV | Hosting, storage, crons |
+| LLM | Groq (key), Workers AI (keyless), OpenRouter, Gemini | Reasoning cascade |
+| Text gen keyless | Cloudflare Workers AI (`llama-3.3-70b`) | Zero-key fallback |
+| Image | Cloudflare Workers AI (flux) → Pollinations | Generation |
+| Integrations | Vercel Connector | Figma/Notion/GitHub APIs (token server-side) |
+| Search | DuckDuckGo Instant Answer + HTML scrape | Real-time web data |
+| Heavy exec | GitHub Actions ephemeral VM | Arbitrary code/artifacts |
+
+## 🛡️ Operating rules
+
+- **Fail-closed**: guards, cron locks, owner-gating, comprehension gate; a
+  doubtful action is blocked, never silently approved.
+- **No privileges escalation**: `/tugas` VM runs headless with owner-gated
+  dispatch only (no inbound webhook from the VM).
+- **Free-tier discipline**: ≤5 crons, bounded CPU/timeouts, provider cascade
+  instead of paid upgrades.
+- Use `cf/docs/SETUP.md` for provisioning, `cf/deploy.sh` for operations.
