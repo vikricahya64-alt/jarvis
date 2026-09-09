@@ -52,7 +52,6 @@ export async function updateQuotaSnapshot(env: Env, owner: number): Promise<{ di
   const remainingPct = Math.max(0, 100 - usagePct);
 
   const disabled: string[] = [];
-  let cumulative = 0;
 
   for (const feat of FEATURE_PRIORITY) {
     if (remainingPct < feat.minQuota * 100 + 0.01) { // minQuota * 100 + tolerance
@@ -109,7 +108,7 @@ async function calculateUsagePercent(env: Env): Promise<number> {
 }
 
 /** Helper: dapatkan status degradasi saat ini (untuk debugging/monitoring) */
-export async function getDegradationDebug(env: Env, owner: number): Promise<any> {
+export async function getDegradationDebug(env: Env, _owner: number): Promise<any> {
   const status = await getDegradationStatus(env);
   return {
     quota: status,

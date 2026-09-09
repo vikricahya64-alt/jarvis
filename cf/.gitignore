@@ -3,3 +3,4 @@ node_modules/
 .dev.vars
 .vscode/
 wrangler local_state/
+dist/

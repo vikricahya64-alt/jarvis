@@ -11,8 +11,6 @@
 // the action is BLOCKED (never silently approved).
 //=====================================================================
 
-import { Env } from "./db";
-
 export interface GuardResult {
   allowed: boolean;
   violated_principle: string | null;
@@ -56,35 +54,6 @@ export function riskScore(text: string): number {
   if (high.some((w) => matchesKeyword(low, w))) return 0.9;
   if (mid.some((w) => matchesKeyword(low, w))) return 0.5;
   return 0.1;
-}
-
-/**
- * Fail-closed "no constitution" whitelist (python `_ALLOWED_BY_DEFAULT`).
- * When the owner has not yet ratified a constitution, only demonstrably
- * HARMLESS, read-only, reversible actions bypass the guard. Everything else
- * is BLOCKED with `no_constitution`. Match is substring on the action text.
- */
-const ALLOWED_BY_DEFAULT: string[] = [
-  "status", "/status", "/health", "help", "/help", "/profile", "time",
-  "jam", "cuaca", "weather", "/note", "/todo", "/reminder", "set alarm",
-  "read my messages", "baca pesan", "show", "tampilkan", "list", "daftar",
-  "/list", "/vault list", "what is", "apa itu", "summarize", "ringkas",
-  "translate", "terjemahkan", "remind", "rekap", "search", "cari",
-  "privacy", "/privacy", "/dms_status", "/queue_status", "/obedience_report",
-  // Read-only research/analytical phrasings: harmless, only trigger a web
-  // search + synthesis (never an action). PRINCIPLES (no_destroy/no_money/...)
-  // are matched BEFORE this whitelist, so destructive derived forms (hapus,
-  // membobol, transfer uang...) stay BLOCKED even pre-constitution.
-  "analis", "analyze", "laporan", "report", "review", "perbandingan",
-  "bandingkan", "bandingin", "perkembangan", "ulasan", "kajian", "research",
-  "menurut", "bagaimana", "cara", "what is", "jelaskan", "jelasin",
-  "tentang", "mengenai", "informasi", "info", "topik", "trend", "tren",
-  "terbaru", "2026",
-];
-
-function isWhitelisted(actionDesc: string): boolean {
-  const low = (actionDesc || "").toLowerCase();
-  return ALLOWED_BY_DEFAULT.some((k) => low.includes(k));
 }
 
 /** Conflict detection vs stored explicit 'never/stop' command rules. */

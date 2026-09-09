@@ -100,7 +100,7 @@ export async function recordSuccess(env: Env, provider: string): Promise<void> {
 }
 
 /** Record a failure on a provider; trip OPEN once failures hit the threshold. */
-export async function recordFailure(env: Env, provider: string, inFlight: { used: boolean } = { used: false }): Promise<void> {
+export async function recordFailure(env: Env, provider: string, _inFlight: { used: boolean } = { used: false }): Promise<void> {
   try {
     const now = Date.now();
     const row = await env.DB.prepare(

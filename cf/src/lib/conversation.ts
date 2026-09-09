@@ -25,14 +25,13 @@
 // - Working memory integration
 //=====================================================================
 
-import { Env, recentContext, searchMemory } from "./db";
-import { detectEmotion, emotionToStyle, getMoodState, moodSummary, inferEmotionFromContext, detectTopicSentiment, type MoodState, type EmotionSignal } from "./emotion";
+import { Env } from "./db";
+import { detectEmotion, getMoodState, moodSummary, inferEmotionFromContext, type MoodState } from "./emotion";
 import {
   buildEnrichedContext, detectConversationMode, extractTopicLabel,
   getSession, buildContextSummary,
 } from "./context_manager";
-import { detectLanguage, adaptResponse, getLanguageGreeting, type Language, type LanguageCode } from "./jarvis_language";
-import { getDynamicPersonality, buildPersonalityContext, type JarvisPersonality } from "./jarvis_emotion";
+import { detectLanguage, type Language } from "./jarvis_language";
 import { JARVIS_IDENTITY } from "./identity";
 
 /** J.A.R.V.I.S. core personality dimensions.
@@ -197,11 +196,6 @@ function detectIntent(text: string): {
   }
 
   return { type: "question", urgency: "low", formality: "neutral" };
-}
-
-/** Estimate token count (rough: 1 token ≈ 4 chars for Indonesian). */
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
 }
 
 /** Compress a long text by removing redundancy while preserving key info.
@@ -569,7 +563,6 @@ export async function buildConversationMessages(
     confidence: 0.5,
   }));
   const emotion = inferEmotionFromContext(rawEmotion, mood, recentEmotions);
-  const emotionStyle = emotionToStyle(emotion, mood);
 
   // Get session and working memory
   const session = opts.session ?? getSession(owner);

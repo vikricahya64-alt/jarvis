@@ -77,12 +77,6 @@ export function isDesignIntent(text: string): boolean {
     /\b(?:desain|reka|gambar|video|poster|logo|animasi|infografis|banner|mockup|sketsa|drawing|sketch|paint|ilustrat|design|ui\/ux)\b|arsitektur|visual|ilustrasi/i;
   return designKeywords.test(text.toLowerCase());
 }
-export function orchestrateDesign(env: Env, owner: number, userText: string, topic: string, anchor?: string): Promise<string | null> {
-  // Fallback hook kept for backward compatibility with any code that still
-  // references it. Visual/design requests are handled by the free-text image
-  // trigger in the webhook (flux via generateImage).
-  return Promise.resolve(null);
-}
 
 // ---- typed schemas (Instructor-style validators) -----------------------
 interface ResearcherPlan {

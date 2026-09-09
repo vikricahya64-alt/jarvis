@@ -25,7 +25,7 @@
 // All 100% free tier: D1 + FTS5 (existing memories/memories_fts) + Groq/Gemini.
 //=====================================================================
 
-import { Env, searchMemory, rememberMemory, statAgentTasksRecent } from "./db";
+import { Env, statAgentTasksRecent } from "./db";
 import { llmRespond } from "./ai";
 import { isAutonomyPaused } from "./command_hierarchy";
 import { BUG_PATTERNS } from "./identity";
@@ -131,7 +131,7 @@ export function parseReflection(reply: string): {
  *  where the initial response is already highly accurate. Only reflect
  *  on genuinely non-trivial responses. */
 function needsReflection(
-  turnText: string,
+  _turnText: string,
   output: string,
   errors: string[],
 ): { needed: boolean; reason: string } {
@@ -559,7 +559,7 @@ export async function listInsights(env: Env, includeDisabled = false): Promise<I
 
 /** Fetch the active, evidence-warranted lessons to inject into an LLM reply
  *  (so behavior drifts toward owner preference without rewriting any prompt). */
-export async function getBehaviorContext(env: Env, topic: string | null): Promise<string> {
+export async function getBehaviorContext(env: Env, _topic: string | null): Promise<string> {
   const parts: string[] = [];
   const prefs = await getActivePreferences(env);
   if (prefs.length) parts.push("Preferensi pemilik: " + prefs.map((p) => `${p.key}=${p.value}`).join("; "));

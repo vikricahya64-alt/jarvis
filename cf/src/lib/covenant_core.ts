@@ -198,21 +198,6 @@ export function isCovenantManagement(command: string): boolean {
   return COVENANT_MANAGEMENT_PREFIX.some((p) => lower.startsWith(p));
 }
 
-// ============ NEW: MODULE CONTRACT IMPLEMENTATION ============
-
-/** The minimal module interface that CovenantCore implements. */
-interface CovenantModuleInterface {
-  readonly moduleId: string;
-  readonly dependencies: string[];
-  readonly maxCpuTimeMs: number;
-  /** execute(context) — per contract. Returns ModuleResult-like object. */
-  execute(context: any): Promise<{ reply: string; confidence?: number; traceMemory?: boolean }>;
-  /** healthCheck() — liveness probe. */
-  healthCheck(): Promise<{ healthy: boolean; detail?: string; lastChecked: number }>;
-  /** getCapabilities() — for orchestrator routing. */
-  getCapabilities(): { label: string; pattern?: RegExp; priority: number }[];
-}
-
 /** CovenantCore class implementing the module interface with DI. */
 export class CovenantCore {
   readonly moduleId: string;

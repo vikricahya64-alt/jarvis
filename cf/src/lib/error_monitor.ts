@@ -494,7 +494,7 @@ export async function runErrorHealLoop(env: Env): Promise<HealResult> {
 
 /** Generate a fix suggestion based on error category and diagnosis.
  *  Returns null if no automated fix is possible (needs owner approval). */
-function generateFixSuggestion(category: string, message: string, diagnosis: string): string | null {
+function generateFixSuggestion(_category: string, message: string, diagnosis: string): string | null {
   const low = `${message} ${diagnosis}`.toLowerCase();
 
   // Auto-fixable patterns (safe, non-destructive)
@@ -516,16 +516,6 @@ function generateFixSuggestion(category: string, message: string, diagnosis: str
 }
 
 // ============ NEW: MODULE CONTRACT IMPLEMENTATION ============
-
-/** The minimal module interface that ErrorMonitor implements. */
-interface ErrorMonitorModuleInterface {
-  readonly moduleId: string;
-  readonly dependencies: string[];
-  readonly maxCpuTimeMs: number;
-  execute(context: any): Promise<{ reply: string; confidence?: number; traceMemory?: boolean }>;
-  healthCheck(): Promise<{ healthy: boolean; detail?: string; lastChecked: number }>;
-  getCapabilities(): { label: string; pattern?: RegExp; priority: number }[];
-}
 
 /** ErrorMonitor class implementing the module interface with DI. */
 export class ErrorMonitor {

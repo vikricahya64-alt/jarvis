@@ -16,18 +16,18 @@ import { setWebhook, sendMessage, getWebhookInfo, getMe, setMyCommands } from ".
 import { runDms } from "./daemons/dead_mans_switch";
 
 import { requireCert } from "./lib/zero_trust";
-import { covenantStatusText, validateActionAgainstCovenant, signClause, isCovenantManagement, covenantHash } from "./lib/covenant_core";
-import { identityStatusText, createEpoch, verifyContinuity, markEpochVerified } from "./lib/identity_anchor";
+import { covenantHash } from "./lib/covenant_core";
+import { createEpoch, markEpochVerified } from "./lib/identity_anchor";
 import { refreshQuotaSnapshot as monitorRefresh } from "./lib/monitor";
 import { ddgSearch } from "./lib/ai";
 import { acquireCronLock, releaseCronLock } from "./lib/resilience";
-import { runDreamCycle, generateMorningBriefing, decayPreferences, runEvolutionLoop, runInsightLifecycle } from "./lib/evolution";
+import { generateMorningBriefing, runEvolutionLoop, runInsightLifecycle } from "./lib/evolution";
 import { runGapUpgradeLoop } from "./lib/gap_upgrade";
 import { tickAutonomy } from "./lib/maestro";
 import { syncAllSessions } from "./lib/context_manager";
 import { runErrorHealLoop } from "./lib/error_monitor";
 import { runConfigOptimization } from "./lib/config_optimizer";
-import { runDeploySafetyLoop, recordDeploy } from "./lib/deploy_safety";
+import { runDeploySafetyLoop } from "./lib/deploy_safety";
 import { runRecoveryLoop } from "./lib/recovery_loop";
 
 const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";

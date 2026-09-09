@@ -19,10 +19,10 @@
 // processIntelligence() as the SINGLE ENTRY POINT for message handling.
 //=====================================================================
 
-import { Env, searchMemory, recentContext, appendMemory } from "./db";
+import { Env, appendMemory } from "./db";
 import {
   detectEmotion, updateMood, getMoodState,
-  emotionToStyle, moodSummary, inferEmotionFromContext, detectTopicSentiment,
+  inferEmotionFromContext,
   type EmotionSignal, type MoodState,
 } from "./emotion";
 import { detectLanguage, type Language } from "./jarvis_language";
@@ -31,7 +31,6 @@ import {
   detectConversationMode, detectTopicContinuity,
   updateSession, buildEnrichedContext, saveSessionToKV,
 } from "./context_manager";
-import { buildConversationMessages } from "./conversation";
 import {
   llmRespond, searchAndSynthesize, extractTopic,
   isFollowUpQuery, resolveFollowUpAnchor,
@@ -54,9 +53,9 @@ import {
 } from "./relevance";
 import { readFailureTally } from "./failure";
 import { describeGapProposals } from "./gap_upgrade";
-import { reflectOnTurn, getAnswerBehaviorContext } from "./evolution";
-import { buildFinalReply, ensureReciprocalQuestion } from "./response_formatter";
-import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
+import { reflectOnTurn } from "./evolution";
+import { ensureReciprocalQuestion } from "./response_formatter";
+import { SELF_REF_RE } from "./identity";
 
 // ============================================================================
 // Types
@@ -286,7 +285,7 @@ function messageMode(text: string): MessageMode {
  * Unified intent classifier — combines signals from multiple sources.
  * Priority: self-referential > emergency > design > translate > search > command > chat > question > understand
  */
-function classifyIntent(text: string, topic: string | null): IntentResult {
+function classifyIntent(text: string, _topic: string | null): IntentResult {
   const low = text.toLowerCase();
 
   // Self-referential (highest priority — JARVIS talking about itself)
@@ -431,7 +430,7 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
  * The brain weighs intent, urgency, complexity, and available resources.
  */
 export function decide(perception: Perception): Strategy {
-  const { intent, isFollowUp, topic, mood, enrichedContext } = perception;
+  const { intent, isFollowUp, topic } = perception;
   // Registry-backed strategy approach (single contract table); falls back to
   // simple_llm when the intent has no dedicated capability.
   const cap = (it: string) => (approachForIntent(it) as Strategy["approach"]) ?? "simple_llm";
@@ -570,7 +569,7 @@ export async function act(
   perception: Perception,
   strategy: Strategy,
 ): Promise<{ reply: string; source: string; image?: { bytes: Uint8Array; mime: string } }> {
-  const { topic, enrichedContext, language } = perception;
+  const { topic, enrichedContext } = perception;
 
   switch (strategy.approach) {
     case "self_referential":
@@ -742,9 +741,9 @@ export async function reflect(
   text: string,
   reply: string,
   perception: Perception,
-  strategy: Strategy,
+  _strategy: Strategy,
 ): Promise<void> {
-  const { topic, emotion } = perception;
+  const { topic } = perception;
 
   // Save to episodic memory (both user and assistant turns)
   const safeTopic = topic ?? "general";
