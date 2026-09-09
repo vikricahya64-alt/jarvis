@@ -64,14 +64,17 @@ const FACET_RE = /\b(dan|or|atau|bandingkan|compare|perbandingan|analisis|analis
 export function isDesignIntent(text: string): boolean {
   // Detect visual/design intent for ANY subject (not just products).
   // Covers images, video, logos, posters, UI, etc.
-  // Word-boundary form: the short, substring-heavy keywords (produk, reka,
-  // konsep, gambar, video) are matched as whole words only — so "produktif",
-  // "produksi", "konsepsi", "andai" never falsely trip design intent.
-  // NOTE: video is no longer a separate design capability — flux renders all
-  // visuals as images via generateImage (webhook free-text trigger). This
-  // intent still routes design-y requests to the outline+image pipeline.
+  // Word-boundary form: the short, substring-heavy keywords (reka, gambar,
+  // video) are matched as whole words only — so "produktif", "produksi",
+  // "konsepsi", "andai" never falsely trip design intent.
+  // m9-v11.1: removed the false-positive triggers  produk/spesifikasi/konsep/
+  // aplikasi/interface — those words dominate normal tech discussion
+  // ("4 konsep AI dalam 1 software", "spesifikasi laptop", "aplikasi X") and
+  // hijacked conceptual questions into the design pipeline. Design intent is
+  // now driven by genuinely visual nouns + explicit creation verbs (checked
+  // by the caller in classifyIntent), so "buatkan desain poster" still works.
   const designKeywords =
-    /\b(?:desain|spesifikasi|produk|reka|konsep|gambar|video)\b|arsitektur|visual|ilustrasi|poster|logo|animasi|infografis|banner|mockup|sketsa|drawing|sketch|paint|ilustrat|design|ui\/ux|aplikasi|interface/i;
+    /\b(?:desain|reka|gambar|video|poster|logo|animasi|infografis|banner|mockup|sketsa|drawing|sketch|paint|ilustrat|design|ui\/ux)\b|arsitektur|visual|ilustrasi/i;
   return designKeywords.test(text.toLowerCase());
 }
 export function orchestrateDesign(env: Env, owner: number, userText: string, topic: string, anchor?: string): Promise<string | null> {

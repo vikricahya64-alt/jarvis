@@ -1906,6 +1906,46 @@ function likelyClear(text: string): boolean {
  *  expensive (a confident fabricated claim is worse than a clarifying ask). */
 const COMPREHENSION_MIN_CONFIDENCE = 0.8;
 
+/** Known uppercase acronyms — never treated as unknown-entity red flags. */
+const KNOWN_ACRONYMS = new Set([
+  "AI", "LLM", "API", "AGI", "GPT", "KV", "D1", "DB", "UI", "UX", "CPU", "GPU",
+  "RAM", "URL", "HTTP", "HTTPS", "HTML", "CSS", "JS", "TS", "RAG", "FTS", "SQL",
+  "CSV", "PDF", "XML", "JSON", "SDK", "CLI", "IOT", "VR", "AR", "SEO", "CRM",
+  "ERP", "IB", "UKM", "UMKM", "BPS", "DMS", "CV", "ID", "OK", "No", "No.",
+]);
+
+/** Deterministic "unknown entity" red-flag: does this freshly-typed message
+ *  INTRODUCE a named platform/product/brand that isn't in the conversation?
+ *  Drives the comprehension gate's skip rule — a continuation that ONLY uses
+ *  anaphora ("4 konsep tersebut", "kedua generasi itu") must NOT be re-asked
+ *  (that was a false positive: JARVIS asked "nya konsep yang mana?" after the
+ *  owner already said "4 konsep AI"); but a message that introduces a
+ *  platform-like token ("platform age") MUST trigger the gate. */
+export function unknownEntitySignal(text: string): boolean {
+  const low = text.toLowerCase();
+  // Named thing after "platform/aplikasi/app/software/...": platform age,
+  // aplikasi X, software Z. Fires for "platform agent" too (gate then checks
+  // whether the term is actually known).
+  if (/\b(?:platform|aplikasi|app|software|aplikasinya|websitenya|tool-nya|tools?|situs|layanan|service|engine|mesin)\b[\s:.-]*[a-z]{2,}/i.test(low)) return true;
+  // Quoted term as a proper thing: "hambar", 'generasi hambar'.
+  if (/["“”`'']\s*[a-z]{2,}\s*["“”`'']/i.test(low)) return true;
+  // Unknown all-caps acronym (2-6 letters) NOT in the known set.
+  const acro = low.match(/\b[a-z]{2,6}\b/g);
+  if (acro) {
+    for (const w of acro) {
+      if (/^[a-z]{2,6}$/.test(w) && KNOWN_ACRONYMS.has(w.toUpperCase())) continue;
+      // only flag TITLE/hidden-acronym-like tokens when isolated & capitalized
+    }
+  }
+  const caps = text.match(/\b[A-Z]{2,6}\b/g);
+  if (caps) {
+    for (const c of caps) {
+      if (!KNOWN_ACRONYMS.has(c)) return true;
+    }
+  }
+  return false;
+}
+
 /** Run the comprehension gate. Fail-CLOSED by default toward asking: the gate
  *  only returns `clear: true` when the LLM is HIGHLY confident the message is
  *  well-formed AND every named platform/product/term it mentions is genuinely
