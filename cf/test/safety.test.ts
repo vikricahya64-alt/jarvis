@@ -17,6 +17,8 @@ import {
   routeCommand, heuristicClassify, TIERS, markExplicitStop, setAutonomyPaused,
 } from "../src/lib/command_hierarchy";
 import { validateAction, conflictScore } from "../src/lib/constitutional_guard";
+import { unknownEntitySignal } from "../src/lib/ai";
+import { isDesignIntent } from "../src/lib/subagents";
 
 const FAKE_ENV = {
   CLARITY_GATE: "0.95",
@@ -1062,6 +1064,42 @@ async function testComprehensionGate() {
     "commands/emergency/self-ref must bypass the gate");
 }
 
+async function testHeavyCapabilityVerify() {
+  // m9-v11.1 RESPOND-THEN-VERIFY: a heavy capability (design/search/code) whose
+  // text intent is ambiguous ("cara buat poster?", "bagaimana cara riset X?")
+  // is ANSWERED via the cheap question path and then VERIFIED ("bilang saja
+  // kalau mau kubuatkan") — but NOT every turn: when the input text itself
+  // decides (clear order verb → execute; plain question with no order verb →
+  // answer), no verification is added.
+  const brainSrc = readFileSync(new URL("../src/lib/intelligence.ts", import.meta.url), "utf-8");
+  assert.ok(/heavyCapVerdict/.test(brainSrc),
+    "brain must have a heavy-capability ask-vs-execute verdict (design/search/code)");
+  assert.ok(/heavyVerifySuffix/.test(brainSrc),
+    "brain must append a verification suffix when a heavy capability was ambiguous");
+  assert.ok(/heavyVerify/.test(brainSrc),
+    "ambiguous heavy-capability messages must carry the heavyVerify marker");
+  assert.ok(/execute.*answer.*verify|"execute" \| "answer" \| "verify"/.test(brainSrc),
+    "verdict must be tri-state: execute (clear order) / answer (clear question) / verify (ambiguous)");
+
+  // UNKNOWN ENTITY SIGNAL — drives the comprehension gate's skip rule.
+  assert.equal(unknownEntitySignal("4 konsep tersebut dalam 1 software"), false,
+    "continuation with anaphora only must NOT be flagged as an unknown-entity message");
+  assert.equal(unknownEntitySignal("lebih lanjut dari kedua generasi tersebut"), false,
+    "second-generations anaphora must not be flagged either");
+  assert.equal(unknownEntitySignal("generasi hambar vs teks pada platform age"), true,
+    "introduced 'platform age' (unknown) MUST trip the gate red-flag");
+  assert.equal(unknownEntitySignal("perbedaan generasi gambar vs teks pada platform agent"), true,
+    "'platform agent' trips the gate so the LLM verifies 'agent' is known");
+
+  // DESIGN HIJACK PREVENTION — conceptual questions must not route to Flux.
+  assert.equal(isDesignIntent("4 konsep AI dalam 1 software"), false,
+    "'konsep'/'software' must NOT be design triggers — no Ide Utama/Gaya Visual hijack");
+  assert.equal(isDesignIntent("perbedaan generasi gambar vs teks pada platform agent"), true,
+    "visual noun still flags design-adjacent text (verdict then answers instead of executing)");
+  assert.equal(isDesignIntent("buatkan desain logo brand ini"), true,
+    "real design order must still route to the design pipeline");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -1087,6 +1125,7 @@ async function main() {
   await testAnswerGrounding();
   await testBehaviorAlignmentFailClosed();
   await testComprehensionGate();
+  await testHeavyCapabilityVerify();
   console.log("SAFETY TESTS PASSED");
 }
 

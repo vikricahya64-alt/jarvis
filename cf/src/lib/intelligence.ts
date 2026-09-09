@@ -39,6 +39,7 @@ import {
   generateImagePrompt, generateImage, sniffImageMime,
   storeResearchAnchor,
   detectGarbledInput,
+  unknownEntitySignal,
 } from "./ai";
 import {
   isResearchClass, orchestrateResearch,
@@ -211,6 +212,46 @@ export async function perceive(
   };
 }
 
+/** Ask-vs-EXECUTE verdict for HEAVY capabilities (design/search/code — the
+ *  intents whose act is expensive: flux render, multi-step research, deep
+ *  writer). A message that merely MENTIONS a heavy capability may be ASKING
+ *  ABOUT it ("perbedaan gambar vs teks", "apa itu desain X?") instead of
+ *  ORDERING it ("buatkan logo"). Owner principle (m9-v11.1): give a RESPONSE
+ *  and VERIFY whether the capability should run — but not every turn: when the
+ *  input text itself decides, use it (clear order verb → execute, plain question
+ *  wording with no order verb → just answer). Only mixed/status-is-unclear
+ *  phrasings ("cara buat poster yang bagus", a bare capability noun) get the
+ *  answer + verification suffix. */
+function heavyCapVerdict(type: "search" | "design" | "code", text: string): "execute" | "answer" | "verify" {
+  const low = text.toLowerCase();
+  // Per-capability ORDER verbs — words that mean "run the capability NOW".
+  // Search trigger words themselves are orders (cari/riset/tentang/info/...);
+  // design orders need explicit creation verbs; code orders use build/fix verbs.
+  const orderVerb =
+    type === "search"
+      ? /\b(?:cari|search|riset|research|analisis|analisa|review|bandingkan|ringkas|pelajari|mempelajari|telusuri|tentang|info|studi|study|kajian|laporan)\b/.test(low)
+      : type === "code"
+        ? /\b(?:tulis|tuliskan|buat|bikin|bkin|buatin|perbaiki|debug|analisis|analisa|review|baca|fix|koding|jelaskan|menjelaskan|tunjukkan)\b/.test(low)
+        : /\b(?:buat|bikin|bkin|buatin|desain|rancang|gambarkan|membuat|menghasilkan|generate|tolong|minta|mohon|coba)\b/.test(low);
+  const questionWord =
+    /\b(?:apa|siapa|berapa|kapan|kenapa|mengapa|apakah|bagaimana|cara|perbedaan|banding|vs|versus|lebih\s+(?:baik|bagus)|mana\s+yang|rekomendasi|referensi|mirip|maksud|itu)\b/.test(low);
+  if (orderVerb && !questionWord) return "execute";
+  if (questionWord && !orderVerb) return "answer";
+  return "verify";
+}
+
+/** Human, capability-specific verification suffix: asked AND answered, then we
+ *  confirm whether the heavy capability should actually run. */
+function heavyVerifySuffix(cap: string, reply: string): string {
+  const ask =
+    cap === "search"
+      ? `\n\nNgomong-ngomong, kalau yang kamu mau adalah aku langsung cari/risetkan detailnya, bilang saja — nanti kukerjakan.`
+      : cap === "code"
+        ? `\n\nNgomong-ngomong, kalau yang kamu mau adalah aku langsung tulis/kerjakan kodenya, bilang saja — nanti kukerjakan.`
+        : `\n\nNgomong-ngomong, kalau yang kamu mau adalah aku langsung buatkan desain/gambarnya, bilang saja — nanti kukerjakan.`;
+  return `${reply}${ask}`;
+}
+
 /**
  * Unified intent classifier — combines signals from multiple sources.
  * Priority: self-referential > emergency > design > translate > search > command > chat > question > understand
@@ -248,12 +289,22 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
   // reels, tiktok, dll.) also carry non-design meanings — so keep pure
   // recommendation/descriptive questions ("film apa yang bagus?") on the
   // question path, while creation phrasings ("buat video X") stay design.
+  // m9-v11.1 RESPOND-THEN-VERIFY (owner principle): a heavy capability should
+  // run on a CLEAR order verb ("buat/desain/rancang/gambarkan ...") — but when
+  // the text could be asking ABOUT it ("perbedaan generasi gambar vs teks pada
+  // platform agent" was hijacked into a Flux design, "4 konsep AI dalam 1
+  // software" got an Ide Utama/Gaya Visual outline) — we ANSWER and then ask
+  // whether to actually run the capability. Text-clear turns still skip the
+  // verification (owner: "tidak setiap saat di verifikasi").
   if (isDesignIntent(text)) {
-    const designAsk = /\b(?:apa|siapa|berapa|kapan|kenapa|mengapa|apakah|bagaimana|yang\s+(?:bagus|terbaik|recommended)|rekomendasi|referensi|mirip)\b/i.test(text);
-    const creationVerb = /\b(?:buat|bikin|bkin|buatin|desain|rancang|gambar|foto|animasi\s*kan|videokan|tolong|minta|mohon|coba|mau|ingin|pengen|bisa|boleh)\b/i.test(text);
-    if (!designAsk || creationVerb) {
+    const verdict = heavyCapVerdict("design", text);
+    if (verdict === "execute") {
       return { type: "design", urgency: "medium", formality: "neutral", confidence: 0.85, entities: { topic: text.slice(0, 100) } };
     }
+    if (verdict === "verify") {
+      return { type: "question", urgency: "low", formality: "neutral", confidence: 0.7, entities: { heavyVerify: "design", topic: text.slice(0, 100) } };
+    }
+    // verdict === "answer" → fall through to the plain question path below.
   }
 
   // Translation — canonical predicate shared with the webhook pre-cascade.
@@ -277,14 +328,23 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
     return { type: "question", urgency: "low", formality: "neutral", confidence: 0.7, entities: {} };
   }
 
-  // Search / research
+  // Search / research — a heavy capability: a CLEAR order runs the search,
+  // but an ask-shaped phrasing ("bagaimana cara riset X?") that doesn't order
+  // it gets ANSWERED + verified instead of burning a search literally (owner:
+  // respond then verify, not every turn — text-clear turns skip verification).
   if (/\b(?:cari|search|riset|reseach|research|studi|study|pelajari|mempelajari|meneliti|info|tentang|analisis|review|bandingkan|ringkas|laporan|kajian)\b/i.test(low)) {
+    if (heavyCapVerdict("search", text) === "verify") {
+      return { type: "question", urgency: "low", formality: "neutral", confidence: 0.7, entities: { heavyVerify: "search", topic: text.slice(0, 100) } };
+    }
     return { type: "search", urgency: "medium", formality: "neutral", confidence: 0.8, entities: { topic: text.slice(0, 100) } };
   }
 
   // Programming language / code task (conservative: code vocabulary + an action
   // verb, or an explicit ``` block — "aku suka coding" stays casual chat).
   if (/```/.test(low) || (/\b(?:kode|code|coding|pemrograman|programming|script|skrip|syntax|sintaks|algoritm[ae]|debug)\b/i.test(low) && /\b(?:tulis|buat|bikin|jelaskan|perbaiki|debug|analisis|analisa|baca|review|cara|bagaimana|apa|kenapa|mengapa)\b/i.test(low))) {
+    if (heavyCapVerdict("code", text) === "verify") {
+      return { type: "question", urgency: "low", formality: "neutral", confidence: 0.7, entities: { heavyVerify: "code" } };
+    }
     return { type: "code", urgency: "low", formality: "neutral", confidence: 0.8, entities: {} };
   }
 
@@ -748,23 +808,35 @@ export async function processIntelligence(
     /^\//.test(text.trim()) ||
     /^(emergency|self_referential|translation|command|prompt_writer|context7)$/.test(perception.intent.type);
   if (!skipComprehension) {
-    const garbled = await detectGarbledInput(env, effectiveText, perception.enrichedContext, perception.topic).catch(
-      () => ({ clear: true, uncertain: null }),
-    );
-    if (garbled.clear === false) {
-      const term = garbled.uncertain?.trim();
-      const clarify =
-        term && term.length <= 60 && !/^[\s\W]+$/.test(term)
-          ? `Sebelum kujawab: "${term}" yang kamu maksud itu apa ya? Aku belum paham istilah itu dalam konteks ini — boleh jelaskan sedikit?`
-          : `Sebelum kujawab, mau memastikan dulu: maksud pesanmu itu apa ya? Ada bagian yang belum kupahami — boleh dijelaskan ulang?`;
-      return {
-        text: clarify,
-        perception,
-        strategy,
-        source: "understand_clarify",
-        latencyMs: Date.now() - start,
-        reflection: { shouldReflect: false, topic: perception.topic },
-      };
+    // Anti-false-positive guard (m9-v11.1): a PURE continuation that only
+    // references what's already in the thread must be ANSWERED, not re-asked.
+    // Live over-fire: "4 konsep tersebut" / "kedua generasi tersebut" → JARVIS
+    // asked a clarifying question although the owner was clearly continuing.
+    // Only run the gate when the message actually INTRODUCES an unknown
+    // platform/product/term (deterministic red-flag) — then a garbled
+    // continuation like "generasi hambar pada platform age" still trips it.
+    const bareContinuation = perception.isContinuation && !unknownEntitySignal(effectiveText);
+    if (!bareContinuation) {
+      const garbled = await detectGarbledInput(env, effectiveText, perception.enrichedContext, perception.topic).catch(
+        () => ({ clear: true, uncertain: null }),
+      );
+      if (garbled.clear === false) {
+        const term = garbled.uncertain?.trim();
+        const clarifyBase =
+          term && term.length <= 60 && !/^[\s\W]+$/.test(term)
+            ? term.startsWith("platform")
+              ? `Sebelum kujawab: platform "${term.split(/\s+/)[1] || term}" yang kamu maksud itu apa ya? Aku belum paham istilah itu dalam konteks ini — boleh jelaskan sedikit?`
+              : `Sebelum kujawab: "${term}" yang kamu maksud itu apa ya? Aku belum paham istilah itu dalam konteks ini — boleh jelaskan sedikit?`
+            : `Sebelum kujawab, mau memastikan dulu: maksud pesanmu itu apa ya? Ada bagian yang belum kupahami — boleh dijelaskan ulang?`;
+        return {
+          text: clarifyBase,
+          perception,
+          strategy,
+          source: "understand_clarify",
+          latencyMs: Date.now() - start,
+          reflection: { shouldReflect: false, topic: perception.topic },
+        };
+      }
     }
   }
 
@@ -804,12 +876,22 @@ export async function processIntelligence(
   // double-asking would nag), the turn is a system/closed-loop result
   // (canned/fallback/self-ref/translate/relevance-gate), or there is no topic
   // to probe around. Anchors, memory, and metrics all keep the PLAIN answer.
+  const heavyCap = perception.intent.entities?.heavyVerify;
   const probeSkip =
     perception.isFollowUp || perception.isContinuation ||
     /^(canned|fallback|self_ref|understand_clarify|relevance_gate|translate|translate_bare)$/i.test(source) ||
     /^(command|emergency|translation|self_referential)$/i.test(perception.intent.type) ||
+    !!heavyCap ||
     !perception.topic;
-  const deliverable = ensureReciprocalQuestion(safeReply, { skip: probeSkip });
+  const deliverable =
+    heavyCap
+      ? // m9-v11.1 RESPOND-THEN-VERIFY: the capability was ambiguous in the text
+        // ("cara buat poster?" / "bagaimana cara riset X?") — we ANSWERED it via
+        // the cheap question path above, and now ask whether the HEAVY act should
+        // actually run. Never verify when the text was clear (that path keeps a
+        // plain answer, no nagging).
+        heavyVerifySuffix(heavyCap, safeReply)
+      : ensureReciprocalQuestion(safeReply, { skip: probeSkip });
 
   return {
     text: deliverable,
