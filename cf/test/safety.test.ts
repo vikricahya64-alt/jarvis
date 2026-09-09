@@ -798,6 +798,28 @@ async function testLevel15DeepResearch() {
   assert.ok(/isFollowUpQuery\(text\)/.test(brainSrc), "brain must check for follow-up queries");
   assert.ok(/storeResearchAnchor\(/.test(brainSrc),
     "brain must write the KV research anchor after a substantive research reply");
+
+  // m9-v10 SIMPLICITY RAIL: research must answer like a human — focused
+  // (1-2 highest-impact points, not an encyclopedic survey) and short (stop
+  // when answered). Enforced in the single-pass path AND the deep-research
+  // writer subagent so neither path drifts back to broad report-style prose.
+  const simplicityAiSrc = readFileSync(new URL("../src/lib/ai.ts", import.meta.url), "utf-8");
+  const simplicitySubSrc = readFileSync(new URL("../src/lib/subagents.ts", import.meta.url), "utf-8");
+  assert.ok(/BICARALAH JADI MANUSIA BIASA/.test(simplicityAiSrc),
+    "single-pass path must carry the simplicity rail (focused, everyday sentences)");
+  assert.ok(/FOKUS, JANGAN LEBAR/.test(simplicitySubSrc),
+    "deep-research writer must carry the simplicity rail (1-2 angles, not a survey)");
+
+  // m9-v10 HUMANE CONTINUITY: continuing a chat must not require trigger
+  // words. The continuity detector must have anaphoric/relative signals
+  // (context_manager) and the brain must anchor cheap chat replies to the
+  // active topic via a continuation frame (intelligence.ts).
+  const ctxSrc = readFileSync(new URL("../src/lib/context_manager.ts", import.meta.url), "utf-8");
+  assert.ok(/HUMANE CONTINUITY/.test(ctxSrc),
+    "continuity detector must carry the anaphoric/relative continuation logic");
+  assert.ok(/relativeMarkers/.test(ctxSrc), "continuity detector must define anaphoric/relative markers");
+  assert.ok(/MENERUSKAN percakapan/.test(brainSrc),
+    "brain must frame continuing chat replies to the active topic");
 }
 
 async function testLevel16Predictive() {

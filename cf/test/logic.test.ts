@@ -23,6 +23,7 @@ import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFI
 import { normForMatch, todoDeleteKey, deleteTodoByText, salesReport } from "../src/lib/db";
 import { isBareTodoVerb, parseReminder, tidyVisionReply } from "../src/workers/telegram_webhook";
 import { deliverSmartReply } from "../src/lib/telegram";
+import { detectTopicContinuity } from "../src/lib/context_manager";
 import { parseTranslate } from "../src/lib/ai";
 import { isLikelyTruncated, repairTruncatedReply, gateVerdict, isRawDumpText, isRepetitiveText } from "../src/lib/verifier";
 import { cleanLLMArtifacts, proseifyResearch, buildFinalReply } from "../src/lib/response_formatter";
@@ -209,10 +210,59 @@ function testFollowUpDetection() {
   for (const q of ["lebih dalam", "lanjut", "yang tadi", "perinci lebih detail", "tambahin informasi", "jelasin lebih", "expand dong"]) {
     assert.ok(isFollowUpQuery(q), `follow-up must be detected: ${q}`);
   }
+  // Conditional NARROWING follow-ups ("Kalau untuk perseorangan/tanpa tim"
+  // after a business-gap research) stay on the anchored topic instead of
+  // drifting to a fresh chat path.
+  for (const q of ["Kalau untuk perseorangan/tanpa tim", "kalau untuk skala rumahan gimana?"]) {
+    assert.ok(isFollowUpQuery(q), `narrowing follow-up must be detected: ${q}`);
+  }
   // A fresh topic query is NOT a follow-up.
   for (const q of ["cari bisnis kopi 2026", "Apa itu ribosom", "bandingkan hp dan laptop"]) {
     assert.ok(!isFollowUpQuery(q), `fresh topic must NOT be a follow-up: ${q}`);
   }
+}
+
+// m9-v10 HUMANE CONTINUITY — humans continue a chat WITHOUT trigger words.
+// A short relative message after a substantive prior reply is still the SAME
+// topic. Only a fresh marker ("cari X", "apa itu X", "bandingkan X") or a
+// new-subject question with no anaphor starts a fresh topic.
+function testHumaneContinuity() {
+  const priorAssistant = [
+    { role: "assistant", content: "Celak bisnis paling terbuka: AI untuk UKM dan platform low-code. Keduanya bisa dimulai dengan tim kecil dan modal terbatas." },
+  ] as Array<{ role: string; content: string }>;
+
+  for (const q of [
+    "kalau untuk perseorangan/tanpa tim",
+    "itu gimana caranya?",
+    "yang mana paling cocok?",
+    "bisa buat jualan juga?",
+    "gimana dengan modal kecil?",
+    "lebih fokus ke yang mana ya?",
+  ]) {
+    const r = detectTopicContinuity(q, priorAssistant);
+    assert.ok(r.isContinuation, `relative follow-up must continue topic: "${q}"`);
+  }
+
+  // Fresh markers always start a new topic, even mid-conversation.
+  for (const q of [
+    "cari bisnis kopi 2026",
+    "riset pasar saham",
+    "bandingkan hp dan laptop",
+    "bagaimana cara membuat nasi goreng enak?",
+  ]) {
+    const r = detectTopicContinuity(q, priorAssistant);
+    assert.ok(!r.isContinuation, `fresh-topic marker must NOT continue: "${q}"`);
+  }
+
+  // Brand-new factual question WITHOUT an anaphor = fresh topic, despite the
+  // short length — "berapa harga saham bca?" must never get bolted onto the
+  // business-gap conversation.
+  assert.ok(!detectTopicContinuity("berapa harga saham bca?", priorAssistant).isContinuation,
+    "new-subject question without anaphor must start fresh");
+
+  // No prior substance → nothing to continue.
+  assert.ok(!detectTopicContinuity("terus?", [{ role: "assistant", content: "ok" }]).isContinuation,
+    "chitchat-only prior reply is not an anchor");
 }
 
 function testFuzzyExtractTopic() {
@@ -1501,6 +1551,7 @@ async function main() {
   testNonSlangPassThrough();
   testExpandedSlang();
   testFollowUpDetection();
+  testHumaneContinuity();
   testFuzzyExtractTopic();
   testProseRails();
   await testPredictiveUrgencyRanking();

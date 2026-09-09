@@ -404,6 +404,7 @@ function writerSystem(ownerSovereignty: string): string {
     "Tulis jawaban seperti manusia yang sedang bercerita menjelaskan topik ke teman: bahasa santai sehari-hari, hangat, panggil pemilik 'kamu' (bukan 'Anda'), dan langsung ke inti.",
     "Jangan meniru gaya laporan: JANGAN memakai judul/header (mis. 'Jurnal dan Prosiding...'), JANGAN daftar bullet atau nomor kecuali benar-benar membantu, dan JANGAN menutup dengan kalimat templat seperti 'Dengan menggabungkan..., Anda dapat...'.",
     "Buka langsung ke topik dengan kalimat natural, lalu sampaikan tiap sudut riset dalam paragraf naratif yang mengalir; sebut topik sudutnya dan sumbernya (bila diketahui) di dalam alur.",
+    "FOKUS, JANGAN LEBAR: pilih 1–2 sudut paling berdampak saja; jangan mendaftar semua kemungkinan yang ditemukan riset. Jawab seperti manusia yang menuturkan intinya ke teman — kalau cukup 2 kalimat per sudut, jangan 8.",
     "Bila ada FAKTA TERVERIFIKASI (dari sub-agen pengekstrak), prioritaskan dan tandai dengan sumbernya.",
     "Tutup dengan catatan singkat atau rekomendasi jika relevan — santai, bukan kesimpulan laporan.",
     "Gunakan info dari referensi yang BERBEDA untuk memperkaya; jangan hanya mengulang satu sumber.",

@@ -71,7 +71,7 @@ function buildFallbackMessages(
 // separate short-branch in isFollowUpQuery was dead redundancy (its tokens were
 // already matched here) and silently dropped "itu maksudnya apa" (M3).
 const FOLLOWUP_RE =
-  /\b(lebih dalam|lebih dalam lagi|lebih detail|lebih lanjut|lanjutkan|lanjut|lengkapin|lengkapi|perdalam|perinci|detail|detailin|terus(?:,|kan)?|yang tadi|yg tadi|tadi itu|tambahin|tambahkan|expand|go deeper|jelasin lebih|jelaskan lebih|sampe? tuntas|ceritain lebih|info lebih|maksud\w*|maksudnya apa|apa maksudnya|bukan\s+[^?!.,]{1,40}\s+tapi)\b/i;
+  /\b(lebih dalam|lebih dalam lagi|lebih detail|lebih lanjut|lanjutkan|lanjut|lengkapin|lengkapi|perdalam|perinci|detail|detailin|terus(?:,|kan)?|yang tadi|yg tadi|tadi itu|tambahin|tambahkan|expand|go deeper|jelasin lebih|jelaskan lebih|sampe? tuntas|ceritain lebih|info lebih|maksud\w*|maksudnya apa|apa maksudnya|bukan\s+[^?!.,]{1,40}\s+tapi|kalau\s+untuk)\b/i;
 
 /** True if the (already normalized) message is a follow-up request that extends
  *  a prior answer rather than starting a brand-new topic. Read-only. Single
@@ -1505,13 +1505,20 @@ export async function searchAndSynthesize(
   // Cite a URL as PLAIN TEXT and only from the source list above. This mirrors
   // the writer subagent rails so single-pass research can never leak report
   // styling either.
+  // m9-v10 SIMPLICITY RAIL (owner principle): a human answers simply and
+  // focused, not broadly and encyclopedically. Pick 1-2 highest-impact points
+  // instead of surveying every possibility; short everyday sentences; stop
+  // when the question is answered (2 kalimat kalau cukup, jangan 10).
   context.push({
     role: "system",
     content:
       `Jawablah dalam narasi yang MENGALIR seperti tulisan manusia: ` +
       `tanpa bullet/poin, tanpa judul berformat (bold+kolon), tanpa baris pembuka "Berikut rangkuman", ` +
       `tanpa penutup templat ("Intinya…" atau "Semoga membantu"). ` +
-      `Tulis URL cukup sebagai teks biasa (jangan pakai [label](url)), dan hanya URL dari daftar sumber sah.`,
+      `Tulis URL cukup sebagai teks biasa (jangan pakai [label](url)), dan hanya URL dari daftar sumber sah. ` +
+      `BICARALAH JADI MANUSIA BIASA: langsung ke inti, pilih 1–2 poin paling berdampak ` +
+      `(jangan mendaftar semua kemungkinan), pakai kalimat sehari-hari yang pendek, ` +
+      `dan berhenti begitu pertanyaan sudah terjawab — kalau cukup 2 kalimat, jangan 10.`,
   });
   // M8-v27 INSTITUTIONAL FRAME — attributes every claim to the institution whose
   // site produced the evidence (deterministic, no invented citations). Fail-
