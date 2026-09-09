@@ -138,10 +138,36 @@ export function stripTelegramMarkdown(text: string): string {
   return t.replace(/ {2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-/** Truncate to Telegram's 4096 limit defensively (keep 4000 headroom). */
+/** Hard-truncate caption text (photo/voice captions aren't chunkable). */
 function truncate(text: string): string {
   if (text.length <= MAX_MSG_LEN) return text;
   return text.slice(0, MAX_MSG_LEN - 16) + "...\n[truncated]";
+}
+
+/** Split long text into ≤MAX_MSG_LEN chunks on newline/sentence boundaries so
+ *  long answers are delivered whole instead of being truncated. Falls back to a
+ *  hard mid-word cut only when a single token exceeds the limit. */
+function chunkText(text: string): string[] {
+  if (text.length <= MAX_MSG_LEN) return [text];
+  const chunks: string[] = [];
+  let cur = "";
+  for (const line of text.split("\n")) {
+    if ((cur + "\n" + line).length > MAX_MSG_LEN) {
+      if (cur) {
+        chunks.push(cur.trim());
+        cur = "";
+      }
+      if (line.length > MAX_MSG_LEN) {
+        for (let i = 0; i < line.length; i += MAX_MSG_LEN) {
+          chunks.push(line.slice(i, i + MAX_MSG_LEN));
+        }
+        continue;
+      }
+    }
+    cur = cur ? cur + "\n" + line : line;
+  }
+  if (cur.trim()) chunks.push(cur.trim());
+  return chunks;
 }
 
 export async function sendMessage(
@@ -150,11 +176,21 @@ export async function sendMessage(
   text: string,
   extra: { replyMarkup?: { inline_keyboard: InlineButton[][] }; parseMode?: string } = {},
 ): Promise<unknown> {
-  const clean = stripTelegramMarkdown(truncate(text));
-  const body: Record<string, unknown> = { chat_id: chatId, text: clean };
-  if (extra.parseMode) body.parse_mode = extra.parseMode;
-  if (extra.replyMarkup) body.reply_markup = extra.replyMarkup;
-  return call(env, "sendMessage", body);
+  const chunks = chunkText(text);
+  const last = { chat_id: chatId, text: "", ok: false };
+  for (const chunk of chunks) {
+    const clean = stripTelegramMarkdown(chunk);
+    const body: Record<string, unknown> = { chat_id: chatId, text: clean };
+    if (extra.parseMode) body.parse_mode = extra.parseMode;
+    if (extra.replyMarkup) body.reply_markup = extra.replyMarkup;
+    if (chunks.length === 1) return call(env, "sendMessage", body);
+    last.ok = true;
+    await call(env, "sendMessage", body).catch((e) => {
+      console.error("[telegram] chunk send failed:", (e as Error).message);
+      last.ok = false;
+    });
+  }
+  return last;
 }
 
 /** Deliver a conversational reply to the owner with one retry plus a

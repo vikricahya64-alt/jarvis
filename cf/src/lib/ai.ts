@@ -755,7 +755,9 @@ body: JSON.stringify({
           model,
           temperature: 0.6,
           messages,
-          max_tokens: 2200,
+          // Deep tier writes long-form research/prose — give it room so
+          // answers aren't cut before the full rewrite is done.
+          max_tokens: opts.deep ? 4096 : 2200,
         }),
     }, timeoutMs);
     if (!res.ok) return { ok: false, status: res.status };

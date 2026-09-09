@@ -36,20 +36,20 @@ export interface FormatConfig {
 const FORMAT_PRESETS: Record<string, FormatConfig> = {
   chat: {
     useEmoji: true,
-    maxParagraphs: 2,
+    maxParagraphs: 6,
     useBold: false,
     useBullets: false,
     lineBreaks: "single",
-    maxWordsChat: 30,
+    maxWordsChat: 150,
     includeCitations: false,
   },
   research: {
     useEmoji: false,
-    maxParagraphs: 6,
+    maxParagraphs: 16,
     useBold: true,
-    useBullets: true,
+    useBullets: false,
     lineBreaks: "double",
-    maxWordsChat: 400,
+    maxWordsChat: 900,
     includeCitations: true,
   },
   command: {
@@ -99,18 +99,14 @@ export function adaptLength(
   if (preferredLength === "detailed") targetWords = Math.max(targetWords, 100);
   if (queryLen > 5) targetWords = Math.max(targetWords, 50); // longer queries deserve longer answers
 
-  // Simple query → short answer
-  if (queryLen <= 3 && queryType === "chat") {
-    if (words.length > targetWords) {
-      return words.slice(0, targetWords - 5).join(" ") + "...";
-    }
-  }
-
   // Complex query → allow longer answer
   if (queryType === "research" && words.length < 30) {
     return reply;
   }
 
+  // Chat/other: let the reply flow naturally — the LLM's own length is
+  // respected (only "short" preference trims). Hard caps live in the
+  // Telegram chunker, not here, so answers aren't chopped mid-thought.
   return reply;
 }
 
