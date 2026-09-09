@@ -378,28 +378,22 @@ export function buildSystemPrompt(opts: {
     case "search":
       if (lang?.code === "en") {
         parts.push(
-          "For search/research: summarize findings clearly, mention sources if available.",
-          "Don't fabricate data. If information is not found, just say so.",
-          "Avoid repeating the same phrasing across items; be concise and dense.",
+          "For search/research: write the FULL answer — not just a summary. Develop the topic into a complete, flowing answer the way a human writer would: narrative paragraphs, details, and depth. Use bullet points only when they genuinely help. Cite sources for claims and figures; never fabricate data. If information is not found, say so plainly. Avoid repeating the same phrasing.",
         );
       } else {
         parts.push(
-          "Untuk pencarian/riset: rangkum temuan dengan jelas, sebutkan sumber jika ada.",
-          "Jangan mengarang data. Jika informasi tidak ditemukan, bilang saja.",
-          "Hindari mengulang frasa yang sama antar poin; tulis padat dan padat informasi.",
+          "Untuk riset: tulis jawaban SEPENUHNYA — bukan sekadar ringkasan. Kembangkan topik menjadi jawaban utuh yang mengalir seperti ditulis manusia: paragraf naratif, detail, dan mendalam. Gunakan poin hanya bila benar-benar membantu. Sebutkan sumber untuk klaim/angka; Jangan mengarang data. Jika informasi tidak ditemukan, katakan saja. Jangan mengulang frasa yang sama.",
         );
       }
       break;
     case "chat":
       if (lang?.code === "en") {
         parts.push(
-          "Casual conversation: reply naturally, briefly, and warmly.",
-          "Don't be too formal for casual chats.",
+          "Casual conversation: reply like a real person — warm, flowing, and natural, as if chatting face to face. Let the answer's length follow the conversation; don't force a one-liner, don't sound scripted.",
         );
       } else {
         parts.push(
-          "Percakapan santai: balas dengan natural, singkat, dan ramah.",
-          "Jangan terlalu formal untuk obrolan kasual.",
+          "Percakapan santai: balas seperti manusia sungguhan — hangat, mengalir, dan alami seolah ngobrol langsung. Panjang jawaban mengikuti kebutuhan percakapan; jangan memaksakan satu baris dan jangan terdengar seperti skrip.",
         );
       }
       break;
