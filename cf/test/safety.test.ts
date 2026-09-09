@@ -1019,6 +1019,7 @@ async function testComprehensionGate() {
   // hambar vs teks pada platform age" → fabricated "platform AGE").
   const brainSrc = readFileSync(new URL("../src/lib/intelligence.ts", import.meta.url), "utf-8");
   const aiSrc = readFileSync(new URL("../src/lib/ai.ts", import.meta.url), "utf-8");
+  const detectGarbledInputPresent = /detectGarbledInput/.test(aiSrc);
 
   // The gate must exist and be wired: detectGarbledInput is called in the brain
   // BEFORE act/execute, and returns a clarifying ask (source understand_clarify).
@@ -1028,10 +1029,30 @@ async function testComprehensionGate() {
     "brain must return source understand_clarify when garbled detected");
   assert.ok(/clear === false/.test(brainSrc) || /garbled\.clear === false/.test(brainSrc),
     "brain must short-circuit when garbled detected (no confident fake answer)");
-  assert.ok(/detectGarbledInput/.test(aiSrc),
+  assert.ok(detectGarbledInputPresent,
     "ai must export detectGarbledInput");
   assert.ok(/"clear": true\/false/.test(aiSrc),
     "ai comprehension gate must ask for a clear true/false verdict");
+
+  // m9-v11 FAIL-CLOSED COMPREHENSION: the gate must NOT treat a message as
+  // clear on low confidence — the live failure "platform age" was judged
+  // "clear" by the same model that then fabricated a whole "platform AGE"
+  // ecosystem. The gate must require a confidence ceiling and ASK below it.
+  assert.ok(/COMPREHENSION_MIN_CONFIDENCE/.test(aiSrc),
+    "ai must define a minimum confidence for the comprehension gate");
+  assert.ok(/conf >= COMPREHENSION_MIN_CONFIDENCE/.test(aiSrc),
+    "ai must demand confidence >= threshold before treating input as clear");
+  assert.ok(/jangan pernah menjawab dengan raguan tinggi/.test(aiSrc),
+    "ai gate must instruct the LLM to never answer at high doubt");
+  assert.ok(/TIDAK PERNAH muncul di konteks percakapan/.test(aiSrc),
+    "ai gate must check whether named platforms/terms are grounded in context");
+
+  // m9-v11 ANTI-FABRICATION RAIL: the chat path must never confidently
+  // explain an unknown platform/product. Applies to ALL simple_llm turns.
+  assert.ok(/ANTI-FABRICATION RAIL/.test(brainSrc),
+    "brain must carry the anti-fabrication rail on the chat path");
+  assert.ok(/belum paham yang kamu maksud/.test(brainSrc),
+    "chat path must be able to say 'aku belum paham' instead of fabricating");
 
   // The gate must be SKIPPED on deterministic low-risk paths (commands). A
   // slash command / emergency / self-ref must never be blocked by a gate.
