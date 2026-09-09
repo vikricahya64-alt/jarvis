@@ -1192,6 +1192,161 @@ async function withResilience(env, provider, step, fn) {
 }
 __name(withResilience, "withResilience");
 
+// src/lib/vercel.ts
+var REQUEST_TIMEOUT_MS = 2e4;
+function vercelBaseUrl(env) {
+  return (env.VERCEL_CONNECTOR_URL || "https://jarvis-connector.vercel.app").replace(/\/+$/, "");
+}
+__name(vercelBaseUrl, "vercelBaseUrl");
+async function connectorFetch(env, path, init = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+  try {
+    const base = vercelBaseUrl(env);
+    const headers = {
+      "Content-Type": "application/json",
+      ...init.headers
+    };
+    if (env.VERCEL_CONNECTOR_TOKEN) {
+      headers["Authorization"] = `Bearer ${env.VERCEL_CONNECTOR_TOKEN}`;
+    }
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${base}${path}`, {
+        ...init,
+        headers,
+        signal: ac.signal
+      });
+      let json = null;
+      try {
+        json = await res.json();
+      } catch {
+      }
+      return { ok: res.ok, status: res.status, json };
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return { ok: false, status: 0, json: null };
+  }
+}
+__name(connectorFetch, "connectorFetch");
+async function generateImageViaVercel(env, prompt, opts = {}) {
+  const p = (prompt || "").trim();
+  if (!p) return null;
+  const { ok, json } = await connectorFetch(env, "/api/image", {
+    method: "POST",
+    body: JSON.stringify({
+      prompt: p.slice(0, 500),
+      provider: "pollinations",
+      width: opts.width ?? 1024,
+      height: opts.height ?? 1024
+    })
+  });
+  if (!ok) return null;
+  const data = json;
+  if (!data?.imageUrl) return null;
+  const m = data.imageUrl.match(/^data:[^;]+;base64,(.+)$/s);
+  if (!m) return null;
+  try {
+    const bin = atob(m[1]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+__name(generateImageViaVercel, "generateImageViaVercel");
+function flattenFigmaSummary(node, depth, maxDepth, out) {
+  if (!node || depth > maxDepth) return;
+  const name = node.name || "(tanpa nama)";
+  const type = node.type || "node";
+  out.push(`${"  ".repeat(depth)}\u2022 ${name} \u2014 ${type}`);
+  if (node.children?.length) {
+    for (const c of node.children.slice(0, 12)) {
+      flattenFigmaSummary(c, depth + 1, maxDepth, out);
+    }
+  }
+}
+__name(flattenFigmaSummary, "flattenFigmaSummary");
+async function readFigmaViaVercel(env, fileKeyOrUrl, opts = {}) {
+  const raw = (fileKeyOrUrl || "").trim();
+  if (!raw) return null;
+  const urlMatch = raw.match(/figma\.com\/\w+\/([A-Za-z0-9_-]{8,})\//i);
+  const fileKey = urlMatch ? urlMatch[1] : raw;
+  if (!/^[A-Za-z0-9_-]{8,}$/.test(fileKey)) return null;
+  const params = new URLSearchParams();
+  if (opts.nodeId) params.set("ids", opts.nodeId);
+  params.set("depth", String(Math.max(1, Math.min(3, opts.depth ?? 2))));
+  const { ok, status, json } = await connectorFetch(
+    env,
+    `/api/figma?fileKey=${encodeURIComponent(fileKey)}&${params.toString()}`
+  );
+  if (!ok) return { summary: "", name: null, status };
+  const data = json;
+  if (!data || data.error) return { summary: "", name: null, status };
+  const name = data.name ?? null;
+  const lines = [];
+  lines.push(`\u{1F4D0} *${name || "File Figma"}*`);
+  const root = data.document;
+  if (root?.children) {
+    for (const page of root.children.slice(0, 6)) {
+      lines.push("");
+      lines.push(`## ${page.name || "(halaman)"}`);
+      flattenFigmaSummary(page, 1, Math.max(1, Math.min(2, (opts.depth ?? 2) - 1)), lines);
+    }
+    if (root.children.length > 6) {
+      lines.push(`
+_\u2026dan ${root.children.length - 6} halaman lainnya_.`);
+    }
+  }
+  return { summary: lines.join("\n"), name, status };
+}
+__name(readFigmaViaVercel, "readFigmaViaVercel");
+async function notionViaVercel(env, payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const { ok, json } = await connectorFetch(env, "/api/notion", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  return ok ? json : null;
+}
+__name(notionViaVercel, "notionViaVercel");
+async function notionSearchViaVercel(env, query) {
+  const q = (query || "").trim().slice(0, 100);
+  const json = await notionViaVercel(env, q ? { action: "search", content: { query: q } } : { action: "search" });
+  const data = json;
+  if (!data?.results) return [];
+  const out = [];
+  for (const r of data.results.slice(0, 8)) {
+    let title = "";
+    if (r.object === "database" && r.title?.length) {
+      title = r.title.map((t) => t.plain_text ?? "").join("");
+    } else if (r.properties) {
+      for (const prop of Object.values(r.properties)) {
+        if (prop?.title?.length) {
+          title = prop.title.map((t) => t.plain_text ?? "").join("");
+          break;
+        }
+      }
+    }
+    out.push({ id: r.id, title: title.slice(0, 120) || "(tanpa judul)", kind: r.object ?? "page" });
+  }
+  return out;
+}
+__name(notionSearchViaVercel, "notionSearchViaVercel");
+function connectorsStatus(env) {
+  const base = vercelBaseUrl(env);
+  const lines = [
+    `\u{1F50C} *Vercel Connector*: ${base}`,
+    `  - Image (Pollinations): unlimited, no key \u2014 reachable`,
+    `  - Figma / Notion / GitHub Actions: via connector secrets`,
+    `  - Token: ${env.VERCEL_CONNECTOR_TOKEN ? "terpasang" : "tidak (publik)"}`
+  ];
+  return lines.join("\n");
+}
+__name(connectorsStatus, "connectorsStatus");
+
 // src/lib/agent_executor.ts
 var GITHUB_API = "https://api.github.com/repos/";
 var DEEP_RESEARCH_PROTOCOL = `
@@ -1205,9 +1360,19 @@ PROTOKOL LAPORAN (wajib):
 async function delegateToGithub(env, taskId, task) {
   const repo = env.GITHUB_REPO ?? "";
   const token2 = env.GITHUB_TOKEN ?? "";
-  if (!repo || !token2) return { error: "executor-not-configured" };
+  if (!repo) return { error: "executor-not-configured" };
+  const payload = `${task}${DEEP_RESEARCH_PROTOCOL}`.slice(0, 3800);
+  const [owner, repoName] = repo.split("/");
+  if (env.VERCEL_CONNECTOR_URL && env.VERCEL_CONNECTOR_TOKEN && owner && repoName) {
+    const dispatched = await dispatchViaConnector(env, { owner, repo: repoName, taskId, task: payload });
+    if (dispatched.ok) {
+      await recordDispatchAudit(env, taskId, repo, task, "connector");
+      return {};
+    }
+    console.error(`[delegate] connector path failed (${dispatched.error}) \u2014 using direct GitHub`);
+  }
+  if (!token2) return { error: "executor-not-configured" };
   try {
-    const payload = `${task}${DEEP_RESEARCH_PROTOCOL}`.slice(0, 3800);
     const res = await fetchWithTimeout(
       `${GITHUB_API}${repo}/dispatches`,
       {
@@ -1227,22 +1392,57 @@ async function delegateToGithub(env, taskId, task) {
       15e3
     );
     if (!res.ok) return { error: `github_http_${res.status}` };
-    if (env.CONFIG_KV) {
-      try {
-        await env.CONFIG_KV.put(
-          `dispatch:${taskId}`,
-          JSON.stringify({ ts: Date.now(), repo, task: task.slice(0, 200) }),
-          { expirationTtl: 7 * 86400 }
-        );
-      } catch {
-      }
-    }
+    await recordDispatchAudit(env, taskId, repo, task, "direct");
     return {};
   } catch (e) {
     return { error: `dispatch_failed:${String(e).slice(0, 80)}` };
   }
 }
 __name(delegateToGithub, "delegateToGithub");
+async function dispatchViaConnector(env, opts) {
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 15e3);
+    try {
+      const res = await fetch(`${vercelBaseUrl(env)}/api/actions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${env.VERCEL_CONNECTOR_TOKEN}`
+        },
+        body: JSON.stringify({
+          action: "repository_dispatch",
+          owner: opts.owner,
+          repo: opts.repo,
+          event_type: "jarvis-task",
+          client_payload: { task_id: String(opts.taskId), task: opts.task }
+        }),
+        signal: ac.signal
+      });
+      if (!res.ok) return { ok: false, error: `connector_http_${res.status}` };
+      const data = await res.json().catch(() => null);
+      return data?.success === false ? { ok: false, error: "connector_rejected" } : { ok: true };
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (e) {
+    return { ok: false, error: `connector_failed:${String(e).slice(0, 80)}` };
+  }
+}
+__name(dispatchViaConnector, "dispatchViaConnector");
+async function recordDispatchAudit(env, taskId, repo, task, via) {
+  if (env.CONFIG_KV) {
+    try {
+      await env.CONFIG_KV.put(
+        `dispatch:${taskId}`,
+        JSON.stringify({ ts: Date.now(), repo, via, task: task.slice(0, 200) }),
+        { expirationTtl: 7 * 86400 }
+      );
+    } catch {
+    }
+  }
+}
+__name(recordDispatchAudit, "recordDispatchAudit");
 var ANSI_RE = /\u001b\[[0-9;]*[A-Za-z]/g;
 function sanitizeAgentReport(text) {
   try {
@@ -5542,161 +5742,6 @@ function buildFinalReply(rawReply, mode, sentiment, opts = {}) {
 ${formatted}` : formatted;
 }
 __name(buildFinalReply, "buildFinalReply");
-
-// src/lib/vercel.ts
-var REQUEST_TIMEOUT_MS = 2e4;
-function vercelBaseUrl(env) {
-  return (env.VERCEL_CONNECTOR_URL || "https://jarvis-connector.vercel.app").replace(/\/+$/, "");
-}
-__name(vercelBaseUrl, "vercelBaseUrl");
-async function connectorFetch(env, path, init = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
-  try {
-    const base = vercelBaseUrl(env);
-    const headers = {
-      "Content-Type": "application/json",
-      ...init.headers
-    };
-    if (env.VERCEL_CONNECTOR_TOKEN) {
-      headers["Authorization"] = `Bearer ${env.VERCEL_CONNECTOR_TOKEN}`;
-    }
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), timeoutMs);
-    try {
-      const res = await fetch(`${base}${path}`, {
-        ...init,
-        headers,
-        signal: ac.signal
-      });
-      let json = null;
-      try {
-        json = await res.json();
-      } catch {
-      }
-      return { ok: res.ok, status: res.status, json };
-    } finally {
-      clearTimeout(timer);
-    }
-  } catch {
-    return { ok: false, status: 0, json: null };
-  }
-}
-__name(connectorFetch, "connectorFetch");
-async function generateImageViaVercel(env, prompt, opts = {}) {
-  const p = (prompt || "").trim();
-  if (!p) return null;
-  const { ok, json } = await connectorFetch(env, "/api/image", {
-    method: "POST",
-    body: JSON.stringify({
-      prompt: p.slice(0, 500),
-      provider: "pollinations",
-      width: opts.width ?? 1024,
-      height: opts.height ?? 1024
-    })
-  });
-  if (!ok) return null;
-  const data = json;
-  if (!data?.imageUrl) return null;
-  const m = data.imageUrl.match(/^data:[^;]+;base64,(.+)$/s);
-  if (!m) return null;
-  try {
-    const bin = atob(m[1]);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes;
-  } catch {
-    return null;
-  }
-}
-__name(generateImageViaVercel, "generateImageViaVercel");
-function flattenFigmaSummary(node, depth, maxDepth, out) {
-  if (!node || depth > maxDepth) return;
-  const name = node.name || "(tanpa nama)";
-  const type = node.type || "node";
-  out.push(`${"  ".repeat(depth)}\u2022 ${name} \u2014 ${type}`);
-  if (node.children?.length) {
-    for (const c of node.children.slice(0, 12)) {
-      flattenFigmaSummary(c, depth + 1, maxDepth, out);
-    }
-  }
-}
-__name(flattenFigmaSummary, "flattenFigmaSummary");
-async function readFigmaViaVercel(env, fileKeyOrUrl, opts = {}) {
-  const raw = (fileKeyOrUrl || "").trim();
-  if (!raw) return null;
-  const urlMatch = raw.match(/figma\.com\/\w+\/([A-Za-z0-9_-]{8,})\//i);
-  const fileKey = urlMatch ? urlMatch[1] : raw;
-  if (!/^[A-Za-z0-9_-]{8,}$/.test(fileKey)) return null;
-  const params = new URLSearchParams();
-  if (opts.nodeId) params.set("ids", opts.nodeId);
-  params.set("depth", String(Math.max(1, Math.min(3, opts.depth ?? 2))));
-  const { ok, status, json } = await connectorFetch(
-    env,
-    `/api/figma?fileKey=${encodeURIComponent(fileKey)}&${params.toString()}`
-  );
-  if (!ok) return { summary: "", name: null, status };
-  const data = json;
-  if (!data || data.error) return { summary: "", name: null, status };
-  const name = data.name ?? null;
-  const lines = [];
-  lines.push(`\u{1F4D0} *${name || "File Figma"}*`);
-  const root = data.document;
-  if (root?.children) {
-    for (const page of root.children.slice(0, 6)) {
-      lines.push("");
-      lines.push(`## ${page.name || "(halaman)"}`);
-      flattenFigmaSummary(page, 1, Math.max(1, Math.min(2, (opts.depth ?? 2) - 1)), lines);
-    }
-    if (root.children.length > 6) {
-      lines.push(`
-_\u2026dan ${root.children.length - 6} halaman lainnya_.`);
-    }
-  }
-  return { summary: lines.join("\n"), name, status };
-}
-__name(readFigmaViaVercel, "readFigmaViaVercel");
-async function notionViaVercel(env, payload) {
-  if (!payload || typeof payload !== "object") return null;
-  const { ok, json } = await connectorFetch(env, "/api/notion", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-  return ok ? json : null;
-}
-__name(notionViaVercel, "notionViaVercel");
-async function notionSearchViaVercel(env, query) {
-  const q = (query || "").trim().slice(0, 100);
-  const json = await notionViaVercel(env, q ? { action: "search", content: { query: q } } : { action: "search" });
-  const data = json;
-  if (!data?.results) return [];
-  const out = [];
-  for (const r of data.results.slice(0, 8)) {
-    let title = "";
-    if (r.object === "database" && r.title?.length) {
-      title = r.title.map((t) => t.plain_text ?? "").join("");
-    } else if (r.properties) {
-      for (const prop of Object.values(r.properties)) {
-        if (prop?.title?.length) {
-          title = prop.title.map((t) => t.plain_text ?? "").join("");
-          break;
-        }
-      }
-    }
-    out.push({ id: r.id, title: title.slice(0, 120) || "(tanpa judul)", kind: r.object ?? "page" });
-  }
-  return out;
-}
-__name(notionSearchViaVercel, "notionSearchViaVercel");
-function connectorsStatus(env) {
-  const base = vercelBaseUrl(env);
-  const lines = [
-    `\u{1F50C} *Vercel Connector*: ${base}`,
-    `  - Image (Pollinations): unlimited, no key \u2014 reachable`,
-    `  - Figma / Notion / GitHub Actions: via connector secrets`,
-    `  - Token: ${env.VERCEL_CONNECTOR_TOKEN ? "terpasang" : "tidak (publik)"}`
-  ];
-  return lines.join("\n");
-}
-__name(connectorsStatus, "connectorsStatus");
 
 // src/lib/ai.ts
 var GROQ_MODEL = "openai/gpt-oss-120b";

@@ -17,6 +17,7 @@
 
 import { Env } from "./db";
 import { fetchWithTimeout } from "./resilience";
+import { vercelBaseUrl } from "./vercel";
 
 const GITHUB_API = "https://api.github.com/repos/";
 
@@ -41,8 +42,11 @@ export function agentExecutorConfigured(env: Env): boolean {
   return Boolean(env.AGENT_TOKEN && env.GITHUB_TOKEN && /^[^/\s]+\/[^/\s]+$/.test(repo));
 }
 
-/** Queue a task to the GitHub repository_dispatch webhook. Returns a run id
- *  when accepted, or an error token on failure (never throws). */
+/** Queue a task to the GitHub repository_dispatch webhook — via the Vercel
+ *  Connector FIRST (token lives there, not in this worker), falling back to a
+ *  direct GitHub API call when the connector is unconfigured/unreachable.
+ *  Returns a run id when accepted, or an error token on failure (never throws).
+ *  Fail-closed chain: connector → direct GitHub → error token. */
 export async function delegateToGithub(
   env: Env,
   taskId: number,
@@ -50,9 +54,24 @@ export async function delegateToGithub(
 ): Promise<DelegateResult> {
   const repo = env.GITHUB_REPO ?? "";
   const token = env.GITHUB_TOKEN ?? "";
-  if (!repo || !token) return { error: "executor-not-configured" };
+  if (!repo) return { error: "executor-not-configured" };
+
+  const payload = `${task}${DEEP_RESEARCH_PROTOCOL}`.slice(0, 3800);
+  const [owner, repoName] = repo.split("/");
+
+  // Path 1: Vercel Connector (repository_dispatch with token server-side).
+  if (env.VERCEL_CONNECTOR_URL && env.VERCEL_CONNECTOR_TOKEN && owner && repoName) {
+    const dispatched = await dispatchViaConnector(env, { owner, repo: repoName, taskId, task: payload });
+    if (dispatched.ok) {
+      await recordDispatchAudit(env, taskId, repo, task, "connector");
+      return {};
+    }
+    console.error(`[delegate] connector path failed (${dispatched.error}) — using direct GitHub`);
+  }
+
+  // Path 2: direct GitHub API (legacy fallback when connector is unavailable).
+  if (!token) return { error: "executor-not-configured" };
   try {
-    const payload = `${task}${DEEP_RESEARCH_PROTOCOL}`.slice(0, 3800);
     const res = await fetchWithTimeout(
       `${GITHUB_API}${repo}/dispatches`,
       {
@@ -72,19 +91,64 @@ export async function delegateToGithub(
       15000,
     );
     if (!res.ok) return { error: `github_http_${res.status}` };
-    // gateguard audit: immutable dispatch record for the owner to verify.
-    if (env.CONFIG_KV) {
-      try {
-        await env.CONFIG_KV.put(
-          `dispatch:${taskId}`,
-          JSON.stringify({ ts: Date.now(), repo, task: task.slice(0, 200) }),
-          { expirationTtl: 7 * 86400 },
-        );
-      } catch { /* audit is best-effort, never breaks dispatch */ }
-    }
+    await recordDispatchAudit(env, taskId, repo, task, "direct");
     return {};
   } catch (e) {
     return { error: `dispatch_failed:${String(e).slice(0, 80)}` };
+  }
+}
+
+/** repository_dispatch via the Vercel Connector (bounded, never throws). */
+async function dispatchViaConnector(
+  env: Env,
+  opts: { owner: string; repo: string; taskId: number; task: string },
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 15_000);
+    try {
+      const res = await fetch(`${vercelBaseUrl(env)}/api/actions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${env.VERCEL_CONNECTOR_TOKEN}`,
+        },
+        body: JSON.stringify({
+          action: "repository_dispatch",
+          owner: opts.owner,
+          repo: opts.repo,
+          event_type: "jarvis-task",
+          client_payload: { task_id: String(opts.taskId), task: opts.task },
+        }),
+        signal: ac.signal,
+      });
+      if (!res.ok) return { ok: false, error: `connector_http_${res.status}` };
+      const data = (await res.json().catch(() => null)) as { success?: boolean } | null;
+      return data?.success === false ? { ok: false, error: "connector_rejected" } : { ok: true };
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (e) {
+    return { ok: false, error: `connector_failed:${String(e).slice(0, 80)}` };
+  }
+}
+
+/** Immutable dispatch audit record in KV (gateguard; never breaks dispatch). */
+async function recordDispatchAudit(
+  env: Env,
+  taskId: number,
+  repo: string,
+  task: string,
+  via: "connector" | "direct",
+): Promise<void> {
+  if (env.CONFIG_KV) {
+    try {
+      await env.CONFIG_KV.put(
+        `dispatch:${taskId}`,
+        JSON.stringify({ ts: Date.now(), repo, via, task: task.slice(0, 200) }),
+        { expirationTtl: 7 * 86400 },
+      );
+    } catch { /* audit is best-effort */ }
   }
 }
 
