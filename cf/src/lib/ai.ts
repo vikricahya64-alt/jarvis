@@ -20,6 +20,7 @@ import { buildFinalReply } from "./response_formatter";
 import { detectEmotion as detectEmotionSig, inferEmotionFromContext, getMoodState, detectTopicSentiment } from "./emotion";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
 import { gateVerdict, tallyGate, repairTruncatedReply, isLikelyTruncated, sanitizeUncitedLinks, type GateVerdict } from "./verifier";
+import { extractJsonBlock } from "./structured";
 import { budgetedRecovery } from "./failure";
 // Canonical truncation helpers now live in ./verifier; re-exported here for
 // any existing importers (single source of truth, no behavior change).
@@ -1896,16 +1897,23 @@ function likelyClear(text: string): boolean {
   // words and plausible Indonesian words — skip the LLM gate (fast path).
   if (/^[\/!]/.test(low)) return true;
   if (/\b(halo|hai|hi|terima kasih|thanks|oke|ok)\b/.test(low)) return true;
-  // Question with a known question word AND no obvious acronym/odd token →
-  // treat as clear. TOO tricky to be fully deterministic; the LLM gate below
-  // is the authoritative check. Only skip for very high-signal short messages.
   if (low.length <= 3) return true;
   return false;
 }
 
-/** Run the comprehension gate. Uses a single fast LLM check; fail-open: any
- *  LLM error → treat as "clear" so a transient hiccup never blocks the reply.
- *  (A failed LLM is not a garbled query — blocking would only add failures.) */
+/** Minimum confidence for the comprehension gate to treat a message as clear.
+ *  Fail-closed: BELOW this bar we ASK instead of answering — confidence is
+ *  expensive (a confident fabricated claim is worse than a clarifying ask). */
+const COMPREHENSION_MIN_CONFIDENCE = 0.8;
+
+/** Run the comprehension gate. Fail-CLOSED by default toward asking: the gate
+ *  only returns `clear: true` when the LLM is HIGHLY confident the message is
+ *  well-formed AND every named platform/product/term it mentions is genuinely
+ *  known (not an inferred-but-invented entity like the live "platform AGE"
+ *  failure, where the same model that hallucinates also judged the message
+ *  "clear"). Any LLM error → fail-open to clear (a dead LLM is not a garbled
+ *  query — blocking would only add failures); but a LOW-confidence verdict is
+ *  treated as ask (fail-closed). */
 export async function detectGarbledInput(
   env: Env,
   userText: string,
@@ -1922,17 +1930,21 @@ export async function detectGarbledInput(
     .join("\n");
 
   const prompt =
-    `Periksa apakah pesan berikut JELAS dan WAJAR dalam konteks percakapan, atau ada ` +
-    `kata/istilah yang aneh, salah ketik (typo), atau tidak sesuai dengan topik ` +
-    `yang sedang dibicarakan — sehingga manusia biasa akan bertanya dulu ` +
-    `("maksudnya apa?") sebelum menjawab.\n\n` +
+    `Deteksi apakah pesan pengguna JELAS dan WAJAR, atau penuh hal yang tidak dikenal ` +
+    `sehingga menjawab dengan percaya diri = mengarang.\n\n` +
     `Pesan: "${text}"\n` +
     `Topik aktif: ${topic ?? "(belum ada)"}\n` +
     (prior ? `\nKonteks percakapan terakhir:\n${prior}\n` : "") +
-    `\nBalas HANYA JSON: {"clear": true/false, "uncertain": "<istilah yang kurang jelas, atau kosong>"}. ` +
-    `clear=true bila pesan wajar dan bisa dijawab langsung; clear=false bila ada ` +
-    `bagian yang aneh/typo/tidak masuk akal untuk topik, sehingga pertanyaan ` +
-    `klarifikasi lebih tepat daripada jawaban percaya diri.`;
+    `\nPeriksa HAL-HAL BERIKUT:\n` +
+    `1. Apakah ada salah ketik (typo) atau kata-kata aneh yang tidak wajar?\n` +
+    `2. Apakah pesan menyebut platform/produk/merek/istilah (mis. "platform X", "di aplikasi Y") ` +
+    `yang TIDAK PERNAH muncul di konteks percakapan dan kamu tidak benar-benar YAKIN itu nyata?\n` +
+    `3. Seberapa yakin kamu (0-1) bahwa maksud pesan ini jelas dan bisa dijawab dari ` +
+    `perbendaharaanmu + konteks, TANPA mengarang platform/istilah baru?\n\n` +
+    `ATURAN: kalau ada platform/istilah yang tidak dikenal atau tidak muncul di konteks, ` +
+    `JANGAN berasumsi itu nyata — anggap tidak jelas (clear=false) dan sebut istilah itu. ` +
+    `Ballas HANYA JSON: {"clear": true/false, "confidence": 0-1, "uncertain": "<istilah yang kurang jelas, atau kosong>"}. ` +
+    `clear=true DILARANG kalau confidence < 0.8 (jangan pernah menjawab dengan raguan tinggi).`;
 
   try {
     const g = await llmRespond(env, prompt, {
@@ -1942,11 +1954,18 @@ export async function detectGarbledInput(
     });
     const raw = (g.reply ?? "").trim();
     if (!raw) return { clear: true, uncertain: null };
-    const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, "")) as { clear?: unknown; uncertain?: unknown };
-    if (typeof parsed.clear === "boolean") {
-      return { clear: parsed.clear, uncertain: typeof parsed.uncertain === "string" ? parsed.uncertain : null };
+    const block = extractJsonBlock(raw);
+    if (!block) return { clear: true, uncertain: null };
+    const parsed = JSON.parse(block) as { clear?: unknown; confidence?: unknown; uncertain?: unknown };
+    const conf = typeof parsed.confidence === "number" ? parsed.confidence : NaN;
+    const toldClear = parsed.clear === true;
+    // Fail-closed: low confidence → ASK. High confidence AND explicitly clear
+    // AND a named uncertain term (if any) is short → proceed.
+    if (toldClear && Number.isFinite(conf) && conf >= COMPREHENSION_MIN_CONFIDENCE) {
+      return { clear: true, uncertain: typeof parsed.uncertain === "string" ? parsed.uncertain : null };
     }
-    return { clear: true, uncertain: null };
+    const term = typeof parsed.uncertain === "string" ? parsed.uncertain : null;
+    return { clear: false, uncertain: term };
   } catch {
     return { clear: true, uncertain: null };
   }
