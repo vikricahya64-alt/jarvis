@@ -4558,6 +4558,10 @@ function detectTopicContinuity(currentText, priorContext) {
   if (simplifyWords.test(current) || /belum\s+mengerti|tidak\s+paham/i.test(current)) {
     return { isContinuation: true, topic: null, confidence: 0.72 };
   }
+  const anaphoricNya = /\b[a-z]{3,}nya\b/i.test(current);
+  if (anaphoricNya && priorSubstance.trim().length >= 30) {
+    return { isContinuation: true, topic: null, confidence: 0.78 };
+  }
   const followUpMarkers = /\b(lebih dalam|lanjut|terus|yang tadi|detail|expand|selanjutnya|kemudian|lalu|itupun|itu jug)\b/i;
   const isFollowUp = followUpMarkers.test(current);
   const switchMarkers = /\b(switch|ganti|beda|lain|sekarang|skrg|next|move on|gimana kalau|how about|what about)\b/i;
@@ -4584,6 +4588,17 @@ function updateWorkingMemory(session, userText, assistantReply) {
   const wm = session.workingMemory;
   const now = Date.now();
   wm.lastUpdated = now;
+  if (wm.currentTask && userText.length > 8) {
+    const taskStillRelevant = topicOverlaps(wm.currentTask, userText) || // Negations / clarifications continue the same task
+    /\b(?:bukan|maksudku|yang\s+saya\s+maksud|maksudnya|soalnya|sebenarnya)\b/i.test(userText) || // Short continuations ("ya", "oke", "itu") keep current task
+    userText.trim().length <= 15;
+    if (!taskStillRelevant) {
+      wm.extractedFacts.push(`Tugas sebelumnya: ${wm.currentTask} (${wm.stepsCompleted.length} langkah selesai)`);
+      wm.currentTask = null;
+      wm.stepsCompleted = [];
+      wm.pendingItems = [];
+    }
+  }
   const taskSwitch = /\b(coba|lanjut|ganti|sekarang|next|switch|gimana|bagaimana|cari|search|info)\b/i.test(userText);
   if (taskSwitch && wm.currentTask && wm.stepsCompleted.length > 0) {
     wm.extractedFacts.push(`Tugas sebelumnya: ${wm.currentTask} (${wm.stepsCompleted.length} langkah selesai)`);
@@ -4591,13 +4606,13 @@ function updateWorkingMemory(session, userText, assistantReply) {
     wm.stepsCompleted = [];
     wm.pendingItems = [];
   }
-  if (!wm.currentTask && userText.length > 10) {
+  if (!wm.currentTask && userText.length > 15 && !/\b(?:ya|oke|ok|bukan|bener|benar|betul)\b/i.test(userText.trim())) {
     wm.currentTask = userText.slice(0, 100);
   }
   if (assistantReply.length > 20) {
     const stepMatch = assistantReply.match(/(?:langkah|step|poin|1\.|2\.|3\.|pertama|kedua|ketiga)/gi);
     if (stepMatch) {
-      wm.stepsCompleted.push(assistantReply.slice(0, 80));
+      wm.stepsCompleted.push(`langkah-${wm.stepsCompleted.length + 1}`);
     }
   }
   const factPatterns = [
@@ -4608,7 +4623,10 @@ function updateWorkingMemory(session, userText, assistantReply) {
   for (const pat of factPatterns) {
     const matches = assistantReply.matchAll(pat);
     for (const m of matches) {
-      if (m[1]) wm.extractedFacts.push(m[1].trim().slice(0, 80));
+      const fact = m[1]?.trim().slice(0, 80);
+      if (fact && !/[|\[\]]/.test(fact)) {
+        wm.extractedFacts.push(fact);
+      }
     }
   }
   if (wm.extractedFacts.length > 10) {
@@ -4659,7 +4677,8 @@ async function buildEnrichedContext(env, owner, userText, opts = {}) {
   } catch {
   }
   const wm = session.workingMemory;
-  if (wm.currentTask && wm.stepsCompleted.length > 0) {
+  const wmRelevant = wm.currentTask && wm.stepsCompleted.length > 0 && (topicOverlaps(wm.currentTask, topic ?? userText) || Date.now() - wm.lastUpdated < 3e4);
+  if (wmRelevant) {
     const wmContent = [
       `[Memori kerja] Tugas: ${wm.currentTask}`,
       `Langkah selesai: ${wm.stepsCompleted.length}`,
@@ -5523,6 +5542,161 @@ function buildFinalReply(rawReply, mode, sentiment, opts = {}) {
 ${formatted}` : formatted;
 }
 __name(buildFinalReply, "buildFinalReply");
+
+// src/lib/vercel.ts
+var REQUEST_TIMEOUT_MS = 2e4;
+function vercelBaseUrl(env) {
+  return (env.VERCEL_CONNECTOR_URL || "https://jarvis-connector.vercel.app").replace(/\/+$/, "");
+}
+__name(vercelBaseUrl, "vercelBaseUrl");
+async function connectorFetch(env, path, init = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+  try {
+    const base = vercelBaseUrl(env);
+    const headers = {
+      "Content-Type": "application/json",
+      ...init.headers
+    };
+    if (env.VERCEL_CONNECTOR_TOKEN) {
+      headers["Authorization"] = `Bearer ${env.VERCEL_CONNECTOR_TOKEN}`;
+    }
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${base}${path}`, {
+        ...init,
+        headers,
+        signal: ac.signal
+      });
+      let json = null;
+      try {
+        json = await res.json();
+      } catch {
+      }
+      return { ok: res.ok, status: res.status, json };
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return { ok: false, status: 0, json: null };
+  }
+}
+__name(connectorFetch, "connectorFetch");
+async function generateImageViaVercel(env, prompt, opts = {}) {
+  const p = (prompt || "").trim();
+  if (!p) return null;
+  const { ok, json } = await connectorFetch(env, "/api/image", {
+    method: "POST",
+    body: JSON.stringify({
+      prompt: p.slice(0, 500),
+      provider: "pollinations",
+      width: opts.width ?? 1024,
+      height: opts.height ?? 1024
+    })
+  });
+  if (!ok) return null;
+  const data = json;
+  if (!data?.imageUrl) return null;
+  const m = data.imageUrl.match(/^data:[^;]+;base64,(.+)$/s);
+  if (!m) return null;
+  try {
+    const bin = atob(m[1]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+__name(generateImageViaVercel, "generateImageViaVercel");
+function flattenFigmaSummary(node, depth, maxDepth, out) {
+  if (!node || depth > maxDepth) return;
+  const name = node.name || "(tanpa nama)";
+  const type = node.type || "node";
+  out.push(`${"  ".repeat(depth)}\u2022 ${name} \u2014 ${type}`);
+  if (node.children?.length) {
+    for (const c of node.children.slice(0, 12)) {
+      flattenFigmaSummary(c, depth + 1, maxDepth, out);
+    }
+  }
+}
+__name(flattenFigmaSummary, "flattenFigmaSummary");
+async function readFigmaViaVercel(env, fileKeyOrUrl, opts = {}) {
+  const raw = (fileKeyOrUrl || "").trim();
+  if (!raw) return null;
+  const urlMatch = raw.match(/figma\.com\/\w+\/([A-Za-z0-9_-]{8,})\//i);
+  const fileKey = urlMatch ? urlMatch[1] : raw;
+  if (!/^[A-Za-z0-9_-]{8,}$/.test(fileKey)) return null;
+  const params = new URLSearchParams();
+  if (opts.nodeId) params.set("ids", opts.nodeId);
+  params.set("depth", String(Math.max(1, Math.min(3, opts.depth ?? 2))));
+  const { ok, status, json } = await connectorFetch(
+    env,
+    `/api/figma?fileKey=${encodeURIComponent(fileKey)}&${params.toString()}`
+  );
+  if (!ok) return { summary: "", name: null, status };
+  const data = json;
+  if (!data || data.error) return { summary: "", name: null, status };
+  const name = data.name ?? null;
+  const lines = [];
+  lines.push(`\u{1F4D0} *${name || "File Figma"}*`);
+  const root = data.document;
+  if (root?.children) {
+    for (const page of root.children.slice(0, 6)) {
+      lines.push("");
+      lines.push(`## ${page.name || "(halaman)"}`);
+      flattenFigmaSummary(page, 1, Math.max(1, Math.min(2, (opts.depth ?? 2) - 1)), lines);
+    }
+    if (root.children.length > 6) {
+      lines.push(`
+_\u2026dan ${root.children.length - 6} halaman lainnya_.`);
+    }
+  }
+  return { summary: lines.join("\n"), name, status };
+}
+__name(readFigmaViaVercel, "readFigmaViaVercel");
+async function notionViaVercel(env, payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const { ok, json } = await connectorFetch(env, "/api/notion", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  return ok ? json : null;
+}
+__name(notionViaVercel, "notionViaVercel");
+async function notionSearchViaVercel(env, query) {
+  const q = (query || "").trim().slice(0, 100);
+  const json = await notionViaVercel(env, q ? { action: "search", content: { query: q } } : { action: "search" });
+  const data = json;
+  if (!data?.results) return [];
+  const out = [];
+  for (const r of data.results.slice(0, 8)) {
+    let title = "";
+    if (r.object === "database" && r.title?.length) {
+      title = r.title.map((t) => t.plain_text ?? "").join("");
+    } else if (r.properties) {
+      for (const prop of Object.values(r.properties)) {
+        if (prop?.title?.length) {
+          title = prop.title.map((t) => t.plain_text ?? "").join("");
+          break;
+        }
+      }
+    }
+    out.push({ id: r.id, title: title.slice(0, 120) || "(tanpa judul)", kind: r.object ?? "page" });
+  }
+  return out;
+}
+__name(notionSearchViaVercel, "notionSearchViaVercel");
+function connectorsStatus(env) {
+  const base = vercelBaseUrl(env);
+  const lines = [
+    `\u{1F50C} *Vercel Connector*: ${base}`,
+    `  - Image (Pollinations): unlimited, no key \u2014 reachable`,
+    `  - Figma / Notion / GitHub Actions: via connector secrets`,
+    `  - Token: ${env.VERCEL_CONNECTOR_TOKEN ? "terpasang" : "tidak (publik)"}`
+  ];
+  return lines.join("\n");
+}
+__name(connectorsStatus, "connectorsStatus");
 
 // src/lib/ai.ts
 var GROQ_MODEL = "openai/gpt-oss-120b";
@@ -6738,18 +6912,27 @@ async function generateImagePrompt(env, userDescription) {
 __name(generateImagePrompt, "generateImagePrompt");
 var IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 async function generateImage(env, prompt) {
-  if (!env.AI) return null;
-  try {
-    const out = await env.AI.run(IMAGE_MODEL, { prompt });
-    if (!out || !out.image) return null;
-    const bin = atob(out.image);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes;
-  } catch (e) {
-    console.error("generateImage failed:", String(e).slice(0, 200));
-    return null;
+  let bytes = null;
+  if (env.AI) {
+    try {
+      const out = await env.AI.run(IMAGE_MODEL, { prompt });
+      if (out?.image) {
+        const bin = atob(out.image);
+        const b = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+        bytes = b;
+      }
+    } catch (e) {
+      console.error("generateImage (workers-ai) failed:", String(e).slice(0, 200));
+    }
   }
+  if (bytes && bytes.length > 0) return bytes;
+  const viaVercel = await generateImageViaVercel(env, prompt);
+  if (viaVercel && viaVercel.length > 0) {
+    console.error("generateImage: workers-ai failed, rendered via Pollinations");
+    return viaVercel;
+  }
+  return null;
 }
 __name(generateImage, "generateImage");
 function sniffImageMime(bytes) {
@@ -6900,7 +7083,12 @@ Periksa HAL-HAL BERIKUT:
 2. Apakah pesan menyebut platform/produk/merek/istilah (mis. "platform X", "di aplikasi Y") yang TIDAK PERNAH muncul di konteks percakapan dan kamu tidak benar-benar YAKIN itu nyata?
 3. Seberapa yakin kamu (0-1) bahwa maksud pesan ini jelas dan bisa dijawab dari perbendaharaanmu + konteks, TANPA mengarang platform/istilah baru?
 
-ATURAN: kalau ada platform/istilah yang tidak dikenal atau tidak muncul di konteks, JANGAN berasumsi itu nyata \u2014 anggap tidak jelas (clear=false) dan sebut istilah itu. Ballas HANYA JSON: {"clear": true/false, "confidence": 0-1, "uncertain": "<istilah yang kurang jelas, atau kosong>"}. clear=true DILARANG kalau confidence < 0.8 (jangan pernah menjawab dengan raguan tinggi).`;
+ATURAN KRITIS:
+- TYPO GLOBAL: Typo ringan (huruf dobel/terbalik seperti "memebuat"\u2192"membuat", "sofware"\u2192"software") yang BISA dipahami dari SELURUH konteks percakapan (semua topik, bukan hanya topik aktif) harus dianggap JELAS (clear=true, confidence tinggi). Koreksi dalam hati \u2014 JANGAN minta klarifikasi untuk typo ringan yang bisa dipahami konteks.
+- PLATFORM/ISTILAH ASING: kalau ada platform/istilah yang tidak dikenal atau tidak muncul di konteks percakapan, JANGAN berasumsi itu nyata \u2014 anggap tidak jelas (clear=false) dan sebut istilah itu.
+- LARANGAN ECHO: JANGAN PERNAH mengulang atau mengutip blok internal markup seperti "[Memori kerja]", "[Kenangan relevan]", "[Ringkasan]" \u2014 itu konteks internal untukmu, bukan untuk user. Kalau user bertanya tentang topik dan kamu punya jawaban dari pengetahuan, JAWAB LANGSUNG tanpa menyebut blok internal.
+
+Ballas HANYA JSON: {"clear": true/false, "confidence": 0-1, "uncertain": "<istilah yang kurang jelas, atau kosong>"}. clear=true DILARANG kalau confidence < 0.8 (jangan pernah menjawab dengan raguan tinggi).`;
   try {
     const g = await llmRespond(env, prompt, {
       topic: `comprehension-${(topic ?? text).slice(0, 40)}`,
@@ -8028,6 +8216,15 @@ Ngomong-ngomong, kalau yang kamu mau adalah aku langsung buatkan desain/gambarny
   return `${reply}${ask}`;
 }
 __name(heavyVerifySuffix, "heavyVerifySuffix");
+function messageMode(text) {
+  const low = text.toLowerCase();
+  const communicate = /\b(?:apa|apakah|siapa|kenapa|mengapa|kapan|berapa|bagaimana|gmn|bgmn|cara|perbedaan|perbandingan|bandingkan?|vs\b|versus|lebih\s+(?:baik|bagus|murah|mahal)|mana\s+yang|rekomendasi|referensi|jelaskan?|ceritakan|info\s+tentang|tahu|tau|maksud|artinya|contoh|bisa\s+(?:tidak|nggak|gak|kah|saja)|mau\s+tanya|ingin\s+tahu|aku\s+mau|yang\s+(?:saya|aku)\s+(?:maksud|minta|tahu)|bukan|maksudku|misalnya)\b/.test(low);
+  const execute = /\b(?:buat|bikin|bkin|buatin|desain|rancang|gambarkan?|generate|tolong\s+(?:buat|bikin|cari|riset|tulis)|minta\s+(?:buat|bikin|cari)|mohon\s+(?:buat|bikin)|cari\s+(?:data|info|info-nya)|riset|research|analisis|analisa|tulis\s+(?:kode|code|script)|tuliskan|perbaiki|debug|fix)\b/.test(low);
+  if (execute && !communicate) return "execute";
+  if (communicate && !execute) return "communicate";
+  return "ambiguous";
+}
+__name(messageMode, "messageMode");
 function classifyIntent(text, topic) {
   const low = text.toLowerCase();
   if (SELF_REF_RE.test(low)) {
@@ -8066,6 +8263,10 @@ function classifyIntent(text, topic) {
   const simplifyWords = /\b(lebih mudah|sederhanakan|saya belum mengerti|saya nggak paham|biar paham|gampang|mudah dipahami|tolong sederhanakan|jika bisa)\b/i;
   if (simplifyWords.test(low) || /belum\s+mengerti|tidak\s+paham/i.test(low)) {
     return { type: "question", urgency: "low", formality: "neutral", confidence: 0.7, entities: {} };
+  }
+  const mode = messageMode(text);
+  if (mode === "communicate") {
+    return { type: "question", urgency: "low", formality: "neutral", confidence: 0.8, entities: { topic: text.slice(0, 100) } };
   }
   if (/\b(?:cari|search|riset|reseach|research|studi|study|pelajari|mempelajari|meneliti|info|tentang|analisis|review|bandingkan|ringkas|laporan|kajian)\b/i.test(low)) {
     if (heavyCapVerdict("search", text) === "verify") {
@@ -8292,9 +8493,9 @@ Termasuk: ide utama, gaya visual, warna dominan, dan elemen utama. Bahasa Indone
           if (perception.isContinuation && topic) {
             const isSimplify = /\b(lebih mudah|sederhanakan|belum mengerti|nggak paham|gampang|mudah dipahami|biar paham|tolong sederhanakan)\b/i.test(text);
             if (isSimplify) {
-              return `Pemilik minta penjelasan lebih sederhana tentang topik yang sedang dibahas. Topik aktif: "${topic}". Jawab ULANG penjelasan tentang topik itu dengan bahasa sehari-hari yang sangat sederhana: tanpa jargon, tanpa poin-poin panjang, kalimat pendek mengalir, seperti menjelaskan ke teman. Tetap pada topik itu \u2014 JANGAN ganti topik. Jika ada platform/produk/istilah yang tidak kamu kenal atau tidak muncul di percakapan, JANGAN menjelaskannya secara detail \u2014 katakan jujur tidak yakin dan kembalikan ke topik yang dibahas.`;
+              return `Pemilik minta penjelasan lebih sederhana tentang topik yang sedang dibahas. Topik aktif: "${topic}". Jawab ULANG penjelasan tentang topik itu dengan bahasa sehari-hari yang sangat sederhana: tanpa jargon, tanpa poin-poin panjang, kalimat pendek mengalir, seperti menjelaskan ke teman. Tetap pada topik itu \u2014 JANGAN ganti topik. Jika ada platform/produk/istilah yang tidak kamu kenal atau tidak muncul di percakapan, JANGAN menjelaskannya secara detail \u2014 katakan jujur tidak yakin dan kembalikan ke topik yang dibahas. LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal (seperti [Memori kerja], [Kenangan relevan], [Ringkasan]) dalam jawaban \u2014 itu konteks internal.`;
             }
-            return `Pemilik MENERUSKAN percakapan tentang "${topic}". Pesan ini ringkas dan tidak menyebut ulang topiknya. Jawab sebagai LANJUTAN dari percakapan tentang topik itu. TETAP pada topik "${topic}" \u2014 JANGAN menyimpang ke topik lain, JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas. Jika ada platform/produk/istilah yang tidak kamu kenal atau tidak muncul di percakapan, JANGAN menjelaskannya secara detail \u2014 katakan jujur tidak yakin dan kembali ke topik yang dibahas.`;
+            return `Pemilik MENERUSKAN percakapan tentang "${topic}". Pesan ini ringkas dan tidak menyebut ulang topiknya. Jawab sebagai LANJUTAN dari percakapan tentang topik itu. TETAP pada topik "${topic}" \u2014 JANGAN menyimpang ke topik lain, JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas. Jika ada platform/produk/istilah yang tidak kamu kenal atau tidak muncul di percakapan, JANGAN menjelaskannya secara detail \u2014 katakan jujur tidak yakin dan kembali ke topik yang dibahas. LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal (seperti [Memori kerja], [Kenangan relevan], [Ringkasan]) dalam jawaban.`;
           }
           return `Jawab pertanyaan ini secara langsung, jujur, dan fokus. JANGAN mengarang atau menjelaskan dengan percaya diri tentang platform, produk, merek, atau istilah yang tidak kamu kenal dan tidak muncul di konteks percakapan. Kalau sebuah istilah tidak jelas bagimu, jawab jujur: "Aku belum paham yang kamu maksud \u2014 bisa dijelaskan sedikit?" \u2014 JANGAN menebak-nebak platform yang mungkin tidak nyata.`;
         })(),
@@ -9522,6 +9723,10 @@ Aksi: /suggestion accept <id> \xB7 /suggestion dismiss <id>`;
     await handleAgentCommand(env, r, text);
     return new Response("ok", { status: 200 });
   }
+  if (isConnectorCommand(trimmed)) {
+    await handleConnectorCommand(env, r, text);
+    return new Response("ok", { status: 200 });
+  }
   if (isBacaCommand(trimmed, text)) {
     await handleBacaCommand(env, r, text);
     return new Response("ok", { status: 200 });
@@ -10374,6 +10579,142 @@ Batal: /reminder hapus <id>`));
   }
 }
 __name(handleReminderCommand, "handleReminderCommand");
+function isConnectorCommand(trimmed) {
+  if (trimmed === "/connector" || /^\/connector\b/i.test(trimmed)) return true;
+  if (/^\/figma\b/i.test(trimmed)) return true;
+  if (/^\/notion\b/i.test(trimmed)) return true;
+  return false;
+}
+__name(isConnectorCommand, "isConnectorCommand");
+async function handleConnectorCommand(env, from, raw) {
+  const trimmed = raw.trim();
+  try {
+    if (trimmed === "/connector" || /^\/connector\s+(?:status|info)\b/i.test(trimmed)) {
+      await fire(sendMessage(env, from, connectorsStatus(env)));
+      return;
+    }
+    const fig = trimmed.match(/^\/figma\s+(\S+)(?:\s+(\S+))?(?:\s+depth=(\d))?\s*$/i);
+    if (fig) {
+      const target = fig[1];
+      const nodeId = fig[2] && !/^\d/.test(fig[2]) ? void 0 : fig[2];
+      const depth = fig[3] ? Number(fig[3]) : 2;
+      const read = await readFigmaViaVercel(env, target, { nodeId, depth });
+      if (!read || !read.summary) {
+        const reason = read?.status ? ` (kode ${read.status})` : "";
+        await fire(sendMessage(
+          env,
+          from,
+          `\u26A0\uFE0F Tidak bisa membaca file Figma${reason}. Periksa bahwa kunci file benar atau file diizinkan untuk token.
+
+Contoh: \`/figma wKRAemZY12e9VmgoOMDuOG\` atau tempel URL figma.com/design/...`
+        ));
+        return;
+      }
+      await fire(sendMessage(env, from, read.summary.slice(0, 3900)));
+      return;
+    }
+    const nSearch = trimmed.match(/^\/notion\s+search(?:\s+|=)["']?([^"']+)/i);
+    if (nSearch) {
+      const q = nSearch[1].trim().replace(/["']+$/, "");
+      const items = await notionSearchViaVercel(env, q);
+      if (!items.length) {
+        await fire(sendMessage(env, from, `\u{1F50D} Pencarian Notion "${q}" tidak menemukan apa pun. Coba kata kunci lain.`));
+        return;
+      }
+      const lines = items.map((i) => {
+        const shortId = i.id.startsWith("3d") ? i.id.slice(0, 20) : i.id;
+        return `\u2022 [${i.kind}] ${i.title}
+  \`${shortId}\``;
+      });
+      await fire(sendMessage(
+        env,
+        from,
+        `\u{1F50D} *Notion \u2014 hasil pencarian "${q}"*
+
+${lines.join("\n")}
+
+Gunakan \`/notion baca <id>\` untuk detail halaman.`
+      ));
+      return;
+    }
+    const nRead = trimmed.match(/^\/notion\s+(?:baca|read)\s+(\S+)(?:\s+(.+))?$/i);
+    if (nRead) {
+      const target = nRead[1].trim();
+      const qtext = nRead[2]?.trim() ?? "";
+      let json = null;
+      if (qtext && /^1?[a-fA-F0-9]{32}$/.test(target)) {
+        json = await notionViaVercel(env, { action: "query", databaseId: target });
+      } else {
+        json = await notionViaVercel(env, { action: "read", pageId: target });
+      }
+      const info = summarizeNotionResult(json);
+      if (!info.ok) {
+        await fire(sendMessage(
+          env,
+          from,
+          `\u26A0\uFE0F Tidak bisa membaca objek Notion tersebut. Pastikan id benar dan database di-share ke integrasi.
+
+Contoh: \`/notion baca <id halaman>\`, \`/notion search rapat\``
+        ));
+        return;
+      }
+      await fire(sendMessage(env, from, info.text.slice(0, 3800)));
+      return;
+    }
+    await fire(sendMessage(
+      env,
+      from,
+      "\u{1F50C} *Perintah connector*:\n\u2022 `/connector` \u2014 status koneksi\n\u2022 `/figma <fileKey|url> [nodeId] [depth=n]` \u2014 baca file desain Figma\n\u2022 `/notion search <teks>` \u2014 cari halaman/database Notion\n\u2022 `/notion baca <id>` \u2014 baca detail halaman Notion"
+    ));
+  } catch (e) {
+    await fire(sendMessage(
+      env,
+      from,
+      `\u26A0\uFE0F Perintah connector gagal: ${String(e).slice(0, 200)}`
+    ));
+  }
+}
+__name(handleConnectorCommand, "handleConnectorCommand");
+function summarizeNotionResult(json) {
+  const data = json;
+  if (!data) return { ok: false, text: "" };
+  if (data.error) return { ok: false, text: `${data.error}` };
+  if (Array.isArray(data.results)) {
+    const rows = data.results.slice(0, 10);
+    if (!rows.length) return { ok: true, text: "\u{1F4ED} Database kosong (tidak ada baris)." };
+    const lines = rows.map((r, i) => {
+      const props = r.properties ?? {};
+      const titles = [];
+      for (const p of Object.values(props)) {
+        const t = p.title;
+        if (t?.length) {
+          titles.push(t.map((x) => x.plain_text ?? "").join(""));
+          break;
+        }
+      }
+      const id = r.id ?? "";
+      return `${i + 1}. ${titles[0] || "(tanpa judul)"} \u2014 \`${id.slice(0, 16)}\``;
+    });
+    return { ok: true, text: `\u{1F4CA} *${rows.length} baris*
+${lines.join("\n")}` };
+  }
+  if (data.object === "page") {
+    const props = data.properties ?? {};
+    let title = "";
+    for (const p of Object.values(props)) {
+      const t = p.title;
+      if (t?.length) {
+        title = t.map((x) => x.plain_text ?? "").join("");
+        break;
+      }
+    }
+    const id = data.id ?? "";
+    return { ok: true, text: `\u{1F4C4} *${title.slice(0, 120) || "(tanpa judul)"}*
+ID: \`${id}\`` };
+  }
+  return { ok: false, text: "Objek tidak dikenal." };
+}
+__name(summarizeNotionResult, "summarizeNotionResult");
 function isAgentCommand(trimmed, raw) {
   if (/^\/(?:tugas|delegasi|delegate)\b/i.test(trimmed)) return true;
   if (/^delegasikan\b/i.test(raw)) return true;
@@ -11636,7 +11977,7 @@ var index_default = {
         ok: true,
         ts: Date.now(),
         env: env.APP_ENV ?? "unknown",
-        version: "m9-v11.2"
+        version: "m9-v11.4"
       }));
     }
     if (path === "/webhook") {
@@ -11728,7 +12069,7 @@ var index_default = {
         return respond(Response.json({
           ok: true,
           ts: Date.now(),
-          version: "m9-v11.2",
+          version: "m9-v11.4",
           systems: {
             d1: d1Ok ? "\u2705" : "\u274C",
             kv: kvOk ? "\u2705" : "\u274C",

@@ -25,6 +25,8 @@ export interface Env {
   GITHUB_TOKEN?: string;
   GITHUB_REPO?: string;
   WORKER_URL?: string;
+  VERCEL_CONNECTOR_URL?: string;
+  VERCEL_CONNECTOR_TOKEN?: string;
   CLARITY_GATE?: string;
   RISK_CONSENT_THRESHOLD?: string;
   CONSENT_TIMEOUT_S?: string;
