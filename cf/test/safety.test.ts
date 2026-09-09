@@ -1100,6 +1100,46 @@ async function testHeavyCapabilityVerify() {
     "real design order must still route to the design pipeline");
 }
 
+async function testGlobalComprehension() {
+  // m9-v11.3 GLOBAL COMPREHENSION: anaphora "-nya" suffix (all topics), working
+  // memory topic-scoping, and communicate-vs-execute mode guard. The live
+  // transcript failure: "Apakah bisa membuatnya sendiri" — the owner was asking
+  // (communicate mode) about building their own all-in-one AI; JARVIS echoed
+  // random memories (cross-topic bleed) instead of grounding the answer.
+  const ctxSrc = readFileSync(new URL("../src/lib/context_manager.ts", import.meta.url), "utf-8");
+  const intSrc = readFileSync(new URL("../src/lib/intelligence.ts", import.meta.url), "utf-8");
+  const aiSrc = readFileSync(new URL("../src/lib/ai.ts", import.meta.url), "utf-8");
+
+  // ANAPHORA — "-nya" suffix must be detected globally (all topics).
+  assert.ok(/\b[a-z]{3,}nya\b/i.test(ctxSrc) || /anaphoricNya/i.test(ctxSrc),
+    "context_manager must detect '-nya' suffix anaphora (membuatnya, lihatnya) for all topics");
+  assert.ok(/anaphoricNya/.test(ctxSrc),
+    "context_manager must have an anaphoricNya marker for inflected pronouns");
+
+  // WORKING MEMORY — must not leak stale tasks into unrelated topics.
+  assert.ok(/topicOverlaps\(wm\.currentTask/.test(ctxSrc),
+    "WM injection must be guarded by topic overlap (no stale audit echo)");
+  assert.ok(/!\/[|\\[\\]]/.test(ctxSrc) || /\!\=\?.*\|/.test(ctxSrc) ||
+    /\b\|\b/.test(ctxSrc) || /fact.*\|/.test(ctxSrc),
+    "fact extraction must skip table-pipe fragments (prevent 'h | Konsep AI' garbage)");
+  assert.ok(/langkah-/.test(ctxSrc),
+    "stepsCompleted must use clean counter (no raw markdown slices)");
+
+  // COMMUNICATE VS EXECUTE MODE — the most fundamental axis (owner: "ilmu
+  // komunikasi vs eksekusi"). Must exist as a global pre-classification guard
+  // before any heavy capability routing (design/search/code).
+  assert.ok(/messageMode/.test(intSrc),
+    "intelligence must have a global messageMode classifier (communicate/execute/ambiguous)");
+  assert.ok(/mode === .communicate./.test(intSrc) || /communicate/.test(intSrc),
+    "classifyIntent must check communicate mode and force question intent");
+
+  // ANTI-ECHO RAIL — the LLM must never echo [Memori kerja] / internal blocks.
+  assert.ok(/LARANGAN ECHO/.test(intSrc),
+    "system prompts must have an anti-echo rail for internal memory blocks");
+  assert.ok(/LARANGAN ECHO/.test(aiSrc) || /JANGAN PERNAH.*Memori kerja/.test(aiSrc),
+    "detectGarbledInput must instruct against echoing internal memory blocks");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -1126,6 +1166,7 @@ async function main() {
   await testBehaviorAlignmentFailClosed();
   await testComprehensionGate();
   await testHeavyCapabilityVerify();
+  await testGlobalComprehension();
   console.log("SAFETY TESTS PASSED");
 }
 

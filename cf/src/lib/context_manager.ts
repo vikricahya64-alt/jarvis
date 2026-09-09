@@ -23,6 +23,7 @@
 
 import { Env, recentContext, appendMemory, searchMemory } from "./db";
 import { detectEmotion, updateMood, getMoodState, setMoodState, moodSummary, type MoodState } from "./emotion";
+import { topicOverlaps } from "./ai";
 
 /** A single conversation turn. */
 export interface Turn {
@@ -271,6 +272,19 @@ export function detectTopicContinuity(
     return { isContinuation: true, topic: null, confidence: 0.72 };
   }
 
+  // GLOBAL ANAPHORA — Indonesian "-nya" suffix (membuatnya, lihatnya, inginnya,
+  // kirimkan? — the pronoun is fused to the verb). A word ending in "-nya"
+  // references a prior-turn entity ("Apakah bisa membuatnya sendiri?" = "make
+  // it [the all-in-one AI] yourself?").  NOT covered by the token-list markers
+  // above because the split() never isolates the suffix as a separate word.
+  // This is the MISSING anaphora that caused the "Apakah bisa membuatnya
+  // sendiri" over-fire: JARVIS treated it as a fresh topic → echoed random
+  // memories. Placed BEFORE fresh-markers so continuations win over splits.
+  const anaphoricNya = /\b[a-z]{3,}nya\b/i.test(current);
+  if (anaphoricNya && priorSubstance.trim().length >= 30) {
+    return { isContinuation: true, topic: null, confidence: 0.78 };
+  }
+
   // Follow-up markers (high continuation signal)
   const followUpMarkers = /\b(lebih dalam|lanjut|terus|yang tadi|detail|expand|selanjutnya|kemudian|lalu|itupun|itu jug)\b/i;
   const isFollowUp = followUpMarkers.test(current);
@@ -339,7 +353,11 @@ function compressTurns(turns: Array<{ role: string; content: string }>): string 
   return unique.join(" ").slice(0, SUMMARY_TARGET_CHARS);
 }
 
-/** Update working memory based on conversation context. */
+/** Update working memory based on conversation context.
+ *  m9-v11.3 SANITIZATION: (a) don't store raw markdown-sliced assistant
+ *  replies as steps (was leaking table rows like "h | Konsep AI | Layanan
+ *  con" into the Audit echo); (b) fact-extraction skips table-pipe content;
+ *  (c) stale WM from a drifted topic is archived when no topic overlap. */
 export function updateWorkingMemory(
   session: SessionState,
   userText: string,
@@ -348,6 +366,24 @@ export function updateWorkingMemory(
   const wm = session.workingMemory;
   const now = Date.now();
   wm.lastUpdated = now;
+
+  // --- STALE TASK ARCHIVAL: if wm.currentTask does NOT topically overlap
+  // with the new user message (and it's not a short clarification), archive
+  // the old task so it doesn't leak into a new thread as "Audit Status".
+  if (wm.currentTask && userText.length > 8) {
+    const taskStillRelevant =
+      topicOverlaps(wm.currentTask, userText) ||
+      // Negations / clarifications continue the same task
+      /\b(?:bukan|maksudku|yang\s+saya\s+maksud|maksudnya|soalnya|sebenarnya)\b/i.test(userText) ||
+      // Short continuations ("ya", "oke", "itu") keep current task
+      userText.trim().length <= 15;
+    if (!taskStillRelevant) {
+      wm.extractedFacts.push(`Tugas sebelumnya: ${wm.currentTask} (${wm.stepsCompleted.length} langkah selesai)`);
+      wm.currentTask = null;
+      wm.stepsCompleted = [];
+      wm.pendingItems = [];
+    }
+  }
 
   // Detect task switching
   const taskSwitch = /\b(coba|lanjut|ganti|sekarang|next|switch|gimana|bagaimana|cari|search|info)\b/i.test(userText);
@@ -360,21 +396,22 @@ export function updateWorkingMemory(
     wm.pendingItems = [];
   }
 
-  // Set current task if not set
-  if (!wm.currentTask && userText.length > 10) {
+  // Set current task if not set (only substantive messages, not short echoes)
+  if (!wm.currentTask && userText.length > 15 && !/\b(?:ya|oke|ok|bukan|bener|benar|betul)\b/i.test(userText.trim())) {
     wm.currentTask = userText.slice(0, 100);
   }
 
-  // Track steps from assistant response
+  // Track steps from assistant response — CLEAN step counter only (no raw
+  // markdown slices that leak table rows like "h | Konsep AI | Layanan con").
   if (assistantReply.length > 20) {
-    // Check if response contains step indicators
     const stepMatch = assistantReply.match(/(?:langkah|step|poin|1\.|2\.|3\.|pertama|kedua|ketiga)/gi);
     if (stepMatch) {
-      wm.stepsCompleted.push(assistantReply.slice(0, 80));
+      wm.stepsCompleted.push(`langkah-${wm.stepsCompleted.length + 1}`);
     }
   }
 
-  // Extract facts from assistant response
+  // Extract facts from assistant response — skip markdown table pipes and
+  // internal blocks (the source of "h | Konsep AI yang dipakai | Layanan con" garbage).
   const factPatterns = [
     /(?:adalah|merupakan|berarti|means|is a)\s+([^,.!]{10,60})/gi,
     /(?:nilai|value|jumlah|total|angka)\s*[:=]?\s*([^,.!]{5,40})/gi,
@@ -383,7 +420,11 @@ export function updateWorkingMemory(
   for (const pat of factPatterns) {
     const matches = assistantReply.matchAll(pat);
     for (const m of matches) {
-      if (m[1]) wm.extractedFacts.push(m[1].trim().slice(0, 80));
+      const fact = m[1]?.trim().slice(0, 80);
+      // Skip table fragments (pipe-delimited), markdown blocks, memory markers
+      if (fact && !/[|\[\]]/.test(fact)) {
+        wm.extractedFacts.push(fact);
+      }
     }
   }
 
@@ -465,9 +506,17 @@ export async function buildEnrichedContext(
     }
   } catch { /* fail-open */ }
 
-  // 3) Working memory (only if there's an active reasoning chain)
+  // 3) Working memory (only if active AND topically relevant to THIS conversation)
   const wm = session.workingMemory;
-  if (wm.currentTask && wm.stepsCompleted.length > 0) {
+  // m9-v11.3: stale WM guard — don't inject "[Memori kerja] Tugas: Cari
+  // kelebihan dan kekurangan bekerja remote" into a conversation about "4 konsep
+  // AI dalam 1 software". Only inject when the WM task overlaps with the
+  // current thread's topic/userText, OR the task was set within this same turn.
+  const wmRelevant = wm.currentTask && wm.stepsCompleted.length > 0 && (
+    topicOverlaps(wm.currentTask, topic ?? userText) ||
+    (Date.now() - wm.lastUpdated) < 30_000 // set ≤30s ago = same turn
+  );
+  if (wmRelevant) {
     const wmContent = [
       `[Memori kerja] Tugas: ${wm.currentTask}`,
       `Langkah selesai: ${wm.stepsCompleted.length}`,

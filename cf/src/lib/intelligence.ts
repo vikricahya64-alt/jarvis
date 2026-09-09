@@ -252,6 +252,36 @@ function heavyVerifySuffix(cap: string, reply: string): string {
   return `${reply}${ask}`;
 }
 
+// ============================================================================
+// GLOBAL MODE CLASSIFIER: communicate vs execute
+// ============================================================================
+
+/** Global communication-vs-execution mode, applied BEFORE any capability
+ *  classification.  A message that is clearly a QUESTION/CLARIFICATION
+ *  ("ilmu komunikasi" — knowledge exchange) must NEVER trigger a heavy
+ *  capability (design/search/code), even if it happens to contain a trigger
+ *  word like "gambar" or "cari".  Only an imperative ORDER verb without a
+ *  question-dominant structure warrants execution.  Owner principle (m9-v11.3):
+ *  "JARVIS tidak tahu membedakan ilmu komunikasi dan eksekusi — seharusnya
+ *  dia tahu sebelum respons verifikasi kemampuan."
+ *
+ *  This classifier is GLOBAL — works across ALL topic contexts, not tuned to
+ *  one topic. It is the most fundamental axis before any capability routing. */
+type MessageMode = "communicate" | "execute" | "ambiguous";
+function messageMode(text: string): MessageMode {
+  const low = text.toLowerCase();
+  // COMMUNICATE signals: question words, clarifications, negation,
+  // comparative phrasing, "aku mau tahu", "bisa tidak", "mau tanya"
+  const communicate =
+    /\b(?:apa|apakah|siapa|kenapa|mengapa|kapan|berapa|bagaimana|gmn|bgmn|cara|perbedaan|perbandingan|bandingkan?|vs\b|versus|lebih\s+(?:baik|bagus|murah|mahal)|mana\s+yang|rekomendasi|referensi|jelaskan?|ceritakan|info\s+tentang|tahu|tau|maksud|artinya|contoh|bisa\s+(?:tidak|nggak|gak|kah|saja)|mau\s+tanya|ingin\s+tahu|aku\s+mau|yang\s+(?:saya|aku)\s+(?:maksud|minta|tahu)|bukan|maksudku|misalnya)\b/.test(low);
+  // EXECUTE signals: imperative/order creation verbs with no question wrapper
+  const execute =
+    /\b(?:buat|bikin|bkin|buatin|desain|rancang|gambarkan?|generate|tolong\s+(?:buat|bikin|cari|riset|tulis)|minta\s+(?:buat|bikin|cari)|mohon\s+(?:buat|bikin)|cari\s+(?:data|info|info-nya)|riset|research|analisis|analisa|tulis\s+(?:kode|code|script)|tuliskan|perbaiki|debug|fix)\b/.test(low);
+  if (execute && !communicate) return "execute";
+  if (communicate && !execute) return "communicate";
+  return "ambiguous";
+}
+
 /**
  * Unified intent classifier — combines signals from multiple sources.
  * Priority: self-referential > emergency > design > translate > search > command > chat > question > understand
@@ -326,6 +356,20 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
   const simplifyWords = /\b(lebih mudah|sederhanakan|saya belum mengerti|saya nggak paham|biar paham|gampang|mudah dipahami|tolong sederhanakan|jika bisa)\b/i;
   if (simplifyWords.test(low) || /belum\s+mengerti|tidak\s+paham/i.test(low)) {
     return { type: "question", urgency: "low", formality: "neutral", confidence: 0.7, entities: {} };
+  }
+
+  // m9-v11.3 GLOBAL MODE GUARD: ilmu komunikasi vs eksekusi.
+  // If the message is clearly a QUESTION/CLARIFICATION/NEGATION (communicate
+  // mode), force it to a pure question/chat path BEFORE any capability
+  // routing (search/design/code). This is the most fundamental axis:
+  // JARVIS must know whether the owner is DISCUSSING (ilmu komunikasi) or
+  // ORDERING (eksekusi) before any capability decision. Prevents:
+  // "Apakah bisa membuatnya sendiri" (communicate → clarification about the
+  // topic) from echoing random memories, "perbedaan generasi gambar vs teks"
+  // (communicate → comparison question) from hijacking to Flux design.
+  const mode = messageMode(text);
+  if (mode === "communicate") {
+    return { type: "question", urgency: "low", formality: "neutral", confidence: 0.8, entities: { topic: text.slice(0, 100) } };
   }
 
   // Search / research — a heavy capability: a CLEAR order runs the search,
@@ -654,7 +698,9 @@ export async function act(
                 `tanpa jargon, tanpa poin-poin panjang, kalimat pendek mengalir, seperti menjelaskan ke teman. ` +
                 `Tetap pada topik itu — JANGAN ganti topik. ` +
                 `Jika ada platform/produk/istilah yang tidak kamu kenal atau tidak muncul di percakapan, ` +
-                `JANGAN menjelaskannya secara detail — katakan jujur tidak yakin dan kembalikan ke topik yang dibahas.`;
+                `JANGAN menjelaskannya secara detail — katakan jujur tidak yakin dan kembalikan ke topik yang dibahas. ` +
+                `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
+                `(seperti [Memori kerja], [Kenangan relevan], [Ringkasan]) dalam jawaban — itu konteks internal.`;
             }
             return `Pemilik MENERUSKAN percakapan tentang "${topic}". ` +
               `Pesan ini ringkas dan tidak menyebut ulang topiknya. ` +
@@ -662,7 +708,9 @@ export async function act(
               `TETAP pada topik "${topic}" — JANGAN menyimpang ke topik lain, ` +
               `JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas. ` +
               `Jika ada platform/produk/istilah yang tidak kamu kenal atau tidak muncul di percakapan, ` +
-              `JANGAN menjelaskannya secara detail — katakan jujur tidak yakin dan kembali ke topik yang dibahas.`;
+              `JANGAN menjelaskannya secara detail — katakan jujur tidak yakin dan kembali ke topik yang dibahas. ` +
+              `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
+              `(seperti [Memori kerja], [Kenangan relevan], [Ringkasan]) dalam jawaban.`;
           }
           return `Jawab pertanyaan ini secara langsung, jujur, dan fokus. ` +
             `JANGAN mengarang atau menjelaskan dengan percaya diri tentang platform, produk, merek, ` +
