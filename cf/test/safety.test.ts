@@ -858,7 +858,7 @@ async function testAnswerGrounding() {
   // centrally in the main generative path (llmRespond) and the translate path.
   // NOTE: prompts now live in conversation.ts (personality engine).
   const conv = readFileSync(new URL("../src/lib/conversation.ts", import.meta.url), "utf-8");
-  assert.ok(conv.includes("Jangan mengarang data") || ai.includes("Jangan bohongi"),
+  assert.ok(conv.toLowerCase().includes("jangan mengarang data") || ai.includes("Jangan bohongi"),
     "main LLM prompt must forbid fabricating data");
   assert.ok(conv.includes("Jika tidak tahu") || ai.includes("Jika tidak bisa menjawab, akui saja"),
     "main LLM prompt must admit uncertainty instead of bluffing");

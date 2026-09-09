@@ -45,6 +45,10 @@ import {
 import { writeExpertPrompt } from "./prompt_master";
 import { lookupLibraryDocs, context7FailureMessage } from "./context7";
 import { capabilityIntent, approachForIntent } from "./capability_registry";
+import {
+  detectRelevanceAmbiguity, parkPendingRelevance,
+  readPendingRelevance, clearPendingRelevance, resolveRelevanceConfirmation,
+} from "./relevance";
 import { readFailureTally } from "./failure";
 import { describeGapProposals } from "./gap_upgrade";
 import { reflectOnTurn, getAnswerBehaviorContext } from "./evolution";
@@ -613,12 +617,26 @@ export async function reflect(
 // MAIN ENTRY POINT: THE COGNITIVE CYCLE
 // ============================================================================
 
+/** Ambitious strategies whose EXPENSIVE execution we must never run on a
+ *  possibly-misread topic — research pipelines, design pipelines, and code
+ *  answers. Cheap intents (chat/question/translate) skip the gate entirely. */
+function isAmbitiousIntent(strategy: Strategy, intentType: string): boolean {
+  if (["orchestrate_research", "search_synthesize", "orchestrate_design"].includes(strategy.approach)) {
+    return true;
+  }
+  return strategy.approach === "simple_llm" && intentType === "code";
+}
+
 /**
  * THE BRAIN: single entry point for all message processing.
  * Runs the full cognitive cycle: perceive → think → decide → act → reflect.
  *
  * This replaces the old processMessage() in jarvis_core.ts.
  * All webhook handlers should call this instead.
+ *
+ * RELEVANCE GATE (m9-v9): before executing an ambitious intent, verify the
+ * topic didn't get misread — ask one short confirmation instead of guessing
+ * (owner principle: understand → confirm → execute).
  */
 export async function processIntelligence(
   env: Env,
@@ -630,14 +648,54 @@ export async function processIntelligence(
   // Phase 1: PERCEIVE
   const perception = await perceive(env, owner, text);
 
-  // Phase 2: THINK + DECIDE
+  // RELEVANCE GATE — resume/discard a parked confirmation from an earlier
+  // turn BEFORE deciding. A clear confirmation ("1"/"2"/"ya") resumes the
+  // parked intent with the CONFIRMED topic; anything else discards it and
+  // this message is processed as a fresh query. Fail-closed: no parked intent
+  // → nothing changes, clear requests always flow straight through.
+  const pending = await readPendingRelevance(env, owner).catch(() => null);
+  let effectiveText = text;
+  if (pending) {
+    const res = resolveRelevanceConfirmation(text, pending);
+    await clearPendingRelevance(env, owner).catch(() => {});
+    if (res.confirmed) {
+      perception.topic = res.applyCorrection ? pending.correctedTopic : pending.topic;
+      perception.intent = {
+        ...perception.intent,
+        type: (pending.intentType as Perception["intent"]["type"]) ?? perception.intent.type,
+      };
+      effectiveText = res.applyCorrection ? pending.correctedText : pending.text;
+    }
+  }
+
+  // Phase 2: THINK + DECIDE — runs AFTER any resume override so decide() sees
+  // the confirmed topic, never the bare "1"/"2" confirmation word.
   const strategy = decide(perception);
 
+  // Gate only FRESH turns (a resume already carries its confirmation) and only
+  // when we are about to EXECUTE an ambitious intent on a possibly-misread
+  // topic. On ambiguity: park the intent + ask ONE short confirmation instead
+  // of burning budget on a guessed search/design/code run.
+  if (!pending && isAmbitiousIntent(strategy, perception.intent.type)) {
+    const gate = detectRelevanceAmbiguity(perception.topic, text, perception.intent.type);
+    if (gate.ambiguous && gate.pending && gate.question && perception.topic) {
+      await parkPendingRelevance(env, owner, { ...gate.pending, ts: Date.now() }).catch(() => {});
+      return {
+        text: gate.question,
+        perception,
+        strategy,
+        source: "relevance_gate",
+        latencyMs: Date.now() - start,
+        reflection: { shouldReflect: false, topic: perception.topic },
+      };
+    }
+  }
+
   // Phase 3: ACT
-  const { reply, source, image } = await act(env, owner, text, perception, strategy);
+  const { reply, source, image } = await act(env, owner, effectiveText, perception, strategy);
 
   // Phase 4: REFLECT
-  await reflect(env, owner, text, reply, perception, strategy);
+  await reflect(env, owner, effectiveText, reply, perception, strategy);
 
   const latencyMs = Date.now() - start;
 

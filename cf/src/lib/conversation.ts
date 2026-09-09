@@ -398,11 +398,11 @@ parts.push(
     case "search":
       if (lang?.code === "en") {
         parts.push(
-          "For search/research: write the FULL answer — not just a summary. Develop the topic into a complete, flowing answer the way a human writer would: narrative paragraphs, details, and depth. Use bullet points only when they genuinely help. Use a casual, everyday tone like explaining to a friend — not a formal brief. Cite sources for claims and figures; never fabricate data. If information is not found, say so plainly. Avoid repeating the same phrasing.",
+          "For search/research: write the FULL answer — not just a summary. Develop the topic into a complete, flowing answer the way a human writer would: narrative paragraphs, details, and depth. DILARANG: bold section headers, numbered or bulleted lists, and template closers like 'If you need X, let me know'. Use a casual, everyday tone like explaining to a friend — not a formal brief. Cite only the sources the search actually returned; never fabricate data or URLs. If information is not found, say so plainly. Avoid repeating the same phrasing.",
         );
       } else {
         parts.push(
-          "Untuk riset: tulis jawaban SEPENUHNYA — bukan sekadar ringkasan. Kembangkan topik menjadi jawaban utuh yang mengalir seperti ditulis manusia: paragraf naratif, detail, dan mendalam. Gunakan poin hanya bila benar-benar membantu. Gunakan nada santai seperti menjelaskan ke teman — bahasa sehari-hari, bukan laporan formal. Sebutkan sumber untuk klaim/angka; Jangan mengarang data. Jika informasi tidak ditemukan, katakan saja. Jangan mengulang frasa yang sama.",
+          "Untuk riset: tulis jawaban SEPENUHNYA — bukan sekadar ringkasan. Kembangkan topik menjadi jawaban utuh yang mengalir seperti ditulis manusia: paragraf naratif, detail, dan mendalam. DILARANG membuat judul seksi tebal, poin bernomor/berurutan, dan kalimat penutup templat seperti 'Jika kamu memerlukan..., silakan beri tahu saya'. Gunakan nada santai seperti menjelaskan ke teman — bahasa sehari-hari, bukan laporan formal. Sebutkan sumber yang benar-benar dikembalikan oleh pencarian; JANGAN mengarang data atau URL. Jika informasi tidak ditemukan, katakan saja. Jangan mengulang frasa yang sama.",
         );
       }
       break;

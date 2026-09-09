@@ -220,14 +220,15 @@ export function normalizeLinkForCompare(url: string): string {
 
 /** Strip every URL that is NOT present in `allowedUrls` — the anti-fabrication
  *  rail: an LLM reply may only cite sources the search actually returned.
- *  Fail-closed: a fabricated link is dropped (markdown "[[label](url)]"
- *  keeps the label as plain text), everything else stays untouched. Never
+ *  Fail-closed: a fabricated link is dropped (markdown "[label](url)" keeps
+ *  the label as plain text), everything else stays untouched. When the search
+ *  returned NO sources at all (`allowedUrls` empty), EVERY URL is stripped —
+ *  an empty evidence pool must never let a hallucinated link through. Never
  *  throws; never blocks a full reply; pure + deterministic. */
 export function sanitizeUncitedLinks(text: string, allowedUrls: string[]): string {
   const t = (text ?? "").trim();
-  if (!t || !allowedUrls?.length) return t;
+  if (!t) return t;
   const allowed = new Set(allowedUrls.map(normalizeLinkForCompare).filter(Boolean));
-  if (allowed.size === 0) return t;
 
   // Markdown links: [label](url)
   let out = t.replace(/\[([^\]]*)\]\(\s*(https?:\/\/[^\s)]+)\)/g, (_all, label: string, rawUrl: string) => {
@@ -238,6 +239,13 @@ export function sanitizeUncitedLinks(text: string, allowedUrls: string[]): strin
   // Bare URLs (not already inside parentheses, incl. trailing punctuation)
   out = out.replace(/(?<=^|\s)(https?:\/\/[^\s()]+[^\s.,;:)!?'")\]}\]])/g, (rawUrl: string) =>
     allowed.has(normalizeLinkForCompare(rawUrl)) ? rawUrl : "",
+  );
+  // Parenthesized bare URLs: "(https://...)" — the bare-URL pass above can't
+  // see them (the "(" is not whitespace), so a fabricated URL wrapped in prose
+  // parentheses must be dropped here too. Fail-closed: allowed URLs are kept
+  // verbatim, everything else removed with its parentheses.
+  out = out.replace(/\((https?:\/\/[^\s()]+[^\s.,;:!?)\]])\)/g, (m: string, rawUrl: string) =>
+    allowed.has(normalizeLinkForCompare(rawUrl)) ? m : "",
   );
   return out.replace(/[ \t]+/g, " ").replace(/ ?\n ?/g, "\n").trim();
 }
