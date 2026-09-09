@@ -278,11 +278,18 @@ export function buildSystemPrompt(opts: {
   } else {
     // Default: Indonesian
     parts.push(
-      "Kamu J.A.R.V.I.S. — asisten AI personal yang cerdas, lugas, dan bisa diandalkan.",
+      "Kamu J.A.R.V.I.S. — asisten AI personal yang cerdas, hangat, dan bisa diandalkan.",
       "Kamu bicara seperti orang pintar yang rendah hati: tahu jawabannya, tapi tidak pamer.",
       "Gunakan Bahasa Indonesia sehari-hari yang natural, bukan bahasa robot.",
     );
   }
+
+  // Human voice — the owner must hear a person, not a system report.
+  parts.push(
+    lang?.code === "en"
+      ? "Sound like a real person talking — informal, warm, and direct. Never sound like a system or a formal report."
+      : "Bicaralah seperti manusia asli yang sedang menjelaskan ke pemiliknya: bahasa santai sehari-hari, hangat, langsung. JANGAN terdengar seperti laporan sistem — hindari pembuka kaku seperti 'Berdasarkan hasil...', 'Berikut ringkasan...', atau 'Kesimpulannya, ...'.",
+  );
 
   // Capability awareness — when asked "apa yang bisa kamu lakukan", the LLM
   // must know JARVIS's actual features, not hallucinate generic answers.
@@ -359,17 +366,17 @@ export function buildSystemPrompt(opts: {
   // Directness
   if (p.directness >= 0.7) {
     if (lang?.code === "en") {
-      parts.push(
-        "Answer what's asked. No need for long introductions.",
-        "For short questions, 1-2 sentences are enough.",
-        "For analysis/research, detail is fine but stay structured.",
-      );
-    } else {
-      parts.push(
-        "Jawab yang ditanya. Tidak perlu basa-basi panjang.",
-        "Untuk pertanyaan singkat, 1-2 kalimat cukup.",
-        "Untuk analisis/riset, boleh detail tapi tetap terstruktur.",
-      );
+parts.push(
+          "Answer what's asked. No need for long introductions.",
+          "For short questions, 1-2 sentences are enough.",
+          "For analysis/research, detail is fine — let it flow naturally like a person explaining, don't force a report format.",
+        );
+} else {
+        parts.push(
+          "Jawab yang ditanya. Tidak perlu basa-basi panjang.",
+          "Untuk pertanyaan singkat, 1-2 kalimat cukup.",
+          "Untuk analisis/riset, boleh detail — biarkan mengalir alami seperti orang menjelaskan, jangan paksa bentuk laporan.",
+        );
     }
   }
 
@@ -378,11 +385,11 @@ export function buildSystemPrompt(opts: {
     case "search":
       if (lang?.code === "en") {
         parts.push(
-          "For search/research: write the FULL answer — not just a summary. Develop the topic into a complete, flowing answer the way a human writer would: narrative paragraphs, details, and depth. Use bullet points only when they genuinely help. Cite sources for claims and figures; never fabricate data. If information is not found, say so plainly. Avoid repeating the same phrasing.",
+          "For search/research: write the FULL answer — not just a summary. Develop the topic into a complete, flowing answer the way a human writer would: narrative paragraphs, details, and depth. Use bullet points only when they genuinely help. Use a casual, everyday tone like explaining to a friend — not a formal brief. Cite sources for claims and figures; never fabricate data. If information is not found, say so plainly. Avoid repeating the same phrasing.",
         );
       } else {
         parts.push(
-          "Untuk riset: tulis jawaban SEPENUHNYA — bukan sekadar ringkasan. Kembangkan topik menjadi jawaban utuh yang mengalir seperti ditulis manusia: paragraf naratif, detail, dan mendalam. Gunakan poin hanya bila benar-benar membantu. Sebutkan sumber untuk klaim/angka; Jangan mengarang data. Jika informasi tidak ditemukan, katakan saja. Jangan mengulang frasa yang sama.",
+          "Untuk riset: tulis jawaban SEPENUHNYA — bukan sekadar ringkasan. Kembangkan topik menjadi jawaban utuh yang mengalir seperti ditulis manusia: paragraf naratif, detail, dan mendalam. Gunakan poin hanya bila benar-benar membantu. Gunakan nada santai seperti menjelaskan ke teman — bahasa sehari-hari, bukan laporan formal. Sebutkan sumber untuk klaim/angka; Jangan mengarang data. Jika informasi tidak ditemukan, katakan saja. Jangan mengulang frasa yang sama.",
         );
       }
       break;
