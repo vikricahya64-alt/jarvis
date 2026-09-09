@@ -947,14 +947,16 @@ export async function llmRespond(
   const sharedOpts = { ...opts, prebuiltMessages };
 
   // Provider cascade with circuit-breaker awareness (free-tier smoothing).
-  // Workers AI (free edge) → Groq (free) → OpenRouter (free models) → Gemini
-  // (free last-resort). A provider whose breaker is OPEN is skipped up front
+  // Groq (free, strong model) → Workers AI (free edge) → OpenRouter (free
+  // models) → Gemini (free last-resort). Quality first: the owner wants
+  // answers that read like a person, so the best free conversational model
+  // speaks first; Workers AI remains an unlimited resilience backstop. A provider whose breaker is OPEN is skipped up front
   // (fast-fail) instead of burning an HTTP attempt + latency; its cooldown
   // will reopen it later automatically via half-open probing. D1 reads only
   // happen when the breaker has not been consulted recently (KV warm cache).
   const preferred: Array<{ p: "workers_ai" | "groq" | "openrouter" | "gemini"; fn: () => Promise<string | null>; src: "workers_ai" | "groq" | "openrouter" | "gemini" }> = [
-    { p: "workers_ai", fn: () => workersAiRespond(env, userText, sharedOpts), src: "workers_ai" },
     { p: "groq", fn: () => groqRespond(env, userText, sharedOpts), src: "groq" },
+    { p: "workers_ai", fn: () => workersAiRespond(env, userText, sharedOpts), src: "workers_ai" },
     { p: "openrouter", fn: () => openrouterRespond(env, userText, sharedOpts), src: "openrouter" },
     { p: "gemini", fn: () => geminiRespond(env, userText, sharedOpts), src: "gemini" },
   ];

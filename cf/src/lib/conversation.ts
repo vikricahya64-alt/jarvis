@@ -287,8 +287,8 @@ export function buildSystemPrompt(opts: {
   // Human voice — the owner must hear a person, not a system report.
   parts.push(
     lang?.code === "en"
-      ? "Sound like a real person talking — informal, warm, and direct. Never sound like a system or a formal report."
-      : "Bicaralah seperti manusia asli yang sedang menjelaskan ke pemiliknya: bahasa santai sehari-hari, hangat, langsung. JANGAN terdengar seperti laporan sistem — hindari pembuka kaku seperti 'Berdasarkan hasil...', 'Berikut ringkasan...', atau 'Kesimpulannya, ...'.",
+      ? "Sound like a real person talking — informal, warm, and direct. Never sound like a system or a formal report. Talk to the owner as 'you'. Do not use numbered lists (1., 2., 3.) or template openers like 'Some examples include...'. Do not close with a template like 'By ..., you can...'. Answer in flowing paragraphs, the way someone explains things in a chat."
+      : "Bicaralah seperti manusia asli yang sedang menjelaskan ke pemiliknya: bahasa santai sehari-hari, panggil 'kamu' (bukan 'Anda'), hangat, langsung. JANGAN terdengar seperti laporan atau halaman Wikipedia: jangan memakai daftar bernomor (1., 2., 3.), jangan membuka dengan templat seperti 'Riset ini dapat membahas tentang...', 'Beberapa contoh ... antara lain', jangan menutup dengan kalimat templat 'Dengan ..., Anda dapat...'. Tulis dalam paragraf yang mengalir seperti orang ngobrol, langsung ke inti.",
   );
 
   // Capability awareness — when asked "apa yang bisa kamu lakukan", the LLM
