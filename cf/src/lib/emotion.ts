@@ -150,8 +150,6 @@ const EMOJI_EMOTION: Record<string, [PlutchikEmotion, number][]> = {
   "💪": [["trust", 0.6], ["anticipation", 0.5]], "🫶": [["joy", 0.7], ["trust", 0.6]],
 };
 
-const PLUTCHIK_WORDS = new Set(Object.keys(PLUTCHIK_LEXICON));
-
 const POSITIVE_WORDS = new Set([
   "senang", "bahagia", "gembira", "puas", "suka", "cinta", "sayang",
   "bagus", "hebat", "luar biasa", "terbaik", "mantap", "keren", "wow",
@@ -180,18 +178,6 @@ const NEGATORS = new Set([
   "enggak", "ga", "gk", "tdk", "no", "never", "don't", "not", "isn't",
   "aren't", "wasn't", "weren't", "won't", "can't", "cannot", "couldn't",
 ]);
-
-// Compound emotions (Plutchik pairs)
-const COMPOUND_EMOTIONS: Record<string, PlutchikEmotion> = {
-  "joy+trust": "love",
-  "joy+anticipation": "optimism",
-  "trust+fear": "submission",
-  "fear+surprise": "awe",
-  "surprise+sadness": "disapproval",
-  "sadness+disgust": "remorse",
-  "disgust+anger": "contempt",
-  "anger+anticipation": "aggressiveness",
-};
 
 /** User mood state tracked across turns. */
 export interface MoodState {
@@ -312,20 +298,6 @@ function invertEmotion(e: PlutchikEmotion): PlutchikEmotion {
   return inverses[e] ?? "neutral";
 }
 
-/** Detect compound emotions from Plutchik pairs. */
-function detectCompound(scores: Map<PlutchikEmotion, number>): string | null {
-  const present = Array.from(scores.entries()).filter(([, v]) => v >= 0.5);
-  for (let i = 0; i < present.length; i++) {
-    for (let j = i + 1; j < present.length; j++) {
-      const key1 = `${present[i][0]}+${present[j][0]}`;
-      const key2 = `${present[j][0]}+${present[i][0]}`;
-      const compound = COMPOUND_EMOTIONS[key1] ?? COMPOUND_EMOTIONS[key2];
-      if (compound) return compound;
-    }
-  }
-  return null;
-}
-
 /** Detect if text contains sarcasm/heavy-sigh cues. */
 function detectSarcasm(text: string): boolean {
   // Pattern: positive words + ellipsis, "ya", "sure", excessive punctuation
@@ -423,9 +395,6 @@ export function detectEmotion(text: string): EmotionSignal {
     // Boost overall confidence if Plutchik agrees with sentiment
     confidence = Math.min(1, confidence + 0.1);
   }
-
-  // Compound emotion detection
-  const compound = detectCompound(plutchikScores);
 
   // Sarcasm detection
   const isSarcastic = detectSarcasm(text);

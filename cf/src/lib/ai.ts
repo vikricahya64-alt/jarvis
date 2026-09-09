@@ -15,7 +15,7 @@ import { Env, recentContext, searchMemory, storeLearnedKnowledge, isTopicKnown }
 import { withResilience, fetchWithTimeout, logRequest, getBreakerState } from "./resilience";
 import { getAnswerBehaviorContext, reflectOnTurn } from "./evolution";
 import { isResearchClass, orchestrateResearch } from "./subagents";
-import { buildConversationMessages, detectLanguage } from "./conversation";
+import { buildConversationMessages } from "./conversation";
 import { buildFinalReply } from "./response_formatter";
 import { detectEmotion as detectEmotionSig, inferEmotionFromContext, getMoodState, detectTopicSentiment } from "./emotion";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
@@ -1002,7 +1002,7 @@ export async function llmRespond(
 export async function recoverReply(
   env: Env,
   userText: string,
-  bad: string,
+  _bad: string,
   context: Array<{ role: string; content: string }>,
   anchor: string,
   verdict: Exclude<GateVerdict, "ok">,
@@ -1136,7 +1136,7 @@ export interface SearchHit {
 /** Structured search hits WITH URLs (used for citations). Fail-closed: always
  *  returns an array; layers that can't produce a URL are skipped. Deduped by
  *  host so the source list never feels like a link-farm. */
-export async function ddgSearchHits(env: Env, query: string): Promise<SearchHit[]> {
+export async function ddgSearchHits(_env: Env, query: string): Promise<SearchHit[]> {
   const hits: SearchHit[] = [];
   try {
     // 1) Official Instant Answer API — carries an AbstractURL.
@@ -1274,7 +1274,7 @@ function readableText(html: string): string {
  *  strips boilerplate, returns the best readable-text prefix (>=120 chars) or
  *  null. Deterministic and fail-closed: it never throws, never hangs the caller
  *  beyond the timeout, and never returns a useless sliver of text. */
-export async function deepReadPage(env: Env, url: string, maxChars = 1400): Promise<string | null> {
+export async function deepReadPage(_env: Env, url: string, maxChars = 1400): Promise<string | null> {
   const MAX_BYTES = 60000;
   try {
     if (!/^https?:\/\/[^\s]+$/.test(url)) return null;
@@ -1309,7 +1309,7 @@ export async function deepReadPage(env: Env, url: string, maxChars = 1400): Prom
  *  strategy as ddgSearch() but returns the top N structured findings — richer
  *  evidence for the sub-agent writer to synthesize across multiple angles.
  *  Always fail-open: returns [] when unreachable (caller degrades gracefully). */
-export async function searchTopResults(env: Env, query: string, limit = 3): Promise<SearchHit[]> {
+export async function searchTopResults(_env: Env, query: string, limit = 3): Promise<SearchHit[]> {
   const attempts: Array<() => Promise<SearchHit[]>> = [
     // 1) DDG HTML endpoint — multiple titled results with snippets + hrefs.
     async () => {
@@ -1468,7 +1468,7 @@ export async function searchAndSynthesize(
   const instHitsP = instReq
     ? institutionalSearchHits(env, instReq, 6).catch(() => [] as SearchHit[])
     : Promise.resolve([] as SearchHit[]);
-  const [instArr, searchResult, hits, context, mems, behaviorContext] = await Promise.all([
+  const [ , searchResult, hits, context, mems, behaviorContext] = await Promise.all([
     instHitsP,
     skipSearch ? Promise.resolve(null)
       : instReq ? instHitsP.then((ih) => (ih.length ? institutionalDigest(ih) : ddgSearch(env, topic)))
@@ -1825,7 +1825,7 @@ export interface IntentUnderstanding {
 export async function understandUserWants(
   env: Env,
   userText: string,
-  owner: number,
+  _owner: number,
   context: Array<{ role: string; content: string }> = [],
 ): Promise<IntentUnderstanding> {
   const text = (userText || "").trim();

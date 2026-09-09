@@ -14,7 +14,7 @@
 // - Hofstede's cultural dimensions
 //=====================================================================
 
-import { detectEmotion as detectEmotionBase, updateMood as updateMoodBase, getMoodState as getMoodStateBase, moodSummary, type MoodState } from "./emotion";
+import { detectEmotion as detectEmotionBase, type MoodState } from "./emotion";
 import { type Language, type LanguageCode } from "./jarvis_language";
 
 /** Emotion dimension scores. */
@@ -260,30 +260,6 @@ export function adaptEmotionExpression(
   }
 
   return emotion;
-}
-
-/** Get mood-appropriate response style. */
-export function getMoodResponseStyle(
-  mood: MoodState,
-  language: Language,
-): {
-  tone: string;
-  emoji: string[];
-  responseLength: "short" | "medium" | "long";
-} {
-  const styles: Record<string, { tone: string; emoji: string[]; responseLength: "short" | "medium" | "long" }> = {
-    joy: { tone: "enthusiastic", emoji: ["😊", "✨", "🎉"], responseLength: "medium" },
-    trust: { tone: "reassuring", emoji: ["🤝", "💪", "👍"], responseLength: "medium" },
-    fear: { tone: "calming", emoji: ["🤗", "💙", "🫂"], responseLength: "long" },
-    surprise: { tone: "excited", emoji: ["😮", "🌟", "🔥"], responseLength: "medium" },
-    sadness: { tone: "comforting", emoji: ["💙", "🫂", "✨"], responseLength: "long" },
-    disgust: { tone: "understanding", emoji: ["🤔", "💡", "📝"], responseLength: "medium" },
-    anger: { tone: "calming", emoji: ["💙", "🤝", "💪"], responseLength: "long" },
-    anticipation: { tone: "engaging", emoji: ["✨", "🚀", "💡"], responseLength: "medium" },
-    neutral: { tone: "balanced", emoji: ["👋", "😊", "💬"], responseLength: "medium" },
-  };
-
-  return styles[mood.current] ?? styles.neutral;
 }
 
 /** Format personality info for display. */

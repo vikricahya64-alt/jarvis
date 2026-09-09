@@ -12,10 +12,10 @@
 import { Env, touchActivity, logConsent, getConsentRequestTs } from "../lib/db";
 import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById, addAgentTask, listAgentTasks, markAgentTaskRunning, restartAgentTask, getAgentTask, deleteAgentTask, addAgentRule, listAgentRules, deleteAgentRule, setAgentRuleActive } from "../lib/db";
 import {
-  addProduct, listProducts, getProduct, updateProduct, deleteProduct, adjustStock, lowStockProducts,
-  addCustomer, listCustomers, searchCustomer,
+  addProduct, listProducts, updateProduct, lowStockProducts,
+  addCustomer, listCustomers,
   createOrder, listOrders, getOrder, updateOrderStatus, salesReport,
-  type Product, type Order, type OrderInput,
+  type Order, type OrderInput,
 } from "../lib/db";
 import { sendMessage, sendPhoto, sendVoice, editMessageReplyMarkup, answerCallbackQuery, getWebhookInfo, setWebhook, TelegramUpdate, TelegramMessage, downloadTelegramFile, deliverSmartReply } from "../lib/telegram";
 import { withResilience, fetchWithTimeout } from "../lib/resilience";
@@ -25,7 +25,7 @@ import {
   setPrivacyMode, isPrivacyMode,
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
-import { queueStatus, recordTaskCounters, recentContext, appendMemory } from "../lib/db";
+import { queueStatus, recordTaskCounters, recentContext } from "../lib/db";
 import { extractTopic, parseTranslate, translateText, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, storeResearchAnchor } from "../lib/ai";
 import { getWeatherText } from "../lib/weather";
 
@@ -53,7 +53,7 @@ import { delegateToGithub, flagAgentReport } from "../lib/agent_executor";
 import { parseRecurSpec } from "../lib/agent_rules";
 import {
   listInsights, setPreference, disablePreference, getActivePreferences,
-  auditPhantomRules, reflectOnTurn,
+  auditPhantomRules,
 } from "../lib/evolution";
 import { listSuggestions, resolveSuggestion } from "../lib/predictive";
 import {
@@ -97,7 +97,7 @@ async function fire<T>(p: Promise<T>): Promise<void> {
 /** Wrap an owner diagnostic command so a transient D1/KV error still yields a
  *  helpful reply instead of silently dropping the command (which would make it
  *  look unresponsive). Falls back to a graceful message on failure. */
-async function safeDBReply<T>(
+async function safeDBReply(
   env: Env,
   chatId: number,
   produce: () => Promise<string>,
@@ -1521,7 +1521,6 @@ export function isBareTodoVerb(text: string): boolean {
  *  error surfaces a graceful message (never a silent drop or a crash). */
 async function handleTodoCommand(env: Env, owner: number, raw: string): Promise<void> {
   const trimmed = raw.trim();
-  const lower = trimmed.toLowerCase();
 
   // --- Add: "/todo add teks", "/todo tambah teks", "tambah todo teks",
   //         "buat todo teks", "add todo teks" (beberapa kata setara "tambah") ---
@@ -1746,7 +1745,6 @@ async function handleReminderCommand(env: Env, owner: number, raw: string): Prom
       return;
     }
     const lines = items.map((r) => {
-      const d = new Date(r.due_at);
       const wib = new Date(r.due_at + 7 * 3600 * 1000).toISOString().slice(11, 16);
       const rep = r.repeat === "daily" ? " 🔁harian" : r.repeat === "weekly" ? " 🔁mingguan" : r.repeat === "hourly" ? " 🔁tiap jam" : "";
       return `#${r.id} · ${r.text.slice(0, 60)} — pukul ${wib} WIB${rep}`;

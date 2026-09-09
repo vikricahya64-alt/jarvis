@@ -14,7 +14,7 @@
 //   * Owner telegram ID match (env.OWNER_TELEGRAM_ID).
 //=====================================================================
 
-import { Env, logObedience, logViolation, getDmsConfig, writeDmsConfig, DmsConfig } from "./db";
+import { Env, logObedience, logViolation, getDmsConfig, writeDmsConfig } from "./db";
 import { validateAction, riskScore } from "./constitutional_guard";
 
 export const TIERS = {
@@ -217,7 +217,6 @@ export async function routeCommand(
   opts: { origin?: "user" | "autonomous" | "predictive" } = {},
 ): Promise<HierarchyResult> {
   const gate = Number(env.CLARITY_GATE || "0.95");
-  const consentThreshold = Number(env.RISK_CONSENT_THRESHOLD || "0.3");
   const cmdHash = hash(rawText);
   const origin = opts.origin ?? "user";
 

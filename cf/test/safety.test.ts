@@ -527,8 +527,9 @@ async function testLevel13Evolution() {
   }
 
   // index.ts must run the dream cycle on the new cron and honor the cron lock.
+  // The 07:00 cron runs runEvolutionLoop, which drives runDreamCycle internally.
   const idx = readFileSync(new URL("../src/index.ts", import.meta.url), "utf-8");
-  assert.ok(/runDreamCycle/.test(idx), "index must run the dream cycle on cron");
+  assert.ok(/runEvolutionLoop/.test(idx), "index must run the evolution loop (dream cycle) on cron");
   assert.ok(/0 7 \* \* \*/.test(readFileSync(new URL("../wrangler.toml", import.meta.url), "utf-8")),
     "wrangler.toml must register the 0 7 dream cron");
 

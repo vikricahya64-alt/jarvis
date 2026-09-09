@@ -14,7 +14,7 @@
 
 /** A lightweight runtime validator: given an unknown parsed value, return
  *  null if it's valid, or a human-readable error string. */
-export type Validator<T> = (v: unknown) => string | null;
+export type Validator = (v: unknown) => string | null;
 
 export function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -25,7 +25,7 @@ export function isObj(v: unknown): v is Record<string, unknown> {
 export function stringFieldsValidator<T extends object>(
   fields: Array<[keyof T & string, string]>,
   predicates: Partial<Record<keyof T & string, (s: string) => boolean>> = {},
-): Validator<T> {
+): Validator {
   return (v) => {
     if (!isObj(v)) return "objektif: bukan objek JSON";
     for (const [key, label] of fields) {
@@ -57,7 +57,7 @@ export function extractJsonBlock(text: string): string | null {
  *  retry call). Returns the parsed value or null on final failure. */
 export async function parseStructured<T>(
   raw: unknown,
-  validator: Validator<T>,
+  validator: Validator,
   retry: (error: string) => Promise<string | null>,
 ): Promise<T | null> {
   if (typeof raw !== "string") return null;

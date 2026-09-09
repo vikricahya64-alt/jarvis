@@ -413,7 +413,7 @@ export async function sweepExpiredProposals(env: Env, now = Date.now()): Promise
  *  Helps adapt tone when direct emotion detection fails. */
 export async function storeEmotionalPattern(
   env: Env,
-  owner: number,
+  _owner: number,
   topic: string,
   emotion: string,
   responseTone: string,
@@ -432,7 +432,7 @@ export async function storeEmotionalPattern(
 /** Retrieve emotional patterns for a topic to adapt response tone. */
 export async function getEmotionalPatterns(
   env: Env,
-  owner: number,
+  _owner: number,
   topic: string,
 ): Promise<Array<{ emotion: string; tone: string; success: boolean }>> {
   try {
@@ -813,7 +813,7 @@ export async function decayMemories(
 /** Simpan observasi terstruktur tentang user. */
 export async function saveObservation(
   env: Env,
-  owner: number,
+  _owner: number,
   observation: string,
   category: string = "general",
 ): Promise<void> {

@@ -21,8 +21,8 @@
 // - CORAL (2026): self-evolving multi-agent shared persistent memory
 //=====================================================================
 
-import { Env, recentContext, appendMemory, searchMemory } from "./db";
-import { detectEmotion, updateMood, getMoodState, setMoodState, moodSummary, type MoodState } from "./emotion";
+import { Env, recentContext, searchMemory } from "./db";
+import { getMoodState, setMoodState, moodSummary, type MoodState } from "./emotion";
 import { topicOverlaps } from "./ai";
 
 /** A single conversation turn. */
@@ -88,7 +88,6 @@ const sessions = new Map<number, SessionState>();
  *  Approximates 1 token ≈ 4 chars for Indonesian text. */
 const MAX_CONTEXT_CHARS = 4800; // ~1200 tokens
 const SUMMARY_COMPRESS_THRESHOLD = 8; // compress after this many raw turns
-const SUMMARY_TARGET_CHARS = 800; // target length for compressed summary
 
 /** Initialize working memory with defaults. */
 function initWorkingMemory(): WorkingMemory {
@@ -318,39 +317,6 @@ export function detectTopicContinuity(
   }
 
   return { isContinuation: false, topic: null, confidence: 0.3 };
-}
-
-/** Compress old turns into a summary string (summarization chain).
- *  Uses extractive summarization: key sentences from older turns.
- *  Returns a summary string to prepend to context. */
-function compressTurns(turns: Array<{ role: string; content: string }>): string {
-  if (turns.length === 0) return "";
-
-  // Extractive approach: take first sentence of each turn + any explicit facts
-  const sentences: string[] = [];
-  for (const turn of turns) {
-    const text = turn.content.trim();
-    // Split into sentences (Indonesian/English punctuation)
-    const sents = text.split(/(?<=[.!?])\s+/);
-    if (sents.length > 0) {
-      // Take the first sentence (most likely to contain the main point). Cut
-      // at a sentence-ish boundary; when forced mid-sentence > 150 chars mark
-      // the truncation so a sliced number/claim is never read as a fact.
-      const s0 = sents[0];
-      sentences.push(s0.length > 150 ? `${s0.slice(0, 150).trimEnd()}…` : s0);
-    }
-    // Also extract any explicit facts (dates, numbers, names)
-    const factMatch = text.match(/\b(?:tanggal|date|usia|umur|nomor|number|alamat|address|nama|name)\b[^.!?]*[.!?]/gi);
-    if (factMatch) {
-      for (const f of factMatch.slice(0, 2)) {
-        sentences.push(f.length > 100 ? `${f.slice(0, 100).trimEnd()}…` : f);
-      }
-    }
-  }
-
-  // Deduplicate and truncate
-  const unique = [...new Set(sentences)];
-  return unique.join(" ").slice(0, SUMMARY_TARGET_CHARS);
 }
 
 /** Update working memory based on conversation context.
