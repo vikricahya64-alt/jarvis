@@ -495,7 +495,10 @@ export async function buildEnrichedContext(
       const memText = mems.map((m) => m.content).join(" | ").slice(0, Math.min(1000, charBudget));
       context.push({
         role: "assistant",
-        content: `[Kenangan relevan tentang "${topic}" — dari memori kami, belum diverifikasi ulang]: ${memText}`,
+        content: `[Kenangan relevan tentang "${topic}" — dari memori kami]: ${memText}. ` +
+          `Jika topik ini relevan dengan yang pernah dibahas sebelumnya, natural saja menyebutnya ` +
+          `(mis. "Oh iya, dulu kamu pernah bahas soal..." atau "Ini relates ke yang tadi..."). ` +
+          `Tapi JANGAN paksa menyebut memori kalau memang tidak relevan.`,
       });
       charBudget -= memText.length;
     }
