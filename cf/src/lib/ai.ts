@@ -947,19 +947,31 @@ export async function llmRespond(
   const sharedOpts = { ...opts, prebuiltMessages };
 
   // Provider cascade with circuit-breaker awareness (free-tier smoothing).
-  // Groq (free, strong model) → Workers AI (free edge) → OpenRouter (free
-  // models) → Gemini (free last-resort). Quality first: the owner wants
+  // Default: Groq (free, strong model) → Workers AI (free edge) → OpenRouter
+  // (free models) → Gemini (free last-resort). Quality first: the owner wants
   // answers that read like a person, so the best free conversational model
-  // speaks first; Workers AI remains an unlimited resilience backstop. A provider whose breaker is OPEN is skipped up front
+  // speaks first; Workers AI remains an unlimited resilience backstop.
+  // Deep mode (research synthesis, hard coding questions): OpenRouter's free
+  // reasoning model leads — it reads intent the most accurately — then the
+  // usual fallbacks. A provider whose breaker is OPEN is skipped up front
   // (fast-fail) instead of burning an HTTP attempt + latency; its cooldown
   // will reopen it later automatically via half-open probing. D1 reads only
   // happen when the breaker has not been consulted recently (KV warm cache).
-  const preferred: Array<{ p: "workers_ai" | "groq" | "openrouter" | "gemini"; fn: () => Promise<string | null>; src: "workers_ai" | "groq" | "openrouter" | "gemini" }> = [
-    { p: "groq", fn: () => groqRespond(env, userText, sharedOpts), src: "groq" },
-    { p: "workers_ai", fn: () => workersAiRespond(env, userText, sharedOpts), src: "workers_ai" },
-    { p: "openrouter", fn: () => openrouterRespond(env, userText, sharedOpts), src: "openrouter" },
-    { p: "gemini", fn: () => geminiRespond(env, userText, sharedOpts), src: "gemini" },
-  ];
+  const preferred: Array<{ p: "workers_ai" | "groq" | "openrouter" | "gemini"; fn: () => Promise<string | null>; src: "workers_ai" | "groq" | "openrouter" | "gemini" }> = (
+    opts.deep
+      ? [
+          { p: "openrouter", fn: () => openrouterRespond(env, userText, sharedOpts), src: "openrouter" },
+          { p: "groq", fn: () => groqRespond(env, userText, sharedOpts), src: "groq" },
+          { p: "workers_ai", fn: () => workersAiRespond(env, userText, sharedOpts), src: "workers_ai" },
+          { p: "gemini", fn: () => geminiRespond(env, userText, sharedOpts), src: "gemini" },
+        ]
+      : [
+          { p: "groq", fn: () => groqRespond(env, userText, sharedOpts), src: "groq" },
+          { p: "workers_ai", fn: () => workersAiRespond(env, userText, sharedOpts), src: "workers_ai" },
+          { p: "openrouter", fn: () => openrouterRespond(env, userText, sharedOpts), src: "openrouter" },
+          { p: "gemini", fn: () => geminiRespond(env, userText, sharedOpts), src: "gemini" },
+        ]
+  );
   for (const cand of preferred) {
     if (cand.p === "workers_ai" && !env.AI) continue;
     // Fail-closed: breaker read failure means "try it" (availability first).

@@ -153,7 +153,7 @@ function adaptPersonality(
 
 /** Detect query intent from normalized text to adjust tone dynamically. */
 function detectIntent(text: string): {
-  type: "question" | "command" | "search" | "chat" | "emergency" | "translation";
+  type: "question" | "command" | "search" | "chat" | "emergency" | "translation" | "code";
   urgency: "low" | "medium" | "high";
   formality: "casual" | "neutral" | "formal";
 } {
@@ -173,6 +173,12 @@ function detectIntent(text: string): {
   // Translation
   if (/\b(?:terjemahkan|translate)\b/i.test(low)) {
     return { type: "translation", urgency: "low", formality: "formal" };
+  }
+
+  // Code / programming language — explicit code task OR code vocabulary with an
+  // action verb (conservative so "aku suka coding" stays casual chat).
+  if (/```/.test(low) || (/\b(?:kode|code|coding|pemrograman|programming|script|skrip|syntax|sintaks|algoritm[ae]|debug)\b/i.test(low) && /\b(?:tulis|buat|bikin|jelaskan|perbaiki|debug|analisis|analisa|baca|review|review|cara|bagaimana|apa|kenapa|mengapa)\b/i.test(low))) {
+    return { type: "code", urgency: "low", formality: "neutral" };
   }
 
   // Command (slash or action verb)
@@ -291,6 +297,13 @@ export function buildSystemPrompt(opts: {
       : "Bicaralah seperti manusia asli yang sedang menjelaskan ke pemiliknya: bahasa santai sehari-hari, panggil 'kamu' (bukan 'Anda'), hangat, langsung. JANGAN terdengar seperti laporan atau halaman Wikipedia: jangan memakai daftar bernomor (1., 2., 3.), jangan membuka dengan templat seperti 'Riset ini dapat membahas tentang...', 'Beberapa contoh ... antara lain', jangan menutup dengan kalimat templat 'Dengan ..., Anda dapat...'. Tulis dalam paragraf yang mengalir seperti orang ngobrol, langsung ke inti.",
   );
 
+  // Human brain — deliberate cognition, not autocomplete
+  parts.push(
+    lang?.code === "en"
+      ? "Think like a smart human: first grasp the FULL meaning — everyday language as well as programming languages (Python, JavaScript/TypeScript, SQL, shell, etc.). Read the user's exact words; answer exactly what the words ask. When you see code, understand what it does before you answer. When you write code, wrap it in a ``` block with its language label. If a task needs several modules (web research, running code, files, todos, scheduling), sequence them like a person would: understand → plan → do → report briefly."
+      : "Berpikir seperti manusia yang cerdas: pahami dulu maksudnya secara utuh — baik bahasa sehari-hari maupun bahasa pemrograman (Python, JavaScript/TypeScript, SQL, bash, dll). Jawab sesuai kata yang ditulis pengguna dengan tepat, tanpa mengganti topik dengan istilah lain yang mirip. Saat melihat kode, pahami dulu apa yang dikerjakannya sebelum menjawab. Saat menulis kode, bungkus dalam blok ``` dan beri label bahasanya. Jika tugas butuh beberapa modul (riset web, menjalankan kode, file/vault, todo, jadwal), urutkan seperti manusia: pahami → rencanakan → kerjakan → laporkan secara singkat.",
+  );
+
   // Capability awareness — when asked "apa yang bisa kamu lakukan", the LLM
   // must know JARVIS's actual features, not hallucinate generic answers.
   // Uses the SINGLE SOURCE OF TRUTH from identity.ts (imported constant).
@@ -390,6 +403,17 @@ parts.push(
       } else {
         parts.push(
           "Untuk riset: tulis jawaban SEPENUHNYA — bukan sekadar ringkasan. Kembangkan topik menjadi jawaban utuh yang mengalir seperti ditulis manusia: paragraf naratif, detail, dan mendalam. Gunakan poin hanya bila benar-benar membantu. Gunakan nada santai seperti menjelaskan ke teman — bahasa sehari-hari, bukan laporan formal. Sebutkan sumber untuk klaim/angka; Jangan mengarang data. Jika informasi tidak ditemukan, katakan saja. Jangan mengulang frasa yang sama.",
+        );
+      }
+      break;
+    case "code":
+      if (lang?.code === "en") {
+        parts.push(
+          "Programming/code request: answer EXACTLY what is being asked, using the real meaning of the words — e.g. 'tell me what Python code is' means explain what the Python programming language is. Never switch the topic to a similar-sounding term. Understand the real intent first, explain it clearly and simply, then show any code inside a ```block with its language label. If the user asks you to fix or build something, give working, idiomatic code and explain your changes like a helpful senior engineer — not a textbook. Talk like a person, not a manual.",
+        );
+      } else {
+        parts.push(
+          "Permintaan kode/program: jawab PERSIS apa yang ditanyakan dan gunakan makna kata yang sebenarnya — mis. 'jelaskan apa itu kode python' berarti jelaskan apa itu kode/bahasa pemrograman Python. Jangan mengganti topik dengan istilah lain yang mirip. Pahami dulu maksud sebenarnya, jelaskan dengan jelas dan sederhana, lalu tampilkan kode di dalam blok ``` beserta label bahasanya. Jika diminta memperbaiki atau membuat sesuatu, berikan kode yang berfungsi dan idiomatik, lalu jelaskan perubahannya seperti engineer senior yang ramah — bukan gaya buku teks. Jangan memakai kata 'Anda'; panggil pengguna 'kamu'.",
         );
       }
       break;

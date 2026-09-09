@@ -103,6 +103,8 @@ function testSlangExpansion() {
     "'gw'->saya; 'mau' (not short slang) kept; 'cari' kept so search marker survives");
   assert.strictEqual(normalizeInput("translate stuff ke English"), "translate stuff ke english",
     "prefix preserved; only casing normalized");
+  assert.strictEqual(normalizeInput("jelaskan apa itu kode python"), "jelaskan apa itu kode python",
+    "regression m9-v8: 'kode' must never be spell-corrected into 'mode'");
 }
 
 function testTypoTolerance() {
