@@ -264,6 +264,13 @@ export function detectTopicContinuity(
 
   const overlapRatio = currentWords.length > 0 ? overlap / currentWords.length : 0;
 
+  // Simplification request (re-explain the ongoing topic in plain words)
+  // is a continuation, not a fresh topic switch.
+  const simplifyWords = /\b(lebih mudah|sederhanakan|saya belum mengerti|saya nggak paham|biar paham|gampang|mudah dipahami|tolong sederhanakan|jika bisa)\b/i;
+  if (simplifyWords.test(current) || /belum\s+mengerti|tidak\s+paham/i.test(current)) {
+    return { isContinuation: true, topic: null, confidence: 0.72 };
+  }
+
   // Follow-up markers (high continuation signal)
   const followUpMarkers = /\b(lebih dalam|lanjut|terus|yang tadi|detail|expand|selanjutnya|kemudian|lalu|itupun|itu jug)\b/i;
   const isFollowUp = followUpMarkers.test(current);
@@ -282,10 +289,10 @@ export function detectTopicContinuity(
   }
 
   // ANAPHORIC / RELATIVE continuation — the humane "no trigger word" case.
-  // "kalau untuk…", "yang mana…", "itu gimana…", "…juga", "…lagi" all keep
-  // pointing at the prior turn; combined with a substantive prior reply they
-  // mean: keep talking about the same thing.
-  const relativeMarkers = /\b(itu|ini|yang\s+(?:tadi|itu|mana|paling)|kalau|kalo|gimana|bagaimana\s+kalau|berarti|abis\s+itu|habis\s+itu|setelah\s+itu|dari\s+tadi|tadi\s+itu|juga|lagi|dong|sama\s+itu|caranya|carany)\b/i;
+  // "kalau untuk…", "yang mana…", "itu gimana…", "…juga", "…lagi",
+  // "ya", "oke", "ok" keep pointing at the prior turn; combined with a
+  // substantive prior reply they mean: keep talking about the same thing.
+  const relativeMarkers = /\b(itu|ini|yang\s+(?:tadi|itu|mana|paling)|kalau|kalo|gimana|bagaimana\s+kalau|berarti|abusitu|habisitu|setelahitu|dari\s+tadi|tadi\s+itu|juga|lagi|dong|sama\s+itu|caranya|carany|ya\b|oke|ok)\b/i;
   const isRelative = relativeMarkers.test(current);
 
   if (isRelative && current.length <= 90) {

@@ -412,6 +412,7 @@ function writerSystem(ownerSovereignty: string): string {
     "Pertahankan kepadatan informasi (padat, jangan bertele-tele), tetapi tetap terasa seperti pesan manusia, bukan dokumen.",
     "DILARANG menulis label kerja internal seperti '<<<UNTRUSTED_EXTERNAL_CONTENT>>>'/'UNTRUSTED_EXTERNAL_CONTENT' dan DILARANG memakai tanda kurung siku 【 】 atau skor kepercayaan seperti 【high】/【medium】 di dalam jawaban.",
     "Kutip sumber dengan MENYALIN URL persis dari daftar referensi di atas, sebagai [label](url) atau URL polos — jangan pernah membuat/mengubah URL baru.",
+    "Tutup dengan SATU pertanyaan lanjutan yang alami dan relevan dengan topik (mis. menawarkan menggali bagian tertentu) — bukan kalimat robot seperti 'apakah ada yang bisa saya bantu lagi?'. Boleh tanpa pertanyaan kalau itu penutup paling pas.",
   ].join("\n");
 }
 

@@ -206,6 +206,46 @@ export function cleanLLMArtifacts(text: string): string {
     .trim();
 }
 
+// ============================================================================
+// RECIPROCAL QUESTION (m9-v10) — the basis of human communication is TURN-
+// TAKING: after an answer, a person naturally asks back or invites the other
+// to keep the thread going. JARVIS must do the same or a reply reads like a
+// monologue. Two layers: (1) prompt rails tell the LLM to close with ONE
+// natural follow-up question; (2) ensureReciprocalQuestion is the deterministic
+// safety net so NO conversational answer ends without inviting the owner back.
+// ============================================================================
+
+/** Rotating, human-flavored follow-up questions (never the customer-service
+ *  "apakah ada yang bisa saya bantu lagi?" robot line). Keep them short,
+ *  familiar, and phrased as invitations, not chores. */
+const RECIPROCAL_POOL = [
+  "Mau aku gali lebih dalam bagian yang mana?",
+  "Ada bagian yang tadi masih bikin kamu penasaran?",
+  "Gimana menurutmu — ada sudut yang mau kamu kejar lebih jauh?",
+  "Perlu aku cekin juga sisi lain di sekitar itu?",
+  "Mau kubandingkan juga dengan opsi yang lain?",
+  "Dari situ kamu pengen lanjut ke arah mana?",
+];
+let reciprocalCursor = 0;
+
+/** Ensure a conversational reply invites the owner back with ONE natural
+ *  follow-up question. Skip when the reply is already a question/closing, is
+ *  too short to be an answer (canned label, "Siap."), or already contains an
+ *  invitation. Never touches translated text / composed prompts / statuses —
+ *  the caller decides (skip via `guard`). Pure and deterministic. */
+export function ensureReciprocalQuestion(
+  reply: string,
+  opts: { skip?: boolean } = {},
+): string {
+  const t = (reply ?? "").trim();
+  if (opts.skip || t.length < 40) return reply;
+  if (/[?!…]\s*$/.test(t)) return reply; // already a question/closing
+  if (/\b(?:mau aku|perlu aku|ada yang mau kamu|gimana menurutmu)\b/i.test(t)) return reply;
+  const q = RECIPROCAL_POOL[reciprocalCursor % RECIPROCAL_POOL.length];
+  reciprocalCursor = (reciprocalCursor + 1) % RECIPROCAL_POOL.length;
+  return `${t}\n\n${q}`;
+}
+
 /** Format citations in research responses.
  *  Converts bare URLs and source mentions into Markdown links (unless the
  *  caller is the prose-rails research path, where URLs are already

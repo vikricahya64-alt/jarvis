@@ -820,6 +820,22 @@ async function testLevel15DeepResearch() {
   assert.ok(/relativeMarkers/.test(ctxSrc), "continuity detector must define anaphoric/relative markers");
   assert.ok(/MENERUSKAN percakapan/.test(brainSrc),
     "brain must frame continuing chat replies to the active topic");
+
+  // m9-v10 SIMPLIFY GUARD: "jelaskan dengan bahasa yang lebih mudah" must
+  // NOT be treated as a fresh search topic (it re-explains the ACTIVE topic).
+  // classifyIntent must have a simplify guard BEFORE the search block; the
+  // continuity detector must have simplifyWords; and the brain must frame
+  // simplification requests as "re-explain the active topic" (not "new search").
+  assert.ok(/lebih mudah|sederhanakan/.test(brainSrc),
+    "brain must have a simplify intent guard in classifyIntent");
+  assert.ok(/penjelasan lebih sederhana/.test(brainSrc),
+    "brain must frame simplify requests as re-explaining the active topic");
+  assert.ok(/lebih mudah|sederhanakan/.test(ctxSrc),
+    "continuity detector must recognize simplify requests as continuations");
+
+  // m9-v10 URL STRIP: non-research/chat paths must strip fabricated URLs.
+  assert.ok(/safeReply/.test(brainSrc),
+    "brain must strip URLs from non-research paths (anti-fabrication)");
 }
 
 async function testLevel16Predictive() {
