@@ -1519,6 +1519,8 @@ export async function searchAndSynthesize(
       `BICARALAH JADI MANUSIA BIASA: langsung ke inti, pilih 1–2 poin paling berdampak ` +
       `(jangan mendaftar semua kemungkinan), pakai kalimat sehari-hari yang pendek, ` +
       `dan berhenti begitu pertanyaan sudah terjawab — kalau cukup 2 kalimat, jangan 10. ` +
+      `JANGAN menambah topik atau informasi yang TIDAK diminta oleh pemilik. ` +
+      `Jika pertanyaan sudah terjawab, BERHENTI — jangan lanjut ke topik lain. ` +
       `Tutup dengan SATU pertanyaan lanjutan yang alami dan relevan dengan topik ` +
       `(mis. menawarkan menggali bagian tertentu) — jangan kalimat robot seperti ` +
       `"apakah ada yang bisa saya bantu lagi?". Boleh tanpa pertanyaan kalau itu penutup paling pas.`,
@@ -1864,4 +1866,88 @@ export async function understandUserWants(
   const understood = !looksLikeQuestion;
 
   return { reply, understood, topic: baseTopic };
+}
+
+// ============================================================================
+// COMPREHENSION GATE (typo / garble detection)
+// ============================================================================
+// The owner's principle: a human, faced with a sentence that has typos or an
+// odd phrase that doesn't fit the topic being discussed, ASKS before answering
+// (never fake-answers a garbled question). Live failures: "jelaskan bahasa
+// mudah" → confident answer about Malang; "perbedaan generasi hambar vs teks
+// pada platform age" → confident answer about a nonexistent "platform AGE".
+// This gate runs a single cheap LLM check and returns { clear: false } when
+// the message reads odd/unwarranted for the ongoing topic. Fail-closed
+// behavior is to ASK for clarification — answering a garbled input with
+// confidence is the expensive failure.
+
+export interface GarbledCheck {
+  /** true = message reads clear/natural for the conversation; proceed. */
+  clear: boolean;
+  /** The exact term/phrase the assistant is unsure about (or null). */
+  uncertain: string | null;
+}
+
+/** Deterministic fast-path pre-filter: obvious signals cost nothing.
+ *  Returns true if we can skip the LLM check with reasonable certainty. */
+function likelyClear(text: string): boolean {
+  const low = text.toLowerCase();
+  // Commands, emergency, self-ref, known-structure asks with clear question
+  // words and plausible Indonesian words — skip the LLM gate (fast path).
+  if (/^[\/!]/.test(low)) return true;
+  if (/\b(halo|hai|hi|terima kasih|thanks|oke|ok)\b/.test(low)) return true;
+  // Question with a known question word AND no obvious acronym/odd token →
+  // treat as clear. TOO tricky to be fully deterministic; the LLM gate below
+  // is the authoritative check. Only skip for very high-signal short messages.
+  if (low.length <= 3) return true;
+  return false;
+}
+
+/** Run the comprehension gate. Uses a single fast LLM check; fail-open: any
+ *  LLM error → treat as "clear" so a transient hiccup never blocks the reply.
+ *  (A failed LLM is not a garbled query — blocking would only add failures.) */
+export async function detectGarbledInput(
+  env: Env,
+  userText: string,
+  context: Array<{ role: string; content: string }> = [],
+  topic: string | null = null,
+): Promise<GarbledCheck> {
+  const text = (userText || "").trim();
+  if (text.length < 4 || likelyClear(text)) return { clear: true, uncertain: null };
+
+  const prior = context
+    .filter((c) => (c.content || "").trim())
+    .slice(-6)
+    .map((c) => `[${c.role}] ${c.content.slice(0, 350)}`)
+    .join("\n");
+
+  const prompt =
+    `Periksa apakah pesan berikut JELAS dan WAJAR dalam konteks percakapan, atau ada ` +
+    `kata/istilah yang aneh, salah ketik (typo), atau tidak sesuai dengan topik ` +
+    `yang sedang dibicarakan — sehingga manusia biasa akan bertanya dulu ` +
+    `("maksudnya apa?") sebelum menjawab.\n\n` +
+    `Pesan: "${text}"\n` +
+    `Topik aktif: ${topic ?? "(belum ada)"}\n` +
+    (prior ? `\nKonteks percakapan terakhir:\n${prior}\n` : "") +
+    `\nBalas HANYA JSON: {"clear": true/false, "uncertain": "<istilah yang kurang jelas, atau kosong>"}. ` +
+    `clear=true bila pesan wajar dan bisa dijawab langsung; clear=false bila ada ` +
+    `bagian yang aneh/typo/tidak masuk akal untuk topik, sehingga pertanyaan ` +
+    `klarifikasi lebih tepat daripada jawaban percaya diri.`;
+
+  try {
+    const g = await llmRespond(env, prompt, {
+      topic: `comprehension-${(topic ?? text).slice(0, 40)}`,
+      skipUserMessage: true,
+      deep: false,
+    });
+    const raw = (g.reply ?? "").trim();
+    if (!raw) return { clear: true, uncertain: null };
+    const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, "")) as { clear?: unknown; uncertain?: unknown };
+    if (typeof parsed.clear === "boolean") {
+      return { clear: parsed.clear, uncertain: typeof parsed.uncertain === "string" ? parsed.uncertain : null };
+    }
+    return { clear: true, uncertain: null };
+  } catch {
+    return { clear: true, uncertain: null };
+  }
 }
