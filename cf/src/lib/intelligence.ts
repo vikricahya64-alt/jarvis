@@ -38,6 +38,7 @@ import {
   parseTranslate, translateText, understandUserWants,
   generateImagePrompt, generateImage, sniffImageMime,
   storeResearchAnchor,
+  detectGarbledInput,
 } from "./ai";
 import {
   isResearchClass, orchestrateResearch,
@@ -579,13 +580,6 @@ export async function act(
         topic: topic ?? undefined,
         context: enrichedContext,
         contextIsEnriched: true,
-        // m9-v10 HUMANE CONTINUITY FRAME: when the message continues the prior
-        // topic WITHOUT a trigger word (isContinuation), anchor the LLM to the
-        // active topic explicitly — otherwise short relative replies ("kalau
-        // untuk perseorangan?", "itu gimana caranya?") drift to a generic
-        // unrelated answer. Frame defers to a genuinely new question.
-        // Also: SIMPLIFY frame — when the user asks for simpler explanation,
-        // re-explain the ACTIVE topic in plain words, not a new search.
         systemOverride: (() => {
           if (!perception.isContinuation || !topic) return undefined;
           const isSimplify = /\b(lebih mudah|sederhanakan|belum mengerti|nggak paham|gampang|mudah dipahami|biar paham|tolong sederhanakan)\b/i.test(text);
@@ -602,8 +596,6 @@ export async function act(
             `TETAP pada topik "${topic}" — JANGAN menyimpang ke topik lain, ` +
             `JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas.`;
         })(),
-        // Hard-lift comprehension for code questions: OpenRouter's free
-        // reasoning model reads ambiguous wording far more accurately.
         deep: perception.intent.type === "code",
       });
       if (result.reply) {
@@ -722,6 +714,40 @@ export async function processIntelligence(
         perception,
         strategy,
         source: "relevance_gate",
+        latencyMs: Date.now() - start,
+        reflection: { shouldReflect: false, topic: perception.topic },
+      };
+    }
+  }
+
+  // m9-v11 COMPREHENSION GATE (typo/garble detection): an odd sentence that
+  // doesn't fit the ongoing topic should be ASKED ABOUT, not confidently
+  // answered (owner principle: "manusia bertanya saat tidak mengerti kalimat
+  // yang aneh, sebelum menjawabnya"). Live failures: "jelaskan bahasa mudah"
+  // → Malang; "generasi hambar vs teks pada platform age" → fabricated
+  // "platform AGE". Runs BEFORE decide/act so a garbled message never burns
+  // a search/design run on a misread topic. Skipped when we already resume a
+  // parked confirmation, and on commands/emergency/self-ref (deterministic,
+  // low-risk paths where a gate would just add noise).
+  const skipComprehension =
+    pending ||
+    /^\//.test(text.trim()) ||
+    /^(emergency|self_referential|translation|command|prompt_writer|context7)$/.test(perception.intent.type);
+  if (!skipComprehension) {
+    const garbled = await detectGarbledInput(env, effectiveText, perception.enrichedContext, perception.topic).catch(
+      () => ({ clear: true, uncertain: null }),
+    );
+    if (garbled.clear === false) {
+      const term = garbled.uncertain?.trim();
+      const clarify =
+        term && term.length <= 60 && !/^[\s\W]+$/.test(term)
+          ? `Sebelum kujawab: "${term}" yang kamu maksud itu apa ya? Aku belum paham istilah itu dalam konteks ini — boleh jelaskan sedikit?`
+          : `Sebelum kujawab, mau memastikan dulu: maksud pesanmu itu apa ya? Ada bagian yang belum kupahami — boleh dijelaskan ulang?`;
+      return {
+        text: clarify,
+        perception,
+        strategy,
+        source: "understand_clarify",
         latencyMs: Date.now() - start,
         reflection: { shouldReflect: false, topic: perception.topic },
       };

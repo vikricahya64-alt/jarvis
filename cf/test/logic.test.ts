@@ -13,7 +13,7 @@ import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize"
 import { isTranslateCapRequest, matchWebhookPreCapability, capabilityIntent, getCapability, approachForIntent, describeCapabilities } from "../src/lib/capability_registry";
 import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate, trackTokenUsage, detectConfusableTopic } from "../src/lib/ai";
 import { recoveryPlan, classifyOperational, budgetedRecovery, tallyFailure, readFailureTally, readFailureLedger, ledgerDayKey } from "../src/lib/failure";
-import { gateVerdict, tallyGate, sanitizeUncitedLinks, normalizeLinkForCompare } from "../src/lib/verifier";
+import { gateVerdict, tallyGate, sanitizeUncitedLinks, normalizeLinkForCompare, isRawDumpText, isRepetitiveText, isLikelyTruncated, repairTruncatedReply } from "../src/lib/verifier";
 import { cleanSubReply, alignAngles, significantTokens } from "../src/lib/subagents";
 import { runGapUpgradeLoop, resolveGapProposal, listGapProposals, describeGapProposals, capIdForPath, GAP_MIN_7D } from "../src/lib/gap_upgrade";
 import { isPromptMasterRequest, isPromptShaped, sanitizePromptDeliverable } from "../src/lib/prompt_master";
@@ -24,8 +24,6 @@ import { normForMatch, todoDeleteKey, deleteTodoByText, salesReport } from "../s
 import { isBareTodoVerb, parseReminder, tidyVisionReply } from "../src/workers/telegram_webhook";
 import { deliverSmartReply } from "../src/lib/telegram";
 import { detectTopicContinuity } from "../src/lib/context_manager";
-import { parseTranslate } from "../src/lib/ai";
-import { isLikelyTruncated, repairTruncatedReply, gateVerdict, isRawDumpText, isRepetitiveText } from "../src/lib/verifier";
 import { cleanLLMArtifacts, proseifyResearch, buildFinalReply, ensureReciprocalQuestion } from "../src/lib/response_formatter";
 import {
   detectRelevanceAmbiguity, resolveRelevanceConfirmation,

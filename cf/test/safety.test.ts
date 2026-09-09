@@ -1011,6 +1011,36 @@ async function testBehaviorAlignmentFailClosed() {
     "0009 must add a backfill-safe category column to reflection_log");
 }
 
+async function testComprehensionGate() {
+  // m9-v11 COMPREHENSION GATE: a garbled/typo/odd message that doesn't fit the
+  // ongoing topic must be ASKED ABOUT, not confidently answered (owner
+  // principle: "manusia bertanya saat tidak mengerti kalimat yang aneh, sebelum
+  // menjawabnya" — live failures: "jelaskan bahasa mudah" → Malang, "generasi
+  // hambar vs teks pada platform age" → fabricated "platform AGE").
+  const brainSrc = readFileSync(new URL("../src/lib/intelligence.ts", import.meta.url), "utf-8");
+  const aiSrc = readFileSync(new URL("../src/lib/ai.ts", import.meta.url), "utf-8");
+
+  // The gate must exist and be wired: detectGarbledInput is called in the brain
+  // BEFORE act/execute, and returns a clarifying ask (source understand_clarify).
+  assert.ok(/detectGarbledInput/.test(brainSrc),
+    "brain must call detectGarbledInput (typo/garble gate)");
+  assert.ok(/understand_clarify/.test(brainSrc),
+    "brain must return source understand_clarify when garbled detected");
+  assert.ok(/clear === false/.test(brainSrc) || /garbled\.clear === false/.test(brainSrc),
+    "brain must short-circuit when garbled detected (no confident fake answer)");
+  assert.ok(/detectGarbledInput/.test(aiSrc),
+    "ai must export detectGarbledInput");
+  assert.ok(/"clear": true\/false/.test(aiSrc),
+    "ai comprehension gate must ask for a clear true/false verdict");
+
+  // The gate must be SKIPPED on deterministic low-risk paths (commands). A
+  // slash command / emergency / self-ref must never be blocked by a gate.
+  assert.ok(/skipComprehension/.test(brainSrc),
+    "brain must have a skip list for the comprehension gate");
+  assert.ok(/^\^\\\//.test(brainSrc) || /^\^\\/.test(brainSrc) || /command|emergency|self_referential/.test(brainSrc),
+    "commands/emergency/self-ref must bypass the gate");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -1035,6 +1065,7 @@ async function main() {
   await testLevel16Predictive();
   await testAnswerGrounding();
   await testBehaviorAlignmentFailClosed();
+  await testComprehensionGate();
   console.log("SAFETY TESTS PASSED");
 }
 
