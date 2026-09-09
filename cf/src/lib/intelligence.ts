@@ -53,7 +53,7 @@ import {
 import { readFailureTally } from "./failure";
 import { describeGapProposals } from "./gap_upgrade";
 import { reflectOnTurn, getAnswerBehaviorContext } from "./evolution";
-import { buildFinalReply } from "./response_formatter";
+import { buildFinalReply, ensureReciprocalQuestion } from "./response_formatter";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
 
 // ============================================================================
@@ -266,6 +266,14 @@ function classifyIntent(text: string, topic: string | null): IntentResult {
       confidence: bare ? 0.8 : 0.9,
       entities: bare ? { bare: "true" } : {},
     };
+  }
+
+  // Simplification request (re-explain the ACTIVE topic in plain words)
+  // is NOT a new search topic. Route to simple_llm so the answer stays
+  // grounded on the ongoing thread and the simplicity rail keeps it plain.
+  const simplifyWords = /\b(lebih mudah|sederhanakan|saya belum mengerti|saya nggak paham|biar paham|gampang|mudah dipahami|tolong sederhanakan|jika bisa)\b/i;
+  if (simplifyWords.test(low) || /belum\s+mengerti|tidak\s+paham/i.test(low)) {
+    return { type: "question", urgency: "low", formality: "neutral", confidence: 0.7, entities: {} };
   }
 
   // Search / research
@@ -576,12 +584,23 @@ export async function act(
         // active topic explicitly — otherwise short relative replies ("kalau
         // untuk perseorangan?", "itu gimana caranya?") drift to a generic
         // unrelated answer. Frame defers to a genuinely new question.
-        systemOverride: perception.isContinuation && topic
-          ? `Pemilik MENERUSKAN percakapan yang sedang berlangsung — pesan ini ringkas dan tidak menyebut ulang topiknya. ` +
+        // Also: SIMPLIFY frame — when the user asks for simpler explanation,
+        // re-explain the ACTIVE topic in plain words, not a new search.
+        systemOverride: (() => {
+          if (!perception.isContinuation || !topic) return undefined;
+          const isSimplify = /\b(lebih mudah|sederhanakan|belum mengerti|nggak paham|gampang|mudah dipahami|biar paham|tolong sederhanakan)\b/i.test(text);
+          if (isSimplify) {
+            return `Pemilik minta penjelasan lebih sederhana tentang topik yang sedang dibahas. ` +
+              `Topik aktif: "${topic}". ` +
+              `Jawab ULANG penjelasan tentang topik itu dengan bahasa sehari-hari yang sangat sederhana: ` +
+              `tanpa jargon, tanpa poin-poin panjang, kalimat pendek mengalir, seperti menjelaskan ke teman. ` +
+              `Tetap pada topik itu — JANGAN ganti topik.`;
+          }
+          return `Pemilik MENERUSKAN percakapan yang sedang berlangsung — pesan ini ringkas dan tidak menyebut ulang topiknya. ` +
             `Topik aktif yang sedang dibicarakan: "${topic}". ` +
             `Jawab sebagai LANJUTAN dari percakapan itu, langsung ke pokok, bahasa santai seperti biasa. ` +
-            `Namun jika pesan itu ternyata benar-benar menanyakan hal baru, jawab hal barunya dengan natural.`
-          : undefined,
+            `Namun jika pesan itu ternyata benar-benar menanyakan hal baru, jawab hal barunya dengan natural.`;
+        })(),
         // Hard-lift comprehension for code questions: OpenRouter's free
         // reasoning model reads ambiguous wording far more accurately.
         deep: perception.intent.type === "code",
@@ -727,8 +746,32 @@ export async function processIntelligence(
   // Record metrics (fire-and-forget)
   recordMetrics(strategy.approach, latencyMs, source, true);
 
+  // m9-v10 URL STRIP (anti-halusinasi): non-research/chat paths must NOT emit
+  // URLs — the LLM fabricates them (e.g. "https://en.wikipedia.org/wiki/Bukan-
+  // Bukan") and they get delivered as unverified junk. Research/search/design
+  // paths have already been sanitized by their own verifier layer. Only chat/
+  // question/understand/code paths need this blanket strip.
+  const isResearchPath = ["search_synthesize", "orchestrate_research", "orchestrate_design"].includes(strategy.approach);
+  const safeReply = isResearchPath
+    ? reply
+    : reply.replace(/https?:\/\/[^\s)]+/g, "").replace(/\[([^\]]*)\]\(\s*https?:\/\/[^\s)]+\)/g, "$1").trim();
+
+  // m9-v10 RECIPROCAL QUESTION (basis of human communication): after an
+  // answer a person asks back — verifying the answer matched what the owner
+  // meant. ensureReciprocalQuestion appends ONE natural follow-up question,
+  // unless the owner is ALREADY steering the thread (follow-up/continuation —
+  // double-asking would nag), the turn is a system/closed-loop result
+  // (canned/fallback/self-ref/translate/relevance-gate), or there is no topic
+  // to probe around. Anchors, memory, and metrics all keep the PLAIN answer.
+  const probeSkip =
+    perception.isFollowUp || perception.isContinuation ||
+    /^(canned|fallback|self_ref|understand_clarify|relevance_gate|translate|translate_bare)$/i.test(source) ||
+    /^(command|emergency|translation|self_referential)$/i.test(perception.intent.type) ||
+    !perception.topic;
+  const deliverable = ensureReciprocalQuestion(safeReply, { skip: probeSkip });
+
   return {
-    text: reply,
+    text: deliverable,
     perception,
     strategy,
     source,

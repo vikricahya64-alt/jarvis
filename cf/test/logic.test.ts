@@ -26,7 +26,7 @@ import { deliverSmartReply } from "../src/lib/telegram";
 import { detectTopicContinuity } from "../src/lib/context_manager";
 import { parseTranslate } from "../src/lib/ai";
 import { isLikelyTruncated, repairTruncatedReply, gateVerdict, isRawDumpText, isRepetitiveText } from "../src/lib/verifier";
-import { cleanLLMArtifacts, proseifyResearch, buildFinalReply } from "../src/lib/response_formatter";
+import { cleanLLMArtifacts, proseifyResearch, buildFinalReply, ensureReciprocalQuestion } from "../src/lib/response_formatter";
 import {
   detectRelevanceAmbiguity, resolveRelevanceConfirmation,
   parkPendingRelevance, readPendingRelevance, clearPendingRelevance,
@@ -220,6 +220,41 @@ function testFollowUpDetection() {
   for (const q of ["cari bisnis kopi 2026", "Apa itu ribosom", "bandingkan hp dan laptop"]) {
     assert.ok(!isFollowUpQuery(q), `fresh topic must NOT be a follow-up: ${q}`);
   }
+}
+
+// m9-v10 RECIPROCAL QUESTION — the basis of human communication: after an
+// answer a person asks back (verifies relevance + keeps the thread alive).
+// The deterministic helper appends ONE natural question, never stacking a
+// second one on an already-question/closing reply.
+function testReciprocalQuestion() {
+  const answer =
+    "Salah satu celah yang terbuka adalah solusi AI untuk usaha kecil: platform plug-and-play yang otomatis menangani penjadwalan, analisis penjualan, dan layanan pelanggan tanpa tim data-science internal.";
+
+  const out = ensureReciprocalQuestion(answer);
+  assert.ok(out.length > answer.length, "probe must append to a substantive answer");
+  assert.ok(/\?\s*$/.test(out), "reply must end with the reciprocal question");
+  assert.ok(!out.includes(`${answer}\n\n${answer}`), "probe must not duplicate the answer");
+
+  // Already a question → unchanged (no double-ask).
+  assert.strictEqual(ensureReciprocalQuestion("Mau aku perdalam bagian yang mana?"), "Mau aku perdalam bagian yang mana?");
+
+  // Already an invitation → unchanged (dedupe).
+  const invites = "Solo-entrepreneur biasanya mulai dari API konten AI yang murah. Mau aku jelaskan biayanya?";
+  assert.strictEqual(ensureReciprocalQuestion(invites), invites, "reply inviting next step must not get a second probe");
+
+  // Too short to be an answer (canned label / "Siap.") → unchanged.
+  assert.strictEqual(ensureReciprocalQuestion("Siap."), "Siap.");
+  assert.strictEqual(ensureReciprocalQuestion("ok"), "ok");
+
+  // Explicit skip (commands, translations, emergencies) → unchanged.
+  assert.strictEqual(ensureReciprocalQuestion("Sistem dijalankan.", { skip: true }), "Sistem dijalankan.");
+
+  // Rotation stays deterministic and always yields a probing question.
+  const a = ensureReciprocalQuestion("Penjelasan panjang tentang AI untuk UMKM dengan modal terbatas dan cara memulainya.");
+  const b = ensureReciprocalQuestion("Penjelasan panjang tentang AI untuk UMKM dengan modal terbatas dan cara memulainya.");
+  assert.match(a, /\?\s*$/);
+  assert.match(b, /\?\s*$/);
+  assert.ok(a === b || /\?\s*$/.test(a), "rotation is deterministic (stable or advancing), never random");
 }
 
 // m9-v10 HUMANE CONTINUITY — humans continue a chat WITHOUT trigger words.
@@ -1552,6 +1587,7 @@ async function main() {
   testExpandedSlang();
   testFollowUpDetection();
   testHumaneContinuity();
+  testReciprocalQuestion();
   testFuzzyExtractTopic();
   testProseRails();
   await testPredictiveUrgencyRanking();

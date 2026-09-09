@@ -1518,7 +1518,10 @@ export async function searchAndSynthesize(
       `Tulis URL cukup sebagai teks biasa (jangan pakai [label](url)), dan hanya URL dari daftar sumber sah. ` +
       `BICARALAH JADI MANUSIA BIASA: langsung ke inti, pilih 1–2 poin paling berdampak ` +
       `(jangan mendaftar semua kemungkinan), pakai kalimat sehari-hari yang pendek, ` +
-      `dan berhenti begitu pertanyaan sudah terjawab — kalau cukup 2 kalimat, jangan 10.`,
+      `dan berhenti begitu pertanyaan sudah terjawab — kalau cukup 2 kalimat, jangan 10. ` +
+      `Tutup dengan SATU pertanyaan lanjutan yang alami dan relevan dengan topik ` +
+      `(mis. menawarkan menggali bagian tertentu) — jangan kalimat robot seperti ` +
+      `"apakah ada yang bisa saya bantu lagi?". Boleh tanpa pertanyaan kalau itu penutup paling pas.`,
   });
   // M8-v27 INSTITUTIONAL FRAME — attributes every claim to the institution whose
   // site produced the evidence (deterministic, no invented citations). Fail-
