@@ -32,6 +32,9 @@ import { getWeatherText } from "../lib/weather";
 import { normalizeInput, isEmptyInput } from "../lib/normalize";
 import { saveSessionToKV, loadSessionFromKV, touchSession, updateSession } from "../lib/context_manager";
 import { processIntelligence } from "../lib/intelligence";
+import {
+  connectorsStatus, readFigmaViaVercel, notionViaVercel, notionSearchViaVercel,
+} from "../lib/vercel";
 
 /** Incoming message context passed to the brain (single source, no legacy
  *  shim in between — the webhook talks to processIntelligence directly). */
@@ -701,6 +704,16 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // config/dispatch errors return a graceful status, never a dead "Ok.".
   if (isAgentCommand(trimmed, text)) {
     await handleAgentCommand(env, r, text);
+    return new Response("ok", { status: 200 });
+  }
+
+  // Vercel Connector commands — explicit owner command BEFORE the compliance
+  // pipeline.  /figma <fileKey|url> [nodeId]  |  /notion search <teks>  |
+  // /connector (status). These read Figma files / Notion databases through the
+  // Vercel Connector (secrets live there, never in this Worker). Fail-closed:
+  // unreadable/malformed inputs get a graceful message, never an error.
+  if (isConnectorCommand(trimmed)) {
+    await handleConnectorCommand(env, r, text);
     return new Response("ok", { status: 200 });
   }
 
@@ -1785,6 +1798,141 @@ async function handleReminderCommand(env: Env, owner: number, raw: string): Prom
 // Fail-closed: dispatch problems surface a graceful status and the task row
 // stays pending — nothing is silently lost.
 // ---------------------------------------------------------------------
+
+// ---------------------------------------------------------------------
+// Vercel Connector commands — /figma, /notion, /connector.
+// Reads design/knowledge files through the free-tier Vercel Connector so
+// the heavy token material (FIGMA_ACCESS_TOKEN, NOTION_API_KEY) never
+// reaches this Worker. Every path fails closed to a graceful message.
+// ---------------------------------------------------------------------
+
+/** True when the message is a connector command (slash only). */
+function isConnectorCommand(trimmed: string): boolean {
+  if (trimmed === "/connector" || /^\/connector\b/i.test(trimmed)) return true;
+  if (/^\/figma\b/i.test(trimmed)) return true;
+  if (/^\/notion\b/i.test(trimmed)) return true;
+  return false;
+}
+
+/** Execute connector commands: /connector, /figma <key|url>, /notion search <t>. */
+async function handleConnectorCommand(env: Env, from: number, raw: string): Promise<void> {
+  const trimmed = raw.trim();
+
+  try {
+    // --- Status: "/connector" ---
+    if (trimmed === "/connector" || /^\/connector\s+(?:status|info)\b/i.test(trimmed)) {
+      await fire(sendMessage(env, from, connectorsStatus(env)));
+      return;
+    }
+
+    // --- Figma: "/figma <fileKey|url> [nodeId] [depth=N]" ---
+    const fig = trimmed.match(/^\/figma\s+(\S+)(?:\s+(\S+))?(?:\s+depth=(\d))?\s*$/i);
+    if (fig) {
+      const target = fig[1];
+      const nodeId = fig[2] && !/^\d/.test(fig[2]) ? undefined : fig[2];
+      const depth = fig[3] ? Number(fig[3]) : 2;
+      const read = await readFigmaViaVercel(env, target, { nodeId, depth });
+      if (!read || !read.summary) {
+        const reason = read?.status ? ` (kode ${read.status})` : "";
+        await fire(sendMessage(env, from,
+          `⚠️ Tidak bisa membaca file Figma${reason}. Periksa bahwa kunci file benar atau file diizinkan untuk token.\n\nContoh: \`/figma wKRAemZY12e9VmgoOMDuOG\` atau tempel URL figma.com/design/...`));
+        return;
+      }
+      await fire(sendMessage(env, from, read.summary.slice(0, 3900)));
+      return;
+    }
+
+    // --- Notion: "/notion search <teks>" ---
+    const nSearch = trimmed.match(/^\/notion\s+search(?:\s+|=)["']?([^"']+)/i);
+    if (nSearch) {
+      const q = nSearch[1].trim().replace(/["']+$/, "");
+      const items = await notionSearchViaVercel(env, q);
+      if (!items.length) {
+        await fire(sendMessage(env, from, `🔍 Pencarian Notion "${q}" tidak menemukan apa pun. Coba kata kunci lain.`));
+        return;
+      }
+      const lines = items.map((i) => {
+        const shortId = i.id.startsWith("3d") ? i.id.slice(0, 20) : i.id;
+        return `• [${i.kind}] ${i.title}\n  \`${shortId}\``;
+      });
+      await fire(sendMessage(env, from,
+        `🔍 *Notion — hasil pencarian "${q}"*\n\n${lines.join("\n")}\n\nGunakan \`/notion baca <id>\` untuk detail halaman.`));
+      return;
+    }
+
+    // --- Notion: "/notion baca <pageId|databaseId> [query]" ---
+    const nRead = trimmed.match(/^\/notion\s+(?:baca|read)\s+(\S+)(?:\s+(.+))?$/i);
+    if (nRead) {
+      const target = nRead[1].trim();
+      const qtext = nRead[2]?.trim() ?? "";
+      let json: unknown = null;
+      if (qtext && /^1?[a-fA-F0-9]{32}$/.test(target)) {
+        // Database id → query rows.
+        json = await notionViaVercel(env, { action: "query", databaseId: target });
+      } else {
+        json = await notionViaVercel(env, { action: "read", pageId: target });
+      }
+      const info = summarizeNotionResult(json);
+      if (!info.ok) {
+        await fire(sendMessage(env, from,
+          `⚠️ Tidak bisa membaca objek Notion tersebut. Pastikan id benar dan database di-share ke integrasi.\n\nContoh: \`/notion baca <id halaman>\`, \`/notion search rapat\``));
+        return;
+      }
+      await fire(sendMessage(env, from, info.text.slice(0, 3800)));
+      return;
+    }
+
+    await fire(sendMessage(env, from,
+      "🔌 *Perintah connector*:\n" +
+      "• `/connector` — status koneksi\n" +
+      "• `/figma <fileKey|url> [nodeId] [depth=n]` — baca file desain Figma\n" +
+      "• `/notion search <teks>` — cari halaman/database Notion\n" +
+      "• `/notion baca <id>` — baca detail halaman Notion"));
+  } catch (e) {
+    await fire(sendMessage(env, from,
+      `⚠️ Perintah connector gagal: ${String(e).slice(0, 200)}`));
+  }
+}
+
+/** Compact, markdown-safe summary of a Notion object (page or query results). */
+function summarizeNotionResult(json: unknown): { ok: boolean; text: string } {
+  const data = json as
+    | { object?: string; id?: string; properties?: Record<string, unknown>;
+        title?: Array<{ plain_text?: string }>; error?: string;
+        results?: Array<Record<string, unknown>> } | null;
+  if (!data) return { ok: false, text: "" };
+  if (data.error) return { ok: false, text: `${data.error}` };
+
+  // Database query results.
+  if (Array.isArray(data.results)) {
+    const rows = data.results.slice(0, 10);
+    if (!rows.length) return { ok: true, text: "📭 Database kosong (tidak ada baris)." };
+    const lines = rows.map((r, i) => {
+      const props = (r as { properties?: Record<string, unknown> }).properties ?? {};
+      const titles: string[] = [];
+      for (const p of Object.values(props)) {
+        const t = (p as { title?: Array<{ plain_text?: string }> }).title;
+        if (t?.length) { titles.push(t.map((x) => x.plain_text ?? "").join("")); break; }
+      }
+      const id = (r as { id?: string }).id ?? "";
+      return `${i + 1}. ${titles[0] || "(tanpa judul)"} — \`${id.slice(0, 16)}\``;
+    });
+    return { ok: true, text: `📊 *${rows.length} baris*\n${lines.join("\n")}` };
+  }
+
+  // Page read.
+  if (data.object === "page") {
+    const props = data.properties ?? {};
+    let title = "";
+    for (const p of Object.values(props)) {
+      const t = (p as { title?: Array<{ plain_text?: string }> }).title;
+      if (t?.length) { title = t.map((x) => x.plain_text ?? "").join(""); break; }
+    }
+    const id = data.id ?? "";
+    return { ok: true, text: `📄 *${title.slice(0, 120) || "(tanpa judul)"}*\nID: \`${id}\`` };
+  }
+  return { ok: false, text: "Objek tidak dikenal." };
+}
 
 /** True when the message is a delegation command (slash or natural language). */
 function isAgentCommand(trimmed: string, raw: string): boolean {

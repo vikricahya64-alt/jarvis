@@ -83,6 +83,11 @@ OPENROUTER_DEEP_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 # ephemeral GitHub VM at zero extra cost across the SKY.
 GITHUB_REPO = "vikricahya64-alt/jarvis"
 WORKER_URL = "https://jarvis-sovereign.vikricahya64.workers.dev"
+# Vercel Connector (free-tier integration layer). Figma/Notion/GitHub secrets
+# live in the connector's Vercel env — NOT in this Worker. Pollinations image
+# gen needs no key at all. OPTIONAL: set VERCEL_CONNECTOR_TOKEN via
+# `wrangler secret put VERCEL_CONNECTOR_TOKEN` if the connector gates routes.
+VERCEL_CONNECTOR_URL = "https://jarvis-connector.vercel.app"
 
 #------------------------------------------------------------------------------
 # Cron Triggers (≤5 allowed on free; request-driven daemons, not resident)

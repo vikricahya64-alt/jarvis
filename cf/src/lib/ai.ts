@@ -22,6 +22,7 @@ import { JARVIS_IDENTITY, SELF_REF_RE } from "./identity";
 import { gateVerdict, tallyGate, repairTruncatedReply, isLikelyTruncated, sanitizeUncitedLinks, type GateVerdict } from "./verifier";
 import { extractJsonBlock } from "./structured";
 import { budgetedRecovery } from "./failure";
+import { generateImageViaVercel } from "./vercel";
 // Canonical truncation helpers now live in ./verifier; re-exported here for
 // any existing importers (single source of truth, no behavior change).
 export { repairTruncatedReply, isLikelyTruncated, gateVerdict, tallyGate };
@@ -1744,24 +1745,39 @@ export const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 
 /** Generate a raster image from a prompt. Returns raw image bytes, or null on
  *  any failure (so callers can fall back to the text prompt). Pure function
- *  of (env, prompt) — no state, no side effects. */
+ *  of (env, prompt) — no state, no side effects.
+ *
+ *  Primary path: Cloudflare Workers AI (flux-1-schnell, free, no API key).
+ *  Fallback path: Vercel Connector → Pollinations.ai (unlimited free, no key
+ *  server-side) when Workers AI fails or is rate-limited. Fail-closed: on BOTH
+ *  failures this returns null. */
 export async function generateImage(
   env: Env,
   prompt: string,
 ): Promise<Uint8Array | null> {
-  if (!env.AI) return null;
-  try {
-    const out = (await env.AI.run(IMAGE_MODEL, { prompt }) as { image?: string });
-    if (!out || !out.image) return null;
-    // Base64 → bytes (safe decode: chat_id bytes are not used in image output).
-    const bin = atob(out.image);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes;
-  } catch (e) {
-    console.error("generateImage failed:", String(e).slice(0, 200));
-    return null;
+  let bytes: Uint8Array | null = null;
+  if (env.AI) {
+    try {
+      const out = (await env.AI.run(IMAGE_MODEL, { prompt }) as { image?: string });
+      if (out?.image) {
+        // Base64 → bytes (safe decode: chat_id bytes are not used in image output).
+        const bin = atob(out.image);
+        const b = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+        bytes = b;
+      }
+    } catch (e) {
+      console.error("generateImage (workers-ai) failed:", String(e).slice(0, 200));
+    }
   }
+  if (bytes && bytes.length > 0) return bytes;
+  // Fallback: Vercel Connector → Pollinations.ai (no key needed, unlimited).
+  const viaVercel = await generateImageViaVercel(env, prompt);
+  if (viaVercel && viaVercel.length > 0) {
+    console.error("generateImage: workers-ai failed, rendered via Pollinations");
+    return viaVercel;
+  }
+  return null;
 }
 
 /** Sniff image MIME type from leading magic bytes (png/jpeg/gif/webp). */
