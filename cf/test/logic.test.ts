@@ -25,7 +25,7 @@ import { isBareTodoVerb, parseReminder, tidyVisionReply } from "../src/workers/t
 import { deliverSmartReply } from "../src/lib/telegram";
 import { parseTranslate } from "../src/lib/ai";
 import { isLikelyTruncated, repairTruncatedReply, gateVerdict, isRawDumpText, isRepetitiveText } from "../src/lib/verifier";
-import { cleanLLMArtifacts } from "../src/lib/response_formatter";
+import { cleanLLMArtifacts, proseifyResearch, buildFinalReply } from "../src/lib/response_formatter";
 import {
   detectRelevanceAmbiguity, resolveRelevanceConfirmation,
   parkPendingRelevance, readPendingRelevance, clearPendingRelevance,
@@ -1442,6 +1442,55 @@ async function testRelevancePersistence() {
   assert.strictEqual(await readPendingRelevance(env, owner), null, "pending terhapus setelah dibersihkan");
 }
 
+// ============================================================================
+// m9-v9 PROSE RAILS — owner principle: research answers are narrative prose
+// with only verified URLs. proseifyResearch is the deterministic safety net
+// that catches the leaked-report shape from the single-pass research path
+// (bullets, bold headers, template openers/closers, mangled "[label](url)").
+// ============================================================================
+function testProseRails() {
+  // Full leaked-report shape (the "riset itu" / ITU failure).
+  const leaked = [
+    "Berikut rangkuman singkat dari hasil penelusuran itu.int yang dapat Anda gunakan untuk riset:",
+    "",
+    "- Situs resmi: https://www.itu.int](https://www.itu.int)",
+    "- Misi utama: International Telecommunication Union (ITU) berperan menghubungkan dunia.",
+    "- Fokus dialog global: Membahas prioritas kebijakan digital.",
+    "",
+    "Intinya, halaman tersebut menyoroti peran ITU dalam memfasilitasi dialog global. Semoga membantu!",
+  ].join("\n");
+  const out = proseifyResearch(leaked);
+  assert.ok(!out.includes("- "), "proseify must flatten bullets");
+  assert.ok(!out.includes("]("), "proseify must unwrap markdown links (no mangled brackets)");
+  assert.ok(out.includes("https://www.itu.int"), "verified URL survives as plain text");
+  assert.ok(!/Berikut rangkuman/i.test(out), "template opener stripped");
+  assert.ok(!/Intinya/i.test(out), "template closer stripped");
+  assert.ok(!/Semoga membantu/i.test(out), "filler closer stripped");
+
+  // Verified-only URL handling (caller passes sanitizeUncitedLinks output).
+  const withLinks = "Situnya ada di [situs resmi](https://itu.int/id) dan menjelaskan tentang ITU.";
+  const cleanUrl = proseifyResearch(withLinks);
+  assert.ok(cleanUrl.includes("https://itu.int/id"), "allow-listed URL kept as plain text");
+  assert.ok(!cleanUrl.includes("](https"), "markdown link fully unwrapped");
+
+  // Header-flatten: bold+colon report headings become inline prose.
+  const headers = "**Misi utama:** ITU menghubungkan dunia.\n\n**Fokus dialog:** kebijakan digital.";
+  const flat = proseifyResearch(headers);
+  assert.ok(!flat.includes("**"), "bold markers stripped");
+  assert.ok(flat.includes("Misi utama: ITU"), "header label survives as inline label");
+
+  // Fenced code must survive untouched (code answers keep structure).
+  const withCode = "Berikut scriptnya:\n```js\nconst a = 1;\n// - bukan bullet\n```\nItu menghasilkan 1.";
+  const coded = proseifyResearch(withCode);
+  assert.ok(coded.includes("```js\nconst a = 1;"), "fenced code preserved");
+  assert.ok(coded.includes("```"), "closing fence preserved");
+
+  // buildFinalReply("research") must apply the same rails end-to-end.
+  const final = buildFinalReply(leaked, "research", "neutral");
+  assert.ok(!final.includes("- Situs resmi"), "buildFinalReply research output is prose");
+  assert.ok(!final.includes("]("), "buildFinalReply research output has no markdown links");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -1453,6 +1502,7 @@ async function main() {
   testExpandedSlang();
   testFollowUpDetection();
   testFuzzyExtractTopic();
+  testProseRails();
   await testPredictiveUrgencyRanking();
   await testFeedbackLearning();
   await testBehaviorAlignmentRanking();

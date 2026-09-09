@@ -37,6 +37,7 @@ import {
   isFollowUpQuery, resolveFollowUpAnchor,
   parseTranslate, translateText, understandUserWants,
   generateImagePrompt, generateImage, sniffImageMime,
+  storeResearchAnchor,
 } from "./ai";
 import {
   isResearchClass, orchestrateResearch,
@@ -693,6 +694,14 @@ export async function processIntelligence(
 
   // Phase 3: ACT
   const { reply, source, image } = await act(env, owner, effectiveText, perception, strategy);
+
+  // Anchor substantive search/research replies to KV so a later follow-up
+  // ("lebih dalam", "Lanjutkan") deepens THIS answer deterministically. The
+  // brain now owns research fully (the webhook no longer writes anchors for
+  // its old parallel path).
+  if (reply.length > 80 && ["search_synthesize", "orchestrate_research"].includes(strategy.approach)) {
+    await storeResearchAnchor(env, owner, perception.topic ?? effectiveText.slice(0, 80), reply).catch(() => {});
+  }
 
   // Phase 4: REFLECT
   await reflect(env, owner, effectiveText, reply, perception, strategy);

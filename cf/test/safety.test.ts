@@ -286,7 +286,14 @@ async function testUpgradeMigration() {
   assert.strictEqual(typeof ai.ddgSearch, "function");
   assert.strictEqual(typeof ai.searchAndSynthesize, "function");
   assert.strictEqual(typeof ai.extractTopic, "function");
-  assert.ok(/searchAndSynthesize\(/.test(wh), "webhook must wire searchAndSynthesize");
+  // m9-v9 single spine: the webhook MUST route text through the brain
+  // (processIntelligence), and must NOT hold a second, parallel research path
+  // that could bypass the relevance gate / prose rails (the old runResearch
+  // shortcut was the root cause of "riset itu" being executed unconfirmed).
+  assert.ok(/processIntelligence\(/.test(wh),
+    "webhook must wire the brain (processIntelligence)");
+  assert.ok(!/searchAndSynthesize\(/.test(wh),
+    "webhook must NOT call searchAndSynthesize directly (no research bypass)");
 
   // extractTopic must yield the topic after a research keyword.
   assert.strictEqual(ai.extractTopic("cari tentang iklim jakarta"), "iklim jakarta");
@@ -769,6 +776,7 @@ async function testLevel15DeepResearch() {
   // anchor from the most recent assistant analysis.
   assert.strictEqual(typeof ai.isFollowUpQuery, "function", "ai must export isFollowUpQuery");
   assert.strictEqual(typeof ai.resolveFollowUpAnchor, "function", "ai must export resolveFollowUpAnchor");
+  assert.strictEqual(typeof ai.storeResearchAnchor, "function", "ai must export storeResearchAnchor");
   assert.ok(ai.isFollowUpQuery("lebih dalam"), "'lebih dalam' is a follow-up");
   assert.ok(ai.isFollowUpQuery("yang tadi"), "'yang tadi' is a follow-up");
   assert.ok(!ai.isFollowUpQuery("cari bisnis kopi 2026"), "a fresh topic query is NOT a follow-up");
@@ -778,12 +786,18 @@ async function testLevel15DeepResearch() {
   ]);
   assert.ok(anchor && anchor.topic && anchor.prior, "follow-up anchor resolves prior assistant analysis");
 
-  // webhook must route follow-ups (no topic marker) to the deep search path
-  // instead of the generic "Ok." fallback.
+  // SINGLE-SPINE (m9-v9): the webhook must NOT hold its own follow-up branch —
+  // every message text goes through the brain (processIntelligence), which
+  // owns anchor resolution internally. A second, parallel research/follow-up
+  // path in the webhook was the root cause of "riset itu" executing unconfirmed.
   const wh = readFileSync(new URL("../src/workers/telegram_webhook.ts", import.meta.url), "utf-8");
-  assert.ok(/isFollowUpQuery\(/.test(wh), "webhook must check for follow-up queries");
-  assert.ok(/resolveFollowUpAnchor\(/.test(wh), "webhook must resolve a follow-up anchor");
-  assert.ok(/isFollowUpQuery\(text\)/.test(wh), "webhook follow-up branch triggers in EXECUTE path");
+  assert.ok(/processIntelligence\(/.test(wh), "webhook must route text through the brain");
+  assert.ok(!/isFollowUpQuery\(/.test(wh), "webhook must NOT detect follow-ups itself (brain owns it)");
+  assert.ok(!/resolveFollowUpAnchor\(/.test(wh), "webhook must NOT resolve anchors itself (brain owns it)");
+  const brainSrc = readFileSync(new URL("../src/lib/intelligence.ts", import.meta.url), "utf-8");
+  assert.ok(/isFollowUpQuery\(text\)/.test(brainSrc), "brain must check for follow-up queries");
+  assert.ok(/storeResearchAnchor\(/.test(brainSrc),
+    "brain must write the KV research anchor after a substantive research reply");
 }
 
 async function testLevel16Predictive() {
