@@ -338,6 +338,22 @@ export function topicRecallSubjects(text: string): string[] {
   return topicTokens(text).filter((t) => !RECALL_STOP.has(t));
 }
 
+/** m9-v11.11: assistant turns that are pure offer/menu questions (e.g. "Mau saya
+ *  lanjutkan dengan X, Y, atau Z?") must NOT be fed back into a topic-return
+ *  recall block — the model imitates its own previous question and anchors the
+ *  answer onto asking the menu again instead of continuing directly. */
+export function isMenuOfferQuestion(content: string): boolean {
+  if (!content || typeof content !== "string") return false;
+  const offers =
+    /\b(?:mau|ingin|apakah kamu|apakah anda|boleh)\b[^.!?\n]{0,60}\b(?:saya|aku|kita)\b/i.test(
+      content,
+    ) &&
+    /(?:lanjutkan|melanjutkan|bahas|membahas|bicarakan|jelaskan|menjelaskan|berikan|contoh|opsi|pilihan|atau)/i.test(
+      content,
+    );
+  return offers && /[?？]/.test(content);
+}
+
 /** m9-v11.10: LET THE MODEL UNDERSTAND the recalled topic — the owner's
  *  direction was that token dictionaries keep misreading intent (a "kamus"
  *  approach). We ask a single lightweight Groq pass (recall turns only, so a
@@ -592,16 +608,18 @@ export async function buildEnrichedContext(
           )
         : Promise.resolve([] as Array<{ content: string }>),
     ]);
-    const recalledLines: string[] = recalled.map((r) => {
-      const who = r.role === "user" ? "pemilik" : "kamu";
-      return `${who}: ${(r.content || "").slice(0, 220)}`;
-    });
+    const recalledLines: string[] = recalled
+      .filter((r) => !(r.role === "assistant" && isMenuOfferQuestion(r.content)))
+      .map((r) => {
+        const who = r.role === "user" ? "pemilik" : "kamu";
+        return `${who}: ${(r.content || "").slice(0, 220)}`;
+      });
     for (const m of recalledMems.slice(0, 3)) {
       recalledLines.push(`kenangan: ${(m.content || "").slice(0, 180)}`);
     }
     if (recalledLines.length > 0) {
       const recallText =
-        `[Riwayat percakapan sebelumnya — KONTEKS INTERNAL saja, bukan bahan kutipan]: ` +
+        `[Riwayat percakapan sebelumnya] (KONTEKS INTERNAL saja, bukan bahan kutipan): ` +
         recalledLines.join(" | ").slice(0, Math.min(1400, charBudget)) +
         `. Pemilik menunjuk KEMBALI ke topik ini DARI TOPIK LAIN. ` +
         `Percakapan terakhir (topik berbeda) tidak disertakan — jawab HANYA berdasarkan ` +
