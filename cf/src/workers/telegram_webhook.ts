@@ -1497,7 +1497,7 @@ async function statusReport(env: Env, paused: boolean): Promise<string> {
     lines.push(`*Provider (live):*`);
     for (const p of probe) {
       const face = p.configured ? (p.live ? "🟢" : "🔴") : "⚪";
-      lines.push(`${face} ${p.name}: ${p.detail}`);
+      lines.push(`${face} \`${p.name}\`: ${p.detail}`);
     }
     lines.push(``);
   } catch {
