@@ -19,7 +19,7 @@ import {
 import { validateAction, conflictScore } from "../src/lib/constitutional_guard";
 import { unknownEntitySignal } from "../src/lib/ai";
 import { isDesignIntent } from "../src/lib/subagents";
-import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, detectTopicRecall, topicRecallSubjects } from "../src/lib/context_manager";
+import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, detectTopicRecall, topicRecallSubjects, extractRecallSubject } from "../src/lib/context_manager";
 import { isInternalEchoDump, isAdminChaff } from "../src/lib/db";
 
 const FAKE_ENV = {
@@ -1299,6 +1299,13 @@ async function testRecallSubjects() {
     assert.ok(!s.includes(filler), `subject must strip connector "${filler}"`);
   }
   assert.ok(topicRecallSubjects("terus").length === 0, "bare continuation yields no subject");
+
+  // m9-v11.10: model-based extraction falls back to the dictionary when the
+  // provider is unavailable (offline env) — recall can only get sharper.
+  const s2 = await extractRecallSubject(FAKE_ENV as never, "tadi kita bahas bekerja remote");
+  assert.ok(Array.isArray(s2), "extractRecallSubject returns an array even on fallback");
+  assert.ok(s2.includes("bekerja"), `fallback keeps "bekerja" (got [${s2.join(", ")}])`);
+  assert.ok(s2.includes("remote"), `fallback keeps "remote" (got [${s2.join(", ")}])`);
 }
 
 async function testAdminChaff() {
