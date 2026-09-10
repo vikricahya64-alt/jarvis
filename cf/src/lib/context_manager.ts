@@ -665,8 +665,11 @@ export function extractTopicLabel(text: string): string | null {
 }
 
 /** Build context summary for LLM (compressed older turns + working memory).
- *  Called by conversation.ts to build the system prompt context. */
-export function buildContextSummary(owner: number): string {
+ *  Called by conversation.ts to build the system prompt context.
+ *  m9-v11.7: the working-memory lines honor the same topical gate as the WM
+ *  block / workingMemoryHint — an unrelated tracked task must never reach the
+ *  system prompt as "Tugas aktif"/"Fakta" (the hidden third echo vector). */
+export function buildContextSummary(owner: number, opts: { topic?: string; userText?: string } = {}): string {
   const session = getSession(owner);
   const parts: string[] = [];
 
@@ -675,10 +678,10 @@ export function buildContextSummary(owner: number): string {
   }
 
   const wm = session.workingMemory;
-  if (wm.currentTask) {
+  if (wmTopicRelevant(session, opts.topic ?? "", opts.userText ?? "")) {
     parts.push(`Tugas aktif: ${wm.currentTask}`);
     if (wm.extractedFacts.length > 0) {
-      parts.push(`Fakta: ${wm.extractedFacts.slice(-3).join("; ")}`);
+      parts.push(`Fakta: ${wm.extractedFacts.filter((f) => f && !/[|\[\]]/.test(f)).slice(-3).join("; ")}`);
     }
   }
 
