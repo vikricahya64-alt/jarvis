@@ -1497,7 +1497,11 @@ async function statusReport(env: Env, paused: boolean): Promise<string> {
     lines.push(`*Provider (live):*`);
     for (const p of probe) {
       const face = p.configured ? (p.live ? "🟢" : "🔴") : "⚪";
-      lines.push(`${face} \`${p.name}\`: ${p.detail}`);
+      // m9-v11.19: name without underscore — stripTelegramMarkdown removes all
+      // `_` (raw-markdown sanitation), so "workers_ai" would render as
+      // "workersai". A dash reads clearly and survives the sanitizer.
+      const label = p.name.replace(/_/g, "-");
+      lines.push(`${face} ${label}: ${p.detail}`);
     }
     lines.push(``);
   } catch {

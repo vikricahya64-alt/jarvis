@@ -23,6 +23,7 @@ import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, 
 import { isInternalEchoDump, isAdminChaff } from "../src/lib/db";
 import { semanticSearchMemory, semanticUpsertMemory } from "../src/lib/memory_vec";
 import { probeProviders } from "../src/lib/providers";
+import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation } from "../src/lib/intelligence";
 
 const FAKE_ENV = {
   CLARITY_GATE: "0.95",
@@ -1353,6 +1354,63 @@ async function testRecallSubjects() {
   );
 }
 
+async function testMenuGuard() {
+  // m9-v11.19: model intermittently OPENS its answer with a menu question even
+  // though the rail forbids it (owner live failure: recall "tadi kita bahas
+  // bekerja remote" → "Mau saya lanjutkan dengan contoh tantangan utama ... atau
+  // tips praktis ...?"). The deterministic guard must catch menu-FIRST replies,
+  // never a menu deep inside an otherwise contentful answer.
+  assert.strictEqual(
+    isMenuFirstLine("Mau saya lanjutkan dengan contoh tantangan utama saat kerja remote atau tips praktis untuk meningkatkan produktivitasnya?"),
+    true,
+    "bare leading menu question is caught",
+  );
+  assert.strictEqual(
+    isMenuFirstLine("Mau aku gali lebih dalam bagian yang mana?"),
+    true,
+    "short leading menu is caught",
+  );
+  assert.strictEqual(
+    isMenuFirstLine("Apakah kamu ingin saya membahas tantangan khusus, strategi sukses, atau contoh praktis?"),
+    true,
+    "Apakah-kamu menu is caught",
+  );
+  assert.strictEqual(
+    isMenuFirstLine("Saya akan jelaskan cara membangun bisnis seperti itu."),
+    true,
+    "empty announce lead is caught",
+  );
+  assert.strictEqual(
+    isMenuFirstLine("Kerja remote menuntut disiplin tinggi; mau atau tidak, itu fakta."),
+    false,
+    "statement containing 'mau' in substance is NOT a menu",
+  );
+  assert.strictEqual(
+    isMenuFirstLine("Oke, ini lanjutannya soal bekerja remote dari catatan kita."),
+    false,
+    "contentful line is not flagged",
+  );
+
+  // Strip: a content paragraph after a menu sentence keeps the content only.
+  const stripped = stripLeadingMenuSentences(
+    "Mau saya lanjutkan dengan tantangan atau tips?\nKerja remote menuntut disiplin tinggi dan batas waktu kerja yang tegas.",
+  );
+  assert.ok(stripped.startsWith("Kerja remote"), "menu lead is stripped, content survives");
+  assert.ok(!stripped.includes("lanjutkan dengan tantangan"), "menu sentence removed");
+
+  // Deterministic recall continuation enumerates the SUBJECT discussed (the
+  // pemilik/kenangan substance), never a branch question.
+  const cont = deterministicRecallContinuation({
+    content: "[Riwayat percakapan sebelumnya] (KONTEKS INTERNAL): pemilik: bekerja remote menuntut disiplin tinggi | kamu: betul, fokus dan jadwal itu kunci | . Pemilik menunjuk KEMBALI ke topik ini DARI TOPIK LAIN.",
+  });
+  assert.ok(cont.includes("bekerja remote menuntut disiplin tinggi"), "recall continuation cites the discussed topic");
+  assert.ok(cont.includes("fokus dan jadwal itu kunci"), "recall continuation cites the substance");
+  assert.ok(!cont.includes("Mau"), "recall continuation never opens a menu");
+
+  const missing = deterministicRecallContinuation({ content: "[Riwayat percakapan sebelumnya] (tidak ditemukan)." });
+  assert.ok(missing.includes("belum berhasil menemukan"), "empty recall degrades into an honest line");
+}
+
 async function testFreeServiceLayers() {
   // m9-v11.18 SEMANTIC MEMORY: the whole Vectorize/embedding layer must no-op
   // (never throw) when the bindings or a model are absent — FTS stays the
@@ -1445,6 +1503,7 @@ async function main() {
   await testInternalDumpSanitization();
   await testTopicRecall();
   await testRecallSubjects();
+  await testMenuGuard();
   await testFreeServiceLayers();
   await testAdminChaff();
   console.log("SAFETY TESTS PASSED");
