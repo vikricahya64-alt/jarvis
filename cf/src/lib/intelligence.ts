@@ -786,6 +786,69 @@ export function buildUniversalFrame(opts: {
   return baseRail + heavyNote;
 }
 
+// ============================================================================
+// m9-v11.21 THE TWO DOORS (owner's architecture — "satu pintu input, satu
+// pintu output"). Naturalization is ONE concept applied at BOTH ends; the
+// modules in the middle process RAW data and never carry human-sounding text:
+//
+//   INPUT DOOR  (this translation layer): the owner's natural message is
+//     TRANSLATED into a structured task — WHICH module owns it (module), a
+//     clean imperative directive (directive), extracted parameters (params),
+//     and the RAW context handed to that module untouched (payload). JARVIS —
+//     not the module — understands what the human asked (live failures the
+//     door prevents: menu phrasing surviving into the answer, random memory
+//     echo on scalar questions).
+//   MIDDLE (the modules): free to munch raw data — memory/KV lookups, search,
+//     embeddings, flux, translate APIs — structurally, no human-voice styling.
+//   OUTPUT DOOR (buildUniversalFrame + the global choke point): the module's
+//     raw result is TRANSLATED BACK into a reply that sounds exactly like a
+//     human speaking (P1 answer → P2 recommendation/verify, no raw data leaks).
+// ============================================================================
+
+/** A structured task produced by the INPUT DOOR. The module named by `module`
+ *  receives `directive` + `params` (a clean, translated instruction) and
+ *  `payload` (the raw context) — it never has to re-understand natural text. */
+export interface TranslatedTask {
+  module: Strategy["approach"];
+  /** Clean imperative directive — the owner's natural sentence stripped of
+   *  bare-grounding gesture words (tolong/coba/bisakah…), so modules get the
+   *  actual ask, not filler. */
+  directive: string;
+  /** Extracted parameters (intent entities + topic) for the module. */
+  params: Record<string, string>;
+  /** RAW context passed through untouched — modules process data, not speech. */
+  payload: Array<{ role: string; content: string }>;
+}
+
+/** INPUT DOOR — translate the owner's natural message into a structured task
+ *  for exactly one module. Mirrors the OUTPUT DOOR (buildUniversalFrame): the
+ *  intelligence layer owns all understanding on both ends, so a module never
+ *  parses human phrasing to know what to do. */
+export function translateInput(
+  text: string,
+  perception: Perception,
+  strategy: Strategy,
+): TranslatedTask {
+  // Gesture-verb strip: "tolong cari X" → "cari X" (what the module should do)
+  // without losing the ask. Keeps question/chat directives intact.
+  const directive = text
+    .replace(
+      /^(?:tolong|mohon|coba|bisa nggak|bisa gak|bisakah|kamu bisa|bisa kamu|coba dong|bisa kamu coba|minta tolong)[\s,:]?\s*/i,
+      "",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+  return {
+    module: strategy.approach,
+    directive: directive.length > 0 ? directive : text,
+    params: {
+      ...((perception.intent.entities as Record<string, string>) ?? {}),
+      ...(perception.topic ? { topic: perception.topic } : {}),
+    },
+    payload: perception.enrichedContext,
+  };
+}
+
 /** The BRAIN's act() — decide already picked a strategy; this executes it. */
 export async function act(
   env: Env,
@@ -794,6 +857,10 @@ export async function act(
   perception: Perception,
   strategy: Strategy,
 ): Promise<{ reply: string; source: string; image?: { bytes: Uint8Array; mime: string } }> {
+  // m9-v11.21: route through the INPUT DOOR FIRST — every module below receives
+  // the translated directive/payload, never the raw natural sentence.
+  const task = translateInput(text, perception, strategy);
+  const d = task.directive;
   const { topic, enrichedContext } = perception;
 
   switch (strategy.approach) {
@@ -802,7 +869,7 @@ export async function act(
       return { reply: "", source: "self_ref" };
 
     case "translate": {
-      const parsed = parseTranslate(text);
+      const parsed = parseTranslate(d);
       if (parsed?.source) {
         const result = await translateText(env, parsed.source, parsed.target);
         return { reply: result ?? "Terjemahan tidak tersedia.", source: "translate" };
@@ -823,12 +890,12 @@ export async function act(
       // PLUS a real flux image of the subject — flux is merged into the image
       // generation path. Fail-closed: outline failure falls back to search;
       // image failure degrades to text-only.
-      const outline = await llmRespond(env, `Buat konsep desain singkat (4-6 baris, markdown) untuk: "${text}".\nTermasuk: ide utama, gaya visual, warna dominan, dan elemen utama. Bahasa Indonesia. Jangan sebut storyboard/keyframe/video.` , {
+      const outline = await llmRespond(env, `Buat konsep desain singkat (4-6 baris, markdown) untuk: "${d}".\nTermasuk: ide utama, gaya visual, warna dominan, dan elemen utama. Bahasa Indonesia. Jangan sebut storyboard/keyframe/video.` , {
         topic: `desain-${topic}`,
       }).catch(() => null);
       let image: { bytes: Uint8Array; mime: string } | undefined;
       try {
-        const promptText = text.length >= 3 ? text.slice(0, 250) : text;
+        const promptText = d.length >= 3 ? d.slice(0, 250) : d;
         const prompt = await generateImagePrompt(env, promptText);
         const bytes = await generateImage(env, prompt).catch(() => null);
         if (bytes && bytes.length > 0) image = { bytes, mime: sniffImageMime(bytes) };
@@ -836,39 +903,39 @@ export async function act(
         console.error("orchestrate_design image failed:", String(e).slice(0, 120));
       }
       if (outline?.reply) return { reply: outline.reply.slice(0, 900), source: "design", image };
-      const fallback = await searchAndSynthesize(env, owner, text, topic);
+      const fallback = await searchAndSynthesize(env, owner, d, topic);
       return { reply: fallback.reply ?? "Gagal memproses desain.", source: "design_fallback", image };
     }
 
     case "orchestrate_research": {
       if (!topic) return { reply: "Topik tidak ditemukan.", source: "research" };
-      const anchor = isFollowUpQuery(text) ? resolveFollowUpAnchor(enrichedContext)?.prior ?? "" : "";
-      const result = await orchestrateResearch(env, owner, text, topic, anchor);
+      const anchor = isFollowUpQuery(d) ? resolveFollowUpAnchor(enrichedContext)?.prior ?? "" : "";
+      const result = await orchestrateResearch(env, owner, d, topic, anchor);
       if (result) return { reply: result, source: "research" };
       // Fallback to search
-      const fallback = await searchAndSynthesize(env, owner, text, topic);
+      const fallback = await searchAndSynthesize(env, owner, d, topic);
       return { reply: fallback.reply ?? "Gagal melakukan riset.", source: "research_fallback" };
     }
 
     case "search_synthesize": {
       if (!topic) return { reply: "Topik tidak ditemukan.", source: "search" };
-      const result = await searchAndSynthesize(env, owner, text, topic);
+      const result = await searchAndSynthesize(env, owner, d, topic);
       return { reply: result.reply ?? "Pencarian tidak menghasilkan jawaban.", source: result.source ?? "search" };
     }
 
     case "understand_intent": {
       // Decode what the user actually WANTS, even for unknown/vague requests.
-      const result = await understandUserWants(env, text, owner, enrichedContext);
+      const result = await understandUserWants(env, d, owner, enrichedContext);
       if (result.reply) {
         return { reply: result.reply, source: result.understood ? "understand" : "understand_clarify" };
       }
       // Fallback: plain LLM, fail-closed (still under the universal rail —
       // m9-v11.19: no model call escapes the persona/no-menu/verify-in-P2 frame).
-      const fallback = await llmRespond(env, text, {
+      const fallback = await llmRespond(env, d, {
         topic: topic ?? undefined,
         context: enrichedContext,
         contextIsEnriched: true,
-        systemOverride: buildUniversalFrame({ text, topic, perception, context: enrichedContext }),
+        systemOverride: buildUniversalFrame({ text: d, topic, perception, context: enrichedContext }),
       });
       if (fallback.reply) {
         return { reply: fallback.reply, source: fallback.source ?? "llm" };
@@ -877,15 +944,15 @@ export async function act(
     }
 
     case "prompt_master": {
-      const result = await writeExpertPrompt(env, text, enrichedContext);
+      const result = await writeExpertPrompt(env, d, enrichedContext);
       if (result.ok && result.reply) {
         return { reply: result.reply, source: "prompt_master" };
       }
-      const fallback = await llmRespond(env, text, {
+      const fallback = await llmRespond(env, d, {
         topic: topic ?? undefined,
         context: enrichedContext,
         contextIsEnriched: true,
-        systemOverride: buildUniversalFrame({ text, topic, perception, context: enrichedContext }),
+        systemOverride: buildUniversalFrame({ text: d, topic, perception, context: enrichedContext }),
       });
       if (fallback.reply) {
         return { reply: fallback.reply, source: fallback.source ?? "llm" };
@@ -894,7 +961,7 @@ export async function act(
     }
 
     case "context7_docs": {
-      const ctx7 = await lookupLibraryDocs(env, text, enrichedContext);
+      const ctx7 = await lookupLibraryDocs(env, d, enrichedContext);
       if (ctx7.ok && ctx7.reply) {
         return { reply: ctx7.reply, source: "context7" };
       }
@@ -907,13 +974,13 @@ export async function act(
 
     case "simple_llm":
     default: {
-      const recallBlock = (enrichedContext ?? []).find((c) =>
+      const recallBlock = task.payload.find((c) =>
         /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
       const frame = () =>
-        buildUniversalFrame({ text, topic, perception, context: enrichedContext });
-      const result = await llmRespond(env, text, {
+        buildUniversalFrame({ text: d, topic, perception, context: task.payload });
+      const result = await llmRespond(env, d, {
         topic: topic ?? undefined,
-        context: enrichedContext,
+        context: task.payload,
         contextIsEnriched: true,
         systemOverride: frame(),
         deep: perception.intent.type === "code",
@@ -925,9 +992,9 @@ export async function act(
         // nudge. The final strip/continuation is enforced GLOBALLY at the
         // processIntelligence choke point (covers EVERY strategy).
         if (isMenuFirstLine(reply)) {
-          const retry = await llmRespond(env, text, {
+          const retry = await llmRespond(env, d, {
             topic: topic ?? undefined,
-            context: enrichedContext,
+            context: task.payload,
             contextIsEnriched: true,
             systemOverride: frame() + MENU_FOLLOWUP_NUDGE,
             deep: perception.intent.type === "code",
