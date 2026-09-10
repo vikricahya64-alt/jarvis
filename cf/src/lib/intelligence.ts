@@ -570,6 +570,44 @@ const MENU_FOLLOWUP_NUDGE =
   `"Mau saya lanjutkan dengan ...", tanpa bertanya balik, tanpa pembukaan ` +
   `pengumuman, dan berhenti di konten. Jangan menyebut soal penulisan ulang ini.`;
 
+const ECHO_FOLLOWUP_NUDGE =
+  `\n\nCatatan proses: jawaban yang kamu kirimkan itu MENGULANG frasa yang sama ` +
+  `berulang kali (echo) alih-alih memberi isi. TULIS ULANG sekarang: tulis ulang ` +
+  `seluruh jawaban sebagai satu paragraf yang menjelaskan isi topiknya dengan ` +
+  `kalimat baru, tanpa mengulang frasa atau kata yang sama, dan berhenti di ` +
+  `konten. Jangan menyebut soal penulisan ulang ini.`;
+
+/** Kata-kata terlalu umum untuk jadi sinyal pengulangan yang bermakna. Subset
+ *  kecil lokal (hindari cycle import dari verifier). */
+const ECHO_STOP = new Set([
+  "yang", "itu", "dengan", "dari", "pada", "untuk", "dan", "atau", "dalam", "akan",
+  "juga", "kamu", "saya", "anda", "kami", "kita", "mereka", "dia", "ini", "ada",
+  "adalah", "di", "ke", "saat", "karena", "kalau", "jika", "maka", "tapi", "namun",
+  "agar", "supaya", "bisa", "dapat", "sudah", "belum", "tidak", "bukan", "sangat",
+  "lebih", "cara", "banyak", "sedikit", "tentu", "seperti", "baik", "mungkin",
+  "masih", "terus", "lanjut", "saja", "lagi", "pertama", "secara", "antara", "serta",
+  "selalu",
+]);
+
+/** True when the reply is a DEGENERATE ECHO — satu frasa bermakna (2 kata
+ *  signifikan berurutan) diulang >=3 kali dalam satu jawaban (mis. "...bekerja
+ *  remote... bekerja remote dan bekerja remote") alih-alih isi. Deterministic;
+ *  hanya menilai jawaban yang cukup panjang (>=60 char) agar jawaban singkat
+ *  yang sah tidak kena. Owner live failure 2026-09-10 (turning recall). */
+export function hasDegenerateEcho(content: string): boolean {
+  const t = (content ?? "").trim();
+  if (t.length < 60) return false;
+  const words = (t.toLowerCase().match(/[a-z]{3,}/g) ?? []).filter((w) => !ECHO_STOP.has(w));
+  if (words.length < 8) return false;
+  const seen = new Map<string, number>();
+  for (let i = 0; i < words.length - 1; i++) {
+    const pair = `${words[i]} ${words[i + 1]}`;
+    seen.set(pair, (seen.get(pair) ?? 0) + 1);
+  }
+  for (const c of seen.values()) if (c >= 3) return true;
+  return false;
+}
+
 /** True when the answer OPENS with an offer/menu question or with an empty
  *  announcement — the two bad patterns the rail forbids but the model can
  *  still produce. Looks only at the FIRST sentence, so a menu deep in an
@@ -980,17 +1018,19 @@ export async function act(
         let reply = result.reply;
         // m9-v11.19 NO-MENU GUARD: when the answer OPENS with a menu or an
         // announcement (model ignored the rail) regenerate ONCE with a targeted
-        // nudge. The final strip/continuation is enforced GLOBALLY at the
+        // nudge. m9-v11.25: the same one-shot retry fires for a DEGENERATE ECHO.
+        // The final strip/continuation is enforced GLOBALLY at the
         // processIntelligence choke point (covers EVERY strategy).
-        if (isMenuFirstLine(reply)) {
+        if (isMenuFirstLine(reply) || hasDegenerateEcho(reply)) {
+          const nudge = isMenuFirstLine(reply) ? MENU_FOLLOWUP_NUDGE : ECHO_FOLLOWUP_NUDGE;
           const retry = await llmRespond(env, d, {
             topic: topic ?? undefined,
             context: task.payload,
             contextIsEnriched: true,
-            systemOverride: frame() + MENU_FOLLOWUP_NUDGE,
+            systemOverride: frame() + nudge,
             deep: perception.intent.type === "code",
           }).catch(() => null);
-          if (retry?.reply && !isMenuFirstLine(retry.reply)) {
+          if (retry?.reply && !isMenuFirstLine(retry.reply) && !hasDegenerateEcho(retry.reply)) {
             reply = retry.reply;
           } else {
             reply = stripLeadingMenuSentences(retry?.reply ?? reply) ||
@@ -1204,12 +1244,12 @@ export async function processIntelligence(
   //    under buildUniversalFrame's heavyNote rail — produced by the model,
   //    distinguishable (answer vs verify) by the owner. (m9-v11.19)
   let deliverable = safeReply;
-  if (isMenuFirstLine(deliverable)) {
+  if (isMenuFirstLine(deliverable) || hasDegenerateEcho(deliverable)) {
     const recallBlock = (perception.enrichedContext ?? []).find((c) =>
       /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
     deliverable =
       stripLeadingMenuSentences(deliverable) ||
-      deterministicRecallContinuation(recallBlock) ||
+      (recallBlock ? deterministicRecallContinuation(recallBlock) : "") ||
       deliverable;
   }
 

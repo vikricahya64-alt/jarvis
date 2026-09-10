@@ -23,7 +23,8 @@ import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, 
 import { isInternalEchoDump, isAdminChaff } from "../src/lib/db";
 import { semanticSearchMemory, semanticUpsertMemory } from "../src/lib/memory_vec";
 import { probeProviders } from "../src/lib/providers";
-import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation, translateInput } from "../src/lib/intelligence";
+import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation, translateInput, hasDegenerateEcho } from "../src/lib/intelligence";
+import { cleanRecallLine } from "../src/lib/context_manager";
 
 const FAKE_ENV = {
   CLARITY_GATE: "0.95",
@@ -1411,6 +1412,40 @@ async function testMenuGuard() {
 
   const missing = deterministicRecallContinuation({ content: "[Riwayat percakapan sebelumnya] (tidak ditemukan)." });
   assert.ok(missing.includes("belum berhasil menemukan"), "empty recall degrades into an honest line");
+
+  // m9-v11.25 DEGENERATE-ECHO GUARD: memory echoed back verbatim instead of
+  // content (owner live failure: "tadi kita bahas bekerja remote" → "bekerja
+  // remote, antara lain bekerja remote dan bekerja remote"). Repeated 2-word
+  // phrase >=3 times must be caught; a plain contentful answer must not.
+  assert.strictEqual(
+    hasDegenerateEcho("Soal itu dari pembicaraan kita dulu, intinya bekerja remote, antara lain bekerja remote dan bekerja remote."),
+    true,
+    "echo of a repeated phrase is caught",
+  );
+  assert.strictEqual(
+    hasDegenerateEcho("Bekerja remote mengubah cara orang mengatur waktu, fokus, dan batas antara kerja dengan istirahat."),
+    false,
+    "contentful answer is not flagged",
+  );
+  assert.strictEqual(
+    hasDegenerateEcho("Oke."),
+    false,
+    "short replies are never flagged",
+  );
+
+  // m9-v11.25 RECALL-LINE SCRUB: raw data artifacts must be removed so the
+  // model never imitates them (timestamps, "User menanyakan tentang:", labels).
+  assert.strictEqual(
+    cleanRecallLine("[2026-09-07] User menanyakan tentang: kelebihan dan kekurangan bekerja remote"),
+    "kelebihan dan kekurangan bekerja remote",
+    "timestamp and data label are scrubbed",
+  );
+  assert.strictEqual(
+    cleanRecallLine("owner membahas desain pasir pantai"),
+    "kita sempat membahas desain pasir pantai",
+    "owner paraphrase humanizes to kita",
+  );
+  assert.strictEqual(cleanRecallLine("percakapan biasa tanpa artefak data"), "percakapan biasa tanpa artefak data", "clean line passes through");
 }
 
 async function testInputDoor() {

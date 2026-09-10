@@ -375,6 +375,24 @@ export function stripAssistantRecallJunk(content: string): string {
     );
 }
 
+/** m9-v11.25: scrub DATA-LEVEL artifacts off a recalled line before the model
+ *  ever sees it — leading timestamps, bracket labels, "User menanyakan
+ *  tentang:", "owner ..." paraphrases. Without this the raw memory text leaks
+ *  into the answer and the model imitates it (owner live failure: the recall
+ *  "tadi kita bahas bekerja remote" echoed back as "bekerja remote ... bekerja
+ *  remote dan bekerja remote"). Deterministic. */
+export function cleanRecallLine(content: string): string {
+  if (!content || typeof content !== "string") return "";
+  return content
+    .replace(/\b\d{4}-\d{2}-\d{2}\b\s*/g, "")
+    .replace(/\[[^\]\n]{0,60}\]\s*/g, "")
+    .replace(/user\s+menanyakan\s+tentang\s*[:：]?\s*/gi, "")
+    .replace(/^(?:pemilik|owner|user)\s+(?:membicarakan|membahas|sempat\s+membicarakan|sempat\s+membahas|menceritakan|mengatakan)\s+/i, "kita sempat membahas ")
+    .replace(/^(?:pemilik|owner|user)\s*[:：]?\s+/i, "")
+    .replace(/^(?:kamu|jarvis|assistant)\s*[:：]?\s+$/i, "")
+    .trim();
+}
+
 /** m9-v11.10: LET THE MODEL UNDERSTAND the recalled topic — the owner's
  *  direction was that token dictionaries keep misreading intent (a "kamus"
  *  approach). We ask a single lightweight Groq pass (recall turns only, so a
@@ -639,23 +657,36 @@ export async function buildEnrichedContext(
           )
         : Promise.resolve([] as Array<{ content: string }>),
     ]);
-    const recalledLines: string[] = recalled
-      .filter((r) => !(r.role === "assistant" && isMenuOfferQuestion(r.content)))
-      .map((r) => {
-        // m9-v11.15: strip junk phrasing OFF the recalled dialogs so the block
-        // never models bad patterns back at the next topic-return: a trailing
-        // menu-question ("...Mau aku gali lebih dalam bagian yang mana?") and an
-        // announcing lead ("Saya akan jelaskan... Berikut yang akan saya bahas...")
-        // are anchors the model imitates instead of answering. User turns stay
-        // verbatim — their words are the actual subject.
-        let content = stripAssistantRecallJunk(r.content || "");
-        if (r.role === "assistant" && content.trim() === "") return null;
-        const who = r.role === "user" ? "pemilik" : "kamu";
-        return `${who}: ${content.slice(0, 220)}`;
-      })
-      .filter((l): l is string => l !== null);
-    for (const m of recalledMems.slice(0, 3)) {
-      recalledLines.push(`kenangan: ${(m.content || "").slice(0, 180)}`);
+    // m9-v11.25: scrub DATA artifacts (timestamps, "User menanyakan tentang:",
+    // "owner ...") AND dedupe near-identical lines so the recall block models
+    // ONE clean fact instead of raw data or repeated phrasing (owner live
+    // failure: "tadi kita bahas bekerja remote" echoed back as "bekerja remote,
+    // antara lain bekerja remote dan bekerja remote").
+    const seenRecall = new Set<string>();
+    const recallKey = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    const recalledLines: string[] = [];
+    const pushUniqueRecall = (line: string) => {
+      const key = recallKey(line);
+      if (!key || seenRecall.has(key)) return;
+      seenRecall.add(key);
+      recalledLines.push(line);
+    };
+    for (const r of recalled) {
+      // m9-v11.15: strip junk phrasing OFF the recalled dialogs so the block
+      // never models bad patterns back at the next topic-return: a trailing
+      // menu-question ("...Mau aku gali lebih dalam bagian yang mana?") and an
+      // announcing lead ("Saya akan jelaskan... Berikut yang akan saya bahas...")
+      // are anchors the model imitates instead of answering. User turns stay
+      // verbatim — their words are the actual subject.
+      if (r.role === "assistant" && isMenuOfferQuestion(r.content)) continue;
+      const content = cleanRecallLine(stripAssistantRecallJunk(r.content || ""));
+      if (!content.trim()) continue;
+      const who = r.role === "user" ? "pemilik" : "kamu";
+      pushUniqueRecall(`${who}: ${content.slice(0, 220)}`);
+    }
+    for (const m of recalledMems.slice(0, 4)) {
+      pushUniqueRecall(`kenangan: ${cleanRecallLine(m.content || "").slice(0, 180)}`);
     }
     if (recalledLines.length > 0) {
       const recallText =
@@ -667,7 +698,8 @@ export async function buildEnrichedContext(
         `orang ngobrol — JANGAN membuka dengan pertanyaan pilihan/menawarkan menu, ` +
         `JANGAN pakai tabel, daftar bernomor, atau judul bagian. ` +
         `JANGAN menggabungkan topik lama dengan topik percakapan terakhir, ` +
-        `JANGAN kutip verbatim, dan JANGAN tampilkan riwayat sebagai bagian jawaban.`;
+        `JANGAN kutip verbatim, jangan mengulang-ulang frasa atau kata yang sama, ` +
+        `dan JANGAN tampilkan riwayat sebagai bagian jawaban.`;
       if (recallText.length < charBudget) {
         context.push({ role: "system", content: recallText });
         charBudget -= recallText.length;
