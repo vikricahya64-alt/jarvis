@@ -23,7 +23,7 @@
 
 import { Env, recentContext, searchMemory, searchConversationLog } from "./db";
 import { getMoodState, setMoodState, moodSummary, type MoodState } from "./emotion";
-import { topicOverlaps, topicTokens } from "./ai";
+import { topicOverlaps, topicTokens, groqRespond } from "./ai";
 
 /** A single conversation turn. */
 export interface Turn {
@@ -338,6 +338,37 @@ export function topicRecallSubjects(text: string): string[] {
   return topicTokens(text).filter((t) => !RECALL_STOP.has(t));
 }
 
+/** m9-v11.10: LET THE MODEL UNDERSTAND the recalled topic — the owner's
+ *  direction was that token dictionaries keep misreading intent (a "kamus"
+ *  approach). We ask a single lightweight Groq pass (recall turns only, so a
+ *  rare extra call) to name the subject semantically; on ANY failure we fall
+ *  back to the deterministic topicRecallSubjects so recall can only get
+ *  sharper, never break. Uses prebuiltMessages to bypass the normal message
+ *  builder — calling llmRespond here would re-enter buildEnrichedContext
+ *  (infinite recursion). */
+export async function extractRecallSubject(env: Env, text: string): Promise<string[]> {
+  const dictFallback = topicRecallSubjects(text);
+  try {
+    const messages = [
+      {
+        role: "system" as const,
+        content:
+          `Pemilik menulis pesan yang menunjuk KEMBALI ke topik yang pernah dibahas ` +
+          `("tadi kita bahas...", "balik ke soal...", dst). Pahami MAKNA kalimatnya — ` +
+          `bukan dari kata kunci — lalu sebutkan topik yang dimaksud dalam 1-4 kata ` +
+          `kunci singkat, Bahasa Indonesia, huruf kecil. Output HANYA kata-kata kunci ` +
+          `dipisah spasi, tanpa tanda baca, tanpa kalimat lain. ` +
+          `Contoh: "bekerja remote", "desain pasir pantai".`,
+      },
+      { role: "user" as const, content: text },
+    ];
+    const reply = await groqRespond(env, text, { prebuiltMessages: messages }).catch(() => null);
+    const tokens = ((reply ?? "").toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
+    if (tokens.length >= 1) return tokens;
+  } catch { /* fall through to dictionary */ }
+  return dictFallback;
+}
+
 /** m9-v11.8: true when the message signals RETURNING to an EARLIER topic —
  *  the human "I remember we talked about X earlier" dispatch that lets a chat
  *  roam across topics ("lanjutkan desain pasir pantai yang tadi", "balik ke
@@ -502,47 +533,54 @@ export async function buildEnrichedContext(
 
   const session = getSession(owner);
 
-  // 1) Summary buffer (compressed older turns)
-  if (session.summaryBuffer) {
-    const summaryRole = "system";
-    const summaryContent = `[Ringkasan percakapan sebelumnya — soft-context, angka/klaim di sini BELUM diverifikasi ulang; jangan jadikan fakta]: ${session.summaryBuffer}`;
-    context.push({ role: summaryRole, content: summaryContent });
-    charBudget -= summaryContent.length;
-  }
-
-  // 2) Recent conversation turns + 5) memories are independent D1 reads —
-  //     fetch both in parallel to cut a round-trip on every enriched-context build.
+  // 1) Summary buffer + 2) recent turns belong to the CURRENT thread — they
+  //     are only meaningful when the owner stays in it. m9-v11.10: when the
+  //     message RETURNS to an earlier topic (recall signal), the current
+  //     thread's turns are NOT conversation for this message: they actively
+  //     fought the recall block (live failure: "tadi kita bahas bekerja remote"
+  //     got merged with the recent child-sand/"storyboard" thread). On recall
+  //     we PIVOT — drop summary + recent, make the recall block the only
+  //     conversational grounding.
   const topic = opts.topic ?? userText.slice(0, 80);
+  const isRecall = detectTopicRecall(userText);
   const [recent, mems] = await Promise.all([
     recentContext(env, owner, maxRecent).catch(() => [] as Array<{ role: string; content: string }>),
     searchMemory(env, topic, maxMems).catch(() => [] as Array<{ content: string }>),
   ]);
-  try {
-    for (const r of recent) {
-      if (r.role === "user" || r.role === "assistant") {
-        const content = r.content.slice(0, Math.min(600, charBudget / 2));
-        if (content.length + 50 < charBudget) {
-          context.push({ role: r.role, content });
-          charBudget -= content.length + 50; // +50 for role prefix overhead
+
+  if (!isRecall) {
+    // 1) Summary buffer (compressed older turns)
+    if (session.summaryBuffer) {
+      const summaryContent = `[Ringkasan percakapan sebelumnya — soft-context, angka/klaim di sini BELUM diverifikasi ulang; jangan jadikan fakta]: ${session.summaryBuffer}`;
+      context.push({ role: "system", content: summaryContent });
+      charBudget -= summaryContent.length;
+    }
+
+    // 2) Recent conversation turns (raw, bounded)
+    try {
+      for (const r of recent) {
+        if (r.role === "user" || r.role === "assistant") {
+          const content = r.content.slice(0, Math.min(600, charBudget / 2));
+          if (content.length + 50 < charBudget) {
+            context.push({ role: r.role, content });
+            charBudget -= content.length + 50; // +50 for role prefix overhead
+          }
         }
       }
-    }
-  } catch { /* fail-open */ }
-
-  // 2b) TOPIC-RECALL (m9-v11.8): signals pointing back at an EARLIER thread
-  // ("yang tadi", "balik ke soal X", "tadi kita bahas Y") pull that older
-  // history into context — the reference humans use to re-enter a topic mid-
-  // chat. Excludes turns already served as recent context; reference-only.
-  // m9-v11.9: ALSO queries the durable FTS memories (session/KV threads can
-  // rotate out of the 100-turn log, but curated memories survive rotation),
-  // using the recall's CLEAN subject tokens — the raw text failed FTS match
-  // ("tadi kita bahas bekerja remote" never appears in memory verbatim).
-  if (detectTopicRecall(userText)) {
+    } catch { /* fail-open */ }
+  } else {
+    // 2b) TOPIC-RECALL (m9-v11.8): signals pointing back at an EARLIER thread
+    // ("yang tadi", "balik ke soal X", "tadi kita bahas Y") pull that older
+    // history into context — the reference humans use to re-enter a topic mid-
+    // chat. m9-v11.9 queries the durable FTS memories too (log threads rotate
+    // out of the 100-turn bound; curated memories survive). m9-v11.10 lets the
+    // model NAME the subject (no token dictionary) and suppresses the current
+    // thread, so the recall block is the ONLY conversational input.
     const cutoff = recent.reduce<number>((m, r) => {
       const ts = (r as { ts?: number }).ts;
       return typeof ts === "number" && ts < m ? ts : m;
     }, Infinity);
-    const subjects = topicRecallSubjects(userText);
+    const subjects = await extractRecallSubject(env, userText);
     const [recalled, recalledMems] = await Promise.all([
       searchConversationLog(
         env, owner, subjects.length >= 2 ? subjects : topicTokens(userText), 6,
@@ -565,25 +603,26 @@ export async function buildEnrichedContext(
       const recallText =
         `[Riwayat percakapan sebelumnya — KONTEKS INTERNAL saja, bukan bahan kutipan]: ` +
         recalledLines.join(" | ").slice(0, Math.min(1400, charBudget)) +
-        `. Pemilik sedang menunjuk kembali ke topik yang pernah dibahas ini. ` +
-        `Pakai sebagai referensi untuk melanjutkan; JANGAN kutip verbatim dan ` +
-        `JANGAN tampilkan riwayat sebagai bagian jawaban.`;
+        `. Pemilik menunjuk KEMBALI ke topik ini DARI TOPIK LAIN. ` +
+        `Percakapan terakhir (topik berbeda) tidak disertakan — jawab HANYA berdasarkan ` +
+        `riwayat ini. JANGAN menggabungkan topik lama dengan topik percakapan terakhir, ` +
+        `JANGAN kutip verbatim, dan JANGAN tampilkan riwayat sebagai bagian jawaban.`;
       if (recallText.length < charBudget) {
         context.push({ role: "system", content: recallText });
         charBudget -= recallText.length;
       }
     } else {
-      // m9-v11.9: the recall signal fired but the older thread is NOT in
-      // memory. Without this rail the model anchored onto the MOST RECENT
-      // stale thread (the audit-status cascade) and answered as if the owner
-      // typed "/auditstatus" again. Tell it plainly instead of guessing.
+      // The recall signal fired but the older thread is NOT in memory
+      // (m9-v11.9). Without this rail the model anchored onto the MOST RECENT
+      // stale thread and answered as if the owner typed another topic. Tell it
+      // plainly instead of guessing or blending.
       const missText =
         `[Catatan riwayat]: Pemilik menunjuk kembali ke topik yang pernah dibahas ` +
         `sebelumnya, tapi kamu TIDAK menemukan riwayat topik itu di memori. ` +
-        `JANGAN mengalihkan ke topik lain dari riwayat terbaru (mis. laporan ` +
-        `status/audit) dan JANGAN menebak isi topik lamanya. Jawab jujur singkat ` +
-        `bahwa riwayat topik itu sudah tidak tersimpan, lalu minta pemilik ` +
-        `mengingatkan inti konteksnya.`;
+        `JANGAN mengalihkan ke topik lain dari percakapan terakhir dan JANGAN ` +
+        `menggabungkannya dengan permintaan ini, JANGAN pula menebak isi topik lamanya. ` +
+        `Jawab jujur singkat bahwa riwayat topik itu sudah tidak tersimpan, lalu minta ` +
+        `pemilik mengingatkan inti konteksnya.`;
       if (missText.length < charBudget) {
         context.push({ role: "system", content: missText });
         charBudget -= missText.length;

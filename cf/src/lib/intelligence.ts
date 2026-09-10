@@ -688,6 +688,26 @@ export async function act(
           // explain a platform/product/term that isn't in the conversation and
           // you aren't sure is real (live failure: fabricated "platform AGE").
           // Applies to ALL simple_llm turns, continuation or not.
+          // m9-v11.10: when the context carries a TOPIC-RETURN block the owner
+          // pointed AWAY from the current thread — the rail must say so loudly,
+          // or the model merges the old subject with the recent thread (live
+          // failure: "tadi kita bahas bekerja remote" → storyboard gabungan
+          // dengan anak-anak bermain pasir).
+          const recallBlock = (enrichedContext ?? []).find((c) =>
+            /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
+          if (recallBlock) {
+            return `Pemilik menunjuk KEMBALI ke topik lama yang dijelaskan pada blok ` +
+              `"[Riwayat percakapan sebelumnya]" / "[Catatan riwayat]" di konteks. ` +
+              `Jawab HANYA berdasarkan blok riwayat itu: lanjutkan topik lamanya secara ` +
+              `langsung; bila bloknya menyatakan riwayat tidak ditemukan, jawab jujur ` +
+              `singkat dan minta pemilik mengingatkan konteksnya. ` +
+              `ABAIKAN topik percakapan terakhir — JANGAN menggabungkan topik lama dengan ` +
+              `topik baru dari percakapan terakhir (mis. jangan mencampur "bekerja remote" ` +
+              `dengan thread gambar/storyboard). ` +
+              `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
+              `([Memori kerja], [Kenangan relevan], [Riwayat percakapan sebelumnya], ` +
+              `[Ringkasan]) dalam jawaban — itu konteks internal, bukan bahan jawaban.`;
+          }
           if (perception.isContinuation && topic) {
             const isSimplify = /\b(lebih mudah|sederhanakan|belum mengerti|nggak paham|gampang|mudah dipahami|biar paham|tolong sederhanakan)\b/i.test(text);
             if (isSimplify) {
