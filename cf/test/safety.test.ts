@@ -21,6 +21,8 @@ import { unknownEntitySignal } from "../src/lib/ai";
 import { isDesignIntent } from "../src/lib/subagents";
 import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, detectTopicRecall, topicRecallSubjects, extractRecallSubject, isMenuOfferQuestion, stripAssistantRecallJunk } from "../src/lib/context_manager";
 import { isInternalEchoDump, isAdminChaff } from "../src/lib/db";
+import { semanticSearchMemory, semanticUpsertMemory } from "../src/lib/memory_vec";
+import { probeProviders } from "../src/lib/providers";
 
 const FAKE_ENV = {
   CLARITY_GATE: "0.95",
@@ -1351,6 +1353,26 @@ async function testRecallSubjects() {
   );
 }
 
+async function testFreeServiceLayers() {
+  // m9-v11.18 SEMANTIC MEMORY: the whole Vectorize/embedding layer must no-op
+  // (never throw) when the bindings or a model are absent — FTS stays the
+  // deterministic fallback and cold starts/tests keep working.
+  const sem = await semanticSearchMemory(FAKE_ENV as never, "tadi kita bahas bekerja remote");
+  assert.deepEqual(sem, [], "semantic search no-ops without MEM_VEC binding");
+  await semanticUpsertMemory(FAKE_ENV as never, "mem-1", "bekerja remote menuntut disiplin tinggi", "fact");
+  assert.ok(semanticSearchMemory.length === 2, "semantic search keeps its signature");
+
+  // FREE-SERVICE PROVIDER PROBE: in a non-production env it must render a stub
+  // (no outbound HTTP) that still lists every free layer we operate.
+  const ps = await probeProviders(FAKE_ENV as never);
+  assert.ok(ps.some((p) => p.name === "groq"), "probe lists groq");
+  assert.ok(ps.some((p) => p.name === "openrouter"), "probe lists openrouter");
+  assert.ok(ps.some((p) => p.name === "gemini"), "probe lists gemini");
+  assert.ok(ps.some((p) => p.name === "workers_ai"), "probe lists workers_ai");
+  assert.ok(ps.some((p) => p.name === "memory_vec"), "probe lists memory_vec binding");
+  assert.ok(ps.every((p) => p.live === false), "probe stubs never claim live without a real env");
+}
+
 async function testAdminChaff() {
   // m9-v11.9: admin/diagnostic chatter is NOT conversation. The bare slash
   // commands (the /audit_status the LLM kept echoing) and the replies that
@@ -1423,6 +1445,7 @@ async function main() {
   await testInternalDumpSanitization();
   await testTopicRecall();
   await testRecallSubjects();
+  await testFreeServiceLayers();
   await testAdminChaff();
   console.log("SAFETY TESTS PASSED");
 }

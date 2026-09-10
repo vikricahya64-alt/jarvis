@@ -35,7 +35,13 @@ binding = "AI"
 
 [[kv_namespaces]]
 binding = "CONFIG_KV"
-id = "c6476e44ee25411c88ba81aee3012e9c"
+id = "c6476e44ee25411c88baa81ee3012e9c"
+
+# Vectorize (semantic memory) — free tier (5M dims). bge-m3 embeddings via
+# Workers AI (free) on top of the D1 memory FTS: recall becomes semantic.
+[[vectorize]]
+binding = "MEM_VEC"
+index_name = "memory-vectors"
 
 # -----------------------------------------------------------------------------
 # Queue bindings TEMPORARILY DISABLED: Cloudflare token lacks Queues:Edit
@@ -62,6 +68,9 @@ id = "c6476e44ee25411c88ba81aee3012e9c"
 [vars]
 OWNER_TELEGRAM_ID = "6812604983"
 APP_ENV = "production"
+# AI Gateway (free): route Groq/OpenRouter/Gemini egress through Cloudflare's
+# gateway for logs + cache + rate-limit. Provisioned 2026-09-10 (jarvis-gw).
+AI_GATEWAY_URL = "https://gateway.ai.cloudflare.com/v1/019eb7798d76ffff19fe8f3527f39d47/jarvis-gw"
 # Telegram webhook secret (should be a secret, but kept here minimal for demo;
 # in production use `wrangler secret put TELEGRAM_SECRET`).
 CLARITY_GATE = "0.95"

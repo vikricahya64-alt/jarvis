@@ -4,10 +4,22 @@
 // obedience_audit. Synchronous against D1's await API.
 //=====================================================================
 
+import { semanticUpsertMemory } from "./memory_vec";
+
+export interface MemVecIndex {
+  upsert(vectors: Array<{ id: string; values: number[]; metadata?: Record<string, string | number> }>): Promise<unknown>;
+  query(
+    values: number[],
+    opts?: { topK?: number; filter?: Record<string, string | number>; returnMetadata?: boolean; returnValues?: boolean },
+  ): Promise<unknown>;
+}
+
 export interface Env {
   DB: D1Database;
   CONFIG_KV: KVNamespace;
   AI: Ai;
+  MEM_VEC?: MemVecIndex;
+  AI_GATEWAY_URL?: string;
   OWNER_TELEGRAM_ID: string;
   APP_ENV?: string;
   TELEGRAM_SECRET?: string;
@@ -706,6 +718,10 @@ export async function rememberMemory(
       now,
       expires,
     ).run();
+    // m9-v11.18 SEMANTIC MEMORY: mirror this memory into Vectorize (free) for
+    // meaning-based recall. Fire-and-forget — keyword FTS remains the fallback
+    // and semantic failure never blocks persistence.
+    void semanticUpsertMemory(env, id, content, opts.type ?? "fact").catch(() => {});
   } catch { /* availability */ }
 }
 

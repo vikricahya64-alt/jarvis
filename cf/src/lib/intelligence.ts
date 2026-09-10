@@ -55,6 +55,7 @@ import { readFailureTally } from "./failure";
 import { describeGapProposals } from "./gap_upgrade";
 import { reflectOnTurn } from "./evolution";
 import { SELF_REF_RE } from "./identity";
+import { probeProviders } from "./providers";
 
 // ============================================================================
 // Types
@@ -1006,6 +1007,20 @@ export async function getBrainStatus(owner: number, env?: Env): Promise<string> 
   const metrics = brainMetrics;
   const gateLines = env ? await readFailureTally(env) : "";
   const gapLines = env ? await describeGapProposals(env) : "";
+  // m9-v11.18 free-service observability: live ping of every free provider
+  // (metadata endpoints only, cached 60s). Exposes a dead key/endpoint that
+  // aggregated rates alone would hide.
+  const probeLines = env
+    ? await probeProviders(env).then((ps) =>
+        ps.map((p) => {
+          const mark = p.configured ? (p.live ? "🟢" : "🔴") : "⚪";
+          return `  ${mark} ${p.name}: ${p.configured ? (p.live ? "live" : "DEAD") : "not configured"}${p.ms !== null ? ` (${p.ms})` : ""} — ${p.detail}`;
+        }),
+      )
+    : [];
+  const vectorDimsInfo =
+    env && probeLines.some((l) => l.includes("memory_vec"))
+      ? "  (bge-m3 ×1024 dims, cosine)" : "";
 
   const lines = [
     "🧠 *J.A.R.V.I.S. Brain Status*",
@@ -1027,6 +1042,9 @@ export async function getBrainStatus(owner: number, env?: Env): Promise<string> 
       return `  ${k}: ${rate}% (${v.ok} ok, ${v.fail} fail)`;
     }),
     "",
+    `*Provider Probe (live):*`,
+    ...(probeLines.length > 0 ? probeLines : ["  (env not provided)"]),
+    "",
     "*Sub-Systems:*",
     "  • Perception (emotion/language/intent): ✅",
     "  • Cognition (LLM/research/design): ✅",
@@ -1034,6 +1052,7 @@ export async function getBrainStatus(owner: number, env?: Env): Promise<string> 
     "  • Safety (verifier/heuristics): ✅",
     "",
   ];
+  if (vectorDimsInfo) lines.push(vectorDimsInfo);
   if (gateLines) lines.push(gateLines);
   if (gapLines) lines.push(gapLines);
   return lines.map((l) => l.trimEnd()).join("\n");
