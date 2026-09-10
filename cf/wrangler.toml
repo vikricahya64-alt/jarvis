@@ -35,7 +35,7 @@ binding = "AI"
 
 [[kv_namespaces]]
 binding = "CONFIG_KV"
-id = "c6476e44ee25411c88baa81ee3012e9c"
+id = "c6476e44ee25411c88ba81aee3012e9c"
 
 # Vectorize (semantic memory) — free tier (5M dims). bge-m3 embeddings via
 # Workers AI (free) on top of the D1 memory FTS: recall becomes semantic.
