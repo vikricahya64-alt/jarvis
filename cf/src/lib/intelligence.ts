@@ -243,10 +243,10 @@ function heavyCapVerdict(type: "search" | "design" | "code", text: string): "exe
 function heavyVerifySuffix(cap: string, reply: string): string {
   const ask =
     cap === "search"
-      ? `\n\nNgomong-ngomong, kalau yang kamu mau adalah aku langsung cari/risetkan detailnya, bilang saja — nanti kukerjakan.`
+      ? `\n\nKalau yang kamu maksud adalah aku langsung cari/riset detailnya — mau aku eksekusi sekarang?`
       : cap === "code"
-        ? `\n\nNgomong-ngomong, kalau yang kamu mau adalah aku langsung tulis/kerjakan kodenya, bilang saja — nanti kukerjakan.`
-        : `\n\nNgomong-ngomong, kalau yang kamu mau adalah aku langsung buatkan desain/gambarnya, bilang saja — nanti kukerjakan.`;
+        ? `\n\nKalau yang kamu maksud adalah aku langsung tulis/kerjakan kodenya — mau aku eksekusi sekarang?`
+        : `\n\nKalau yang kamu maksud adalah aku langsung buatkan desain/gambarnya — mau aku eksekusi sekarang?`;
   return `${reply}${ask}`;
 }
 
@@ -717,8 +717,19 @@ systemOverride: (() => {
             `dalam jawaban — itu konteks internal, bukan bahan jawaban.`;
           const recallBlock = (enrichedContext ?? []).find((c) =>
             /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
+          // m9-v11.16 ANSWER vs VERIFY separation (owner hypothesis confirmed):
+          // when a heavy capability was ambiguous the pipeline appends a SEPARATE
+          // verification question AFTER the reply — so the model's own answer must
+          // NOT also end with an offer/invite, or answer and verification blur into
+          // one indistinguishable response. The deterministic suffix is the ONLY
+          // closer on these turns.
+          const heavyNote = perception.intent.entities?.heavyVerify
+            ? `\n\n(Catatan teknis: setelah jawabanmu akan ada SATU pertanyaan verifikasi terpisah. ` +
+              `JANGAN tambahkan di jawabanmu tawaran, pertanyaan, atau ajakan balasan apa pun — ` +
+              `jawablah bersih sampai akhir. Verifikasi akan menyusul dari sistem, bukan darimu.)`
+            : "";
           if (recallBlock) {
-            return baseRail +
+            return (baseRail +
               `\n\nPemilik menunjuk KEMBALI ke topik lama yang dijelaskan pada blok ` +
               `"[Riwayat percakapan sebelumnya]" / "[Catatan riwayat]" di konteks. ` +
               `Jawab HANYA berdasarkan blok riwayat itu: LANGSUNG lanjutkan topik lamanya. ` +
@@ -728,7 +739,7 @@ systemOverride: (() => {
               `singkat dan minta pemilik mengingatkan konteksnya. ` +
               `ABAIKAN topik percakapan terakhir — JANGAN menggabungkan topik lama dengan ` +
               `topik baru dari percakapan terakhir (mis. jangan mencampur "bekerja remote" ` +
-              `dengan thread gambar/storyboard).`;
+              `dengan thread gambar/storyboard).`) + heavyNote;
           }
           if (perception.isContinuation && topic) {
             const isSimplify = /\b(lebih mudah|sederhanakan|belum mengerti|nggak paham|gampang|mudah dipahami|biar paham|tolong sederhanakan)\b/i.test(text);
@@ -738,16 +749,18 @@ systemOverride: (() => {
                 `Topik aktif: "${topic}". ` +
                 `Jawab ULANG penjelasan tentang topik itu dengan bahasa sehari-hari yang sangat sederhana: ` +
                 `tanpa jargon, tanpa poin-poin panjang, kalimat pendek mengalir, seperti menjelaskan ke teman. ` +
-                `Tetap pada topik itu — JANGAN ganti topik.`;
+                `Tetap pada topik itu — JANGAN ganti topik.` +
+                heavyNote;
             }
             return baseRail +
               `\n\nPemilik MENERUSKAN percakapan tentang "${topic}". ` +
               `Pesan ini ringkas dan tidak menyebut ulang topiknya. ` +
               `Jawab sebagai LANJUTAN dari percakapan tentang topik itu. ` +
               `TETAP pada topik "${topic}" — JANGAN menyimpang ke topik lain, ` +
-              `JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas.`;
+              `JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas.` +
+              heavyNote;
           }
-          return baseRail;
+          return baseRail + heavyNote;
         })(),
         deep: perception.intent.type === "code",
       });
