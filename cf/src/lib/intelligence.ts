@@ -644,6 +644,121 @@ export function deterministicRecallContinuation(recallBlock?: { content?: string
     merged.slice(0, 4).join("; ") + ".";
 }
 
+// ============================================================================
+// m9-v11.19 GLOBAL TWO-PARAGRAPH PROTOCOL (replaces the answer-vs-verification
+// external-suffix mechanics). Every conversational generation gets ONE rail:
+//   P1 Jawaban — answer the question directly, from conversation + memory.
+//   P2 Rekomendasi — only when a recommendation/next-step is warranted: a
+//      recommendation anchored in memory ("berdasarkan catatan kita..."), with
+//      uncertainty flagged AND verification folded into it in one line
+//      ("ini perkiraanku — mau aku pastikan/riset?").
+// The verification is now PART OF P2, produced by the model under the rail —
+// the old separate system-appended heavyVerifySuffix is retired. Anti-menu,
+// anti-fabrication, persona rules stay for every branch.
+// ============================================================================
+
+/** Build the universal system frame for a single conversational turn. Shared by
+ *  the simple_llm branch AND the conversational fallbacks (understand_intent /
+ *  prompt_master) so no model call can slip out of the persona/no-menu/verify-
+ *  in-P2 rails. Research/design report surfaces keep their own structured
+ *  formats (they are reports, not conversation) — their final text still passes
+ *  the global reply-shape choke point below. */
+export function buildUniversalFrame(opts: {
+  text: string;
+  topic?: string | null;
+  perception: Perception;
+  context: Array<{ role: string; content: string }>;
+}): string {
+  const { text, topic, perception, context } = opts;
+  // IGNORE the caller's topic when a recall block is present: the owner pointed
+  // AWAY from the current thread — the rail must say so loudly, or the model
+  // merges the old subject with the recent thread (live failure: "tadi kita
+  // bahas bekerja remote" → storyboard gabungan dengan anak-anak bermain pasir).
+  const recallBlock = (context ?? []).find((c) =>
+    /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
+  // m9-v11 ANTI-FABRICATION RAIL (owner principle): never confidently explain a
+  // platform/product/term that isn't in the conversation and you aren't sure is
+  // real (live failure: fabricated "platform AGE"). Universal — applies to EVERY
+  // simple_llm turn, continuation or not (m9-v11.13).
+  const baseRail =
+    `Balas seperti orang ngobrol: paragraf ringkas yang mengalir, langsung ke inti. ` +
+    `JANGAN menyusun jawaban sebagai laporan — tanpa tabel, daftar bernomor, ` +
+    `daftar berpoin panjang, atau judul seksi. ` +
+    `Beri ISI jawaban SEKARANG; JANGAN membuka dengan pertanyaan pilihan atau ` +
+    `menawarkan menu (pola seperti "Mau saya lanjutkan dengan X, Y, atau Z?", ` +
+    `"Mau bahas yang mana?", "Mau aku gali lebih dalam yang mana?"). ` +
+    `JANGAN membuka dengan kalimat PENGUMUMAN rencana yang kosong isi, seperti ` +
+    `"Saya akan jelaskan...", "Berikut yang akan saya bahas...", "Selanjutnya ` +
+    `saya akan...", "Saya akan uraikan...", "Kamu ingin mengetahui..." atau ` +
+    `"Anda ingin mengetahui..." — langsung JAWAB isinya tanpa bingkai perkenalan. ` +
+    `JANGAN menutup dengan ajakan kosong generik seperti "kalau ada bagian yang ` +
+    `ingin kamu dalami, beri tahu saya" atau "jika ada yang ingin kamu tanyakan, ` +
+    `silakan bilang" — berhenti di konten. ` +
+    `Panggil pemilik dengan "kamu", BUKAN "Anda" — tetap akrab seperti orang ngobrol. ` +
+    `Struktur jawaban GLOBAL: paragraf PERTAMA = jawaban langsung atas yang ` +
+    `ditanyakan (bersumber percakapan & memori). Bila ada rekomendasi, saran, ` +
+    `atau langkah berikutnya yang pantas, paragraf KEDUA = rekomendasi yang ` +
+    `berbasis MEMORI/pembicaraan — sebutkan basisnya ("berdasarkan catatan ` +
+    `kita...") — dan bila ada ketidakpastian, tandai sebagai dugaan serta ` +
+    `VERIFIKASI/sesuaikan dalam satu kalimat di dalam paragraf itu ("ini ` +
+    `perkiraanku, mau aku pastikan/riset?"). Bila tidak ada rekomendasi yang ` +
+    `pantas, cukup satu paragraf jawaban. Jangan memaksakan dua paragraf bila ` +
+    `tidak perlu — dan JANGAN pernah mengubah pertanyaan pilihan menjadi isi. ` +
+    `Aturan ini berlaku untuk SEMUA topik percakapan. ` +
+    `JANGAN mengarang atau menjelaskan dengan percaya diri tentang platform, produk, merek, ` +
+    `atau istilah yang tidak kamu kenal dan tidak muncul di konteks percakapan — kalau ` +
+    `sebuah istilah tidak jelas bagimu, jawab jujur: "Aku belum paham yang kamu maksud — ` +
+    `bisa dijelaskan sedikit?" — JANGAN menebak-nebak platform yang mungkin tidak nyata. ` +
+    `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
+    `([Memori kerja], [Kenangan relevan], [Riwayat percakapan sebelumnya], [Ringkasan]) ` +
+    `dalam jawaban — itu konteks internal, bukan bahan jawaban.`;
+  // m9-v11.16 ANSWER-vs-VERIFY separation evolved (m9-v11.19): the external
+  // suffix is retired — the verification question now lives at the END of the
+  // recommendation paragraph, written by the model under this note. Answer and
+  // verification stay distinguishable: content answer, then a single crisp
+  // verify line inside P2 — never a menu opener.
+  const heavyNote = perception.intent.entities?.heavyVerify
+    ? `\n\n(Catatan: permintaan ini menyiratkan aksi berat yang belum pasti jelas ` +
+      `(riset/gambar/kode). Tuangkan VERIFIKASINYA di akhir paragraf kedua/rekomendasi ` +
+      `sebagai SATU kalimat tegas seperti "kalau yang kamu maksud aku langsung ` +
+      `kerjakan, kabari aku" — jangan menjadi pertanyaan pilihan, dan jangan ` +
+      `membuka atau menutup jawaban dengan menu.)`
+    : "";
+  if (recallBlock) {
+    return (baseRail +
+      `\n\nPemilik menunjuk KEMBALI ke topik lama yang dijelaskan pada blok ` +
+      `"[Riwayat percakapan sebelumnya]" / "[Catatan riwayat]" di konteks. ` +
+      `Jawab HANYA berdasarkan blok riwayat itu: LANGSUNG lanjutkan topik lamanya. ` +
+      `Jangan bertanya balik seperti "Mau aku melanjutkan dengan X atau Y?" — ` +
+      `jawablah lanjutannya LANGSUNG tanpa menu. ` +
+      `Bila bloknya menyatakan riwayat tidak ditemukan, jawab jujur ` +
+      `singkat dan minta pemilik mengingatkan konteksnya. ` +
+      `ABAIKAN topik percakapan terakhir — JANGAN menggabungkan topik lama dengan ` +
+      `topik baru dari percakapan terakhir (mis. jangan mencampur "bekerja remote" ` +
+      `dengan thread gambar/storyboard).`) + heavyNote;
+  }
+  if (perception.isContinuation && topic) {
+    const isSimplify = /\b(lebih mudah|sederhanakan|belum mengerti|nggak paham|gampang|mudah dipahami|biar paham|tolong sederhanakan)\b/i.test(text);
+    if (isSimplify) {
+      return baseRail +
+        `\n\nPemilik minta penjelasan lebih sederhana tentang topik yang sedang dibahas. ` +
+        `Topik aktif: "${topic}". ` +
+        `Jawab ULANG penjelasan tentang topik itu dengan bahasa sehari-hari yang sangat sederhana: ` +
+        `tanpa jargon, tanpa poin-poin panjang, kalimat pendek mengalir, seperti menjelaskan ke teman. ` +
+        `Tetap pada topik itu — JANGAN ganti topik.` +
+        heavyNote;
+    }
+    return baseRail +
+      `\n\nPemilik MENERUSKAN percakapan tentang "${topic}". ` +
+      `Pesan ini ringkas dan tidak menyebut ulang topiknya. ` +
+      `Jawab sebagai LANJUTAN dari percakapan tentang topik itu. ` +
+      `TETAP pada topik "${topic}" — JANGAN menyimpang ke topik lain, ` +
+      `JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas.` +
+      heavyNote;
+  }
+  return baseRail + heavyNote;
+}
+
 /** The BRAIN's act() — decide already picked a strategy; this executes it. */
 export async function act(
   env: Env,
@@ -720,11 +835,13 @@ export async function act(
       if (result.reply) {
         return { reply: result.reply, source: result.understood ? "understand" : "understand_clarify" };
       }
-      // Fallback: plain LLM, fail-closed.
+      // Fallback: plain LLM, fail-closed (still under the universal rail —
+      // m9-v11.19: no model call escapes the persona/no-menu/verify-in-P2 frame).
       const fallback = await llmRespond(env, text, {
         topic: topic ?? undefined,
         context: enrichedContext,
         contextIsEnriched: true,
+        systemOverride: buildUniversalFrame({ text, topic, perception, context: enrichedContext }),
       });
       if (fallback.reply) {
         return { reply: fallback.reply, source: fallback.source ?? "llm" };
@@ -741,6 +858,7 @@ export async function act(
         topic: topic ?? undefined,
         context: enrichedContext,
         contextIsEnriched: true,
+        systemOverride: buildUniversalFrame({ text, topic, perception, context: enrichedContext }),
       });
       if (fallback.reply) {
         return { reply: fallback.reply, source: fallback.source ?? "llm" };
@@ -762,112 +880,29 @@ export async function act(
 
     case "simple_llm":
     default: {
-      // The rail is BUILT here (not pre-baked) so the deterministic no-menu
-      // guard can regenerate the answer with the SAME rail plus a nudge.
       const recallBlock = (enrichedContext ?? []).find((c) =>
         /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
-      const buildRail = () => {
-        // m9-v11 ANTI-FABRICATION RAIL (owner principle): never confidently
-        // explain a platform/product/term that isn't in the conversation and
-        // you aren't sure is real (live failure: fabricated "platform AGE").
-        // Applies to ALL simple_llm turns, continuation or not.
-        // m9-v11.10: when the context carries a TOPIC-RETURN block the owner
-        // pointed AWAY from the current thread — the rail must say so loudly,
-        // or the model merges the old subject with the recent thread (live
-        // failure: "tadi kita bahas bekerja remote" → storyboard gabungan
-        // dengan anak-anak bermain pasir).
-        // m9-v11.13: UNIVERSAL rail — the content-first / human-voice /
-        // no-menu rules are NOT a recall-topic quirk. They load for EVERY
-        // simple_llm answer on EVERY topic, then branch-specific refinements
-        // are appended below.
-        const baseRail =
-          `Balas seperti orang ngobrol: paragraf ringkas yang mengalir, langsung ke inti. ` +
-          `JANGAN menyusun jawaban sebagai laporan — tanpa tabel, daftar bernomor, ` +
-          `daftar berpoin panjang, atau judul seksi. ` +
-          `Beri ISI jawaban SEKARANG; JANGAN membuka dengan pertanyaan pilihan atau ` +
-          `menawarkan menu (pola seperti "Mau saya lanjutkan dengan X, Y, atau Z?", ` +
-          `"Mau bahas yang mana?", "Mau aku gali lebih dalam yang mana?"). ` +
-          `JANGAN membuka dengan kalimat PENGUMUMAN rencana yang kosong isi, seperti ` +
-          `"Saya akan jelaskan...", "Berikut yang akan saya bahas...", "Selanjutnya ` +
-          `saya akan...", "Saya akan uraikan...", "Kamu ingin mengetahui..." atau ` +
-          `"Anda ingin mengetahui..." — langsung JAWAB isinya tanpa bingkai perkenalan. ` +
-          `JANGAN menutup dengan ajakan kosong generik seperti "kalau ada bagian yang ` +
-          `ingin kamu dalami, beri tahu saya" atau "jika ada yang ingin kamu tanyakan, ` +
-          `silakan bilang" — berhenti di konten. ` +
-          `Panggil pemilik dengan "kamu", BUKAN "Anda" — tetap akrab seperti orang ngobrol. ` +
-          `Aturan ini berlaku untuk SEMUA topik percakapan. ` +
-          `JANGAN mengarang atau menjelaskan dengan percaya diri tentang platform, produk, merek, ` +
-          `atau istilah yang tidak kamu kenal dan tidak muncul di konteks percakapan — kalau ` +
-          `sebuah istilah tidak jelas bagimu, jawab jujur: "Aku belum paham yang kamu maksud — ` +
-          `bisa dijelaskan sedikit?" — JANGAN menebak-nebak platform yang mungkin tidak nyata. ` +
-          `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
-          `([Memori kerja], [Kenangan relevan], [Riwayat percakapan sebelumnya], [Ringkasan]) ` +
-          `dalam jawaban — itu konteks internal, bukan bahan jawaban.`;
-        // m9-v11.16 ANSWER vs VERIFY separation (owner hypothesis confirmed):
-        // when a heavy capability was ambiguous the pipeline appends a SEPARATE
-        // verification question AFTER the reply — so the model's own answer must
-        // NOT also end with an offer/invite, or answer and verification blur into
-        // one indistinguishable response. The deterministic suffix is the ONLY
-        // closer on these turns.
-        const heavyNote = perception.intent.entities?.heavyVerify
-          ? `\n\n(Catatan teknis: setelah jawabanmu akan ada SATU pertanyaan verifikasi terpisah. ` +
-            `JANGAN tambahkan di jawabanmu tawaran, pertanyaan, atau ajakan balasan apa pun — ` +
-            `jawablah bersih sampai akhir. Verifikasi akan menyusul dari sistem, bukan darimu.)`
-          : "";
-        if (recallBlock) {
-          return (baseRail +
-            `\n\nPemilik menunjuk KEMBALI ke topik lama yang dijelaskan pada blok ` +
-            `"[Riwayat percakapan sebelumnya]" / "[Catatan riwayat]" di konteks. ` +
-            `Jawab HANYA berdasarkan blok riwayat itu: LANGSUNG lanjutkan topik lamanya. ` +
-            `Jangan bertanya balik seperti "Mau aku melanjutkan dengan X atau Y?" — ` +
-            `jawablah lanjutannya LANGSUNG tanpa menu. ` +
-            `Bila bloknya menyatakan riwayat tidak ditemukan, jawab jujur ` +
-            `singkat dan minta pemilik mengingatkan konteksnya. ` +
-            `ABAIKAN topik percakapan terakhir — JANGAN menggabungkan topik lama dengan ` +
-            `topik baru dari percakapan terakhir (mis. jangan mencampur "bekerja remote" ` +
-            `dengan thread gambar/storyboard).`) + heavyNote;
-        }
-        if (perception.isContinuation && topic) {
-          const isSimplify = /\b(lebih mudah|sederhanakan|belum mengerti|nggak paham|gampang|mudah dipahami|biar paham|tolong sederhanakan)\b/i.test(text);
-          if (isSimplify) {
-            return baseRail +
-              `\n\nPemilik minta penjelasan lebih sederhana tentang topik yang sedang dibahas. ` +
-              `Topik aktif: "${topic}". ` +
-              `Jawab ULANG penjelasan tentang topik itu dengan bahasa sehari-hari yang sangat sederhana: ` +
-              `tanpa jargon, tanpa poin-poin panjang, kalimat pendek mengalir, seperti menjelaskan ke teman. ` +
-              `Tetap pada topik itu — JANGAN ganti topik.` +
-              heavyNote;
-          }
-          return baseRail +
-            `\n\nPemilik MENERUSKAN percakapan tentang "${topic}". ` +
-            `Pesan ini ringkas dan tidak menyebut ulang topiknya. ` +
-            `Jawab sebagai LANJUTAN dari percakapan tentang topik itu. ` +
-            `TETAP pada topik "${topic}" — JANGAN menyimpang ke topik lain, ` +
-            `JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas.` +
-            heavyNote;
-        }
-        return baseRail + heavyNote;
-      };
+      const frame = () =>
+        buildUniversalFrame({ text, topic, perception, context: enrichedContext });
       const result = await llmRespond(env, text, {
         topic: topic ?? undefined,
         context: enrichedContext,
         contextIsEnriched: true,
-        systemOverride: buildRail(),
+        systemOverride: frame(),
         deep: perception.intent.type === "code",
       });
       if (result.reply) {
         let reply = result.reply;
-        // m9-v11.19 DETERMINISTIC NO-MENU GUARD: when the answer OPENS with a
-        // menu/announcement (model ignored the rail), regenerate ONCE with a
-        // targeted nudge; if it STILL leads with a menu, strip menu sentences
-        // and, for recall turns, degrade into a deterministic continuation of
-        // the recalled lines — never ship a menu-first reply.
+        // m9-v11.19 NO-MENU GUARD: when the answer OPENS with a menu or an
+        // announcement (model ignored the rail) regenerate ONCE with a targeted
+        // nudge. The final strip/continuation is enforced GLOBALLY at the
+        // processIntelligence choke point (covers EVERY strategy).
         if (isMenuFirstLine(reply)) {
           const retry = await llmRespond(env, text, {
             topic: topic ?? undefined,
             context: enrichedContext,
             contextIsEnriched: true,
-            systemOverride: buildRail() + MENU_FOLLOWUP_NUDGE,
+            systemOverride: frame() + MENU_FOLLOWUP_NUDGE,
             deep: perception.intent.type === "code",
           }).catch(() => null);
           if (retry?.reply && !isMenuFirstLine(retry.reply)) {
@@ -1073,21 +1108,25 @@ export async function processIntelligence(
     ? reply
     : reply.replace(/https?:\/\/[^\s)]+/g, "").replace(/\[([^\]]*)\]\(\s*https?:\/\/[^\s)]+\)/g, "$1").trim();
 
-  // m9-v10 RECIPROCAL QUESTION — REMOVED in m9-v11.14: the deterministic
-  // appender appended a canned menu question ("Mau aku gali lebih dalam bagian
-  // yang mana?") to every topic-bearing answer, contradicting the owner's
-  // persona rail which forbids opening/closing with menu questions. Replies
-  // keep the model's own natural closing; no canned follow-up is force-added.
-  // Anchors, memory, and metrics all keep the PLAIN answer.
-  const heavyCap = perception.intent.entities?.heavyVerify;
-  const deliverable = heavyCap
-    ? // m9-v11.1 RESPOND-THEN-VERIFY: the capability was ambiguous in the text
-      // ("cara buat poster?" / "bagaimana cara riset X?") — we ANSWERED it via
-      // the cheap question path above, and now ask whether the HEAVY act should
-      // actually run. Never verify when the text was clear (that path keeps a
-      // plain answer, no nagging).
-      heavyVerifySuffix(heavyCap, safeReply)
-    : safeReply;
+  // m9-v11.19 GLOBAL CHOKE POINT — applies to EVERY strategy (simple_llm,
+  // understand_intent, prompt_master, research, etc.).
+  // 1) Strip any leading menu/announcement sentence the model may still emit
+  //    (deterministic — not a model call).
+  // 2) For recall turns where stripping left nothing usable, fall back to
+  //    deterministicRecallContinuation (narrate the recalled lines).
+  // 3) No more system-appended heavyVerifySuffix / heavyNote: the
+  //    verification question now lives INSIDE the P2 recommendation paragraph
+  //    under buildUniversalFrame's heavyNote rail — produced by the model,
+  //    distinguishable (answer vs verify) by the owner. (m9-v11.19)
+  let deliverable = safeReply;
+  if (isMenuFirstLine(deliverable)) {
+    const recallBlock = (perception.enrichedContext ?? []).find((c) =>
+      /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
+    deliverable =
+      stripLeadingMenuSentences(deliverable) ||
+      deterministicRecallContinuation(recallBlock) ||
+      deliverable;
+  }
 
   return {
     text: deliverable,
