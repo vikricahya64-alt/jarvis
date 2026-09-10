@@ -19,7 +19,7 @@ import {
 import { validateAction, conflictScore } from "../src/lib/constitutional_guard";
 import { unknownEntitySignal } from "../src/lib/ai";
 import { isDesignIntent } from "../src/lib/subagents";
-import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, detectTopicRecall, topicRecallSubjects, extractRecallSubject, isMenuOfferQuestion } from "../src/lib/context_manager";
+import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, detectTopicRecall, topicRecallSubjects, extractRecallSubject, isMenuOfferQuestion, stripAssistantRecallJunk } from "../src/lib/context_manager";
 import { isInternalEchoDump, isAdminChaff } from "../src/lib/db";
 
 const FAKE_ENV = {
@@ -1329,6 +1329,25 @@ async function testRecallSubjects() {
   assert.ok(
     !isMenuOfferQuestion("Ya"),
     "a bare owner yes must not be flagged as menu-offer",
+  );
+
+  // m9-v11.15: anchors scrubbed from recalled assistant lines — a trailing
+  // menu question or an announcing lead must never model bad phrasing back.
+  const scrubbed = stripAssistantRecallJunk(
+    "Saya akan jelaskan contoh micro-skill penting dan langkah identifikasi kebutuhan timmu. Selanjutnya, kerja remote butuh manajemen waktu. Mau aku gali lebih dalam bagian yang mana?",
+  );
+  assert.ok(!/saya akan jelaskan/i.test(scrubbed), "announce lead stripped");
+  assert.ok(!/mau aku gali/i.test(scrubbed), "trailing menu stripped");
+  assert.ok(/manajemen waktu/i.test(scrubbed), "real content preserved");
+  assert.strictEqual(
+    stripAssistantRecallJunk("Bekerja remote memang menuntut disiplin tinggi."),
+    "Bekerja remote memang menuntut disiplin tinggi.",
+    "clean assistant content passes through unchanged",
+  );
+  assert.strictEqual(
+    stripAssistantRecallJunk("tadi kita bahas bekerja remote"),
+    "tadi kita bahas bekerja remote",
+    "user-style lines pass through unchanged",
   );
 }
 

@@ -354,6 +354,26 @@ export function isMenuOfferQuestion(content: string): boolean {
   return offers && /[?？]/.test(content) && content.length < 260;
 }
 
+/** m9-v11.15: scrub junk phrasing off an ASSISTANT dialog line before it is fed
+ *  into a topic-return recall block. Two anchors teach the model bad habits:
+ *  (1) a trailing menu-question ("...Mau aku gali lebih dalam bagian yang mana?")
+ *  makes it imitate menu questions; (2) an announcing empty lead ("Saya akan
+ *  jelaskan...", "Berikut yang akan saya bahas...") makes it announce a plan
+ *  instead of delivering content. User lines must stay verbatim — their words
+ *  are the actual subject. Pure and deterministic. */
+export function stripAssistantRecallJunk(content: string): string {
+  if (!content || typeof content !== "string") return content ?? "";
+  return content
+    .replace(
+      /\s*(?:mau aku|mau saya|mau kubandingkan|apakah kamu ingin aku|apakah anda ingin saya|perlu aku|ada yang mau kamu|gimana menurutmu)\s+[^!?\n]*[?？]\s*$/i,
+      "",
+    )
+    .replace(
+      /^(?:saya akan|aku akan|saya siap|aku siap|saya jelaskan|aku jelaskan|saya bahas|aku bahas|saya uraikan|aku uraikan|berikut yang akan saya|berikut yang akan aku|berikut ini yang akan saya|berikut ini yang akan aku|outlook saya akan|rencana saya)\s[^.]*\.\s*/i,
+      "",
+    );
+}
+
 /** m9-v11.10: LET THE MODEL UNDERSTAND the recalled topic — the owner's
  *  direction was that token dictionaries keep misreading intent (a "kamus"
  *  approach). We ask a single lightweight Groq pass (recall turns only, so a
@@ -611,9 +631,18 @@ export async function buildEnrichedContext(
     const recalledLines: string[] = recalled
       .filter((r) => !(r.role === "assistant" && isMenuOfferQuestion(r.content)))
       .map((r) => {
+        // m9-v11.15: strip junk phrasing OFF the recalled dialogs so the block
+        // never models bad patterns back at the next topic-return: a trailing
+        // menu-question ("...Mau aku gali lebih dalam bagian yang mana?") and an
+        // announcing lead ("Saya akan jelaskan... Berikut yang akan saya bahas...")
+        // are anchors the model imitates instead of answering. User turns stay
+        // verbatim — their words are the actual subject.
+        let content = stripAssistantRecallJunk(r.content || "");
+        if (r.role === "assistant" && content.trim() === "") return null;
         const who = r.role === "user" ? "pemilik" : "kamu";
-        return `${who}: ${(r.content || "").slice(0, 220)}`;
-      });
+        return `${who}: ${content.slice(0, 220)}`;
+      })
+      .filter((l): l is string => l !== null);
     for (const m of recalledMems.slice(0, 3)) {
       recalledLines.push(`kenangan: ${(m.content || "").slice(0, 180)}`);
     }
