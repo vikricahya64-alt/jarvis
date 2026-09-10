@@ -562,6 +562,89 @@ export function decide(perception: Perception): Strategy {
  * Phase 3: ACT — Execute the chosen strategy.
  * Dispatches to the appropriate sub-system.
  */
+// ============================================================================
+// m9-v11.19 DETERMINISTIC NO-MENU GUARD
+// The no-menu / no-announcement rail is a PROMPT-level rule; gpt-oss-120b
+// intermittently ignores it. Owner live failure (2026-09-10): the recall
+// "tadi kita bahas bekerja remote" came back as a BARE menu question
+// ("Mau saya lanjutkan dengan contoh tantangan utama ... atau tips praktis ...?")
+// even though the rail was in the system message. These helpers enforce the
+// rule AFTER generation, deterministically — we must never ship a menu-first
+// answer. Flow: isMenuFirstLine → regenerate once with a nudge → strip; for
+// recall turns a still-menu answer degrades into a deterministic continuation.
+// ============================================================================
+
+const MENU_FOLLOWUP_NUDGE =
+  `\n\nCatatan proses: jawaban yang kamu kirimkan TADI DIMULAI dengan ` +
+  `pertanyaan pilihan ("Mau saya ...? ... atau ...?") — itu TIDAK sesuai ` +
+  `permintaan pemilik. TULIS ULANG sekarang: tulis ulang seluruh jawaban sebagai ` +
+  `satu paragraf yang LANGSUNG berisi isi lanjutan topiknya, tanpa kalimat ` +
+  `"Mau saya lanjutkan dengan ...", tanpa bertanya balik, tanpa pembukaan ` +
+  `pengumuman, dan berhenti di konten. Jangan menyebut soal penulisan ulang ini.`;
+
+/** True when the answer OPENS with an offer/menu question or with an empty
+ *  announcement — the two bad patterns the rail forbids but the model can
+ *  still produce. Looks only at the FIRST sentence, so a menu deep in an
+ *  otherwise contentful answer passes (the recall scrub already handles
+ *  trailing junk). */
+export function isMenuFirstLine(content: string): boolean {
+  if (!content || typeof content !== "string") return false;
+  const first = (content.match(/^[^.!?？\n]*[.!?？]?/) ?? [""])[0].trim().slice(0, 160);
+  if (!first) return false;
+  const looksMenu =
+    /\b(?:mau|ingin|apakah kamu|apakah anda|boleh)\b[^!?？]{0,60}\b(?:saya|aku|kita)\b/i.test(first) &&
+    /(?:lanjutkan|melanjutkan|bahas|membahas|bicarakan|jelaskan|menjelaskan|berikan|contoh|opsi|pilihan|gali|yang mana|atau)/i.test(first) &&
+    /[?？]/.test(first);
+  const announceLead =
+    /^(?:saya akan|aku akan|saya siap|aku siap|saya jelaskan|aku jelaskan|saya bahas|aku bahas|saya uraikan|aku uraikan|berikut yang akan saya|berikut yang akan aku|berikut ini yang akan saya|berikut ini yang akan aku|rencana saya|kamu ingin mengetahui|anda ingin mengetahui|selanjutnya saya akan)/i.test(first);
+  return looksMenu || announceLead;
+}
+
+/** Strip a LEADING run of menu-question / empty-announcement sentences. The
+ *  last line of defense after the regenerate-nudge: whatever survives is real
+ *  content, or empty. */
+export function stripLeadingMenuSentences(content: string): string {
+  if (!content || typeof content !== "string") return "";
+  const kept: string[] = [];
+  let contentSeen = false;
+  for (const line of content.split(/\n+/).map((s) => s.trim()).filter(Boolean)) {
+    if (!contentSeen && isMenuFirstLine(line)) continue;
+    contentSeen = true;
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
+/** Deterministic continuation for a recall turn that STILL opens with a menu
+ *  even after the regenerate-nudge: re-narrate the recalled lines as a short
+ *  honest paragraph instead of a question. Content-first, no menu, no invite. */
+export function deterministicRecallContinuation(recallBlock?: { content?: string }): string {
+  const raw = (recallBlock?.content ?? "").replace(/^\[[^\]]+\]\s*\([^)]*\)\s*:/, "");
+  const pick = (re: RegExp): string[] =>
+    raw
+      .split("|")
+      .map((s) => s.trim())
+      .filter((l) => re.test(l))
+      .map((l) =>
+        l
+          .replace(/^(pemilik|kenangan|kamu):\s*/i, "")
+          .replace(/\.\s*Pemilik menunjuk[\s\S]*$/i, ""),
+      )
+      .filter((l) => l.length > 0);
+  // Surface the SUBJECT discussed: owner's words first, then curated memories;
+  // assistant lines fill the rest — owner substance always ranks above the
+  // assistant's own (upstream-scrubbed) answers.
+  const bits = pick(/^(pemilik|kenangan):/i);
+  const assistantBits = pick(/^kamu:/i);
+  const merged = [...bits, ...assistantBits.filter((b) => !bits.includes(b))];
+  if (merged.length === 0) {
+    return "Aku belum berhasil menemukan catatan percakapan itu — tolong ingatkan aku sedikit konteksnya.";
+  }
+  return "Sebelumnya kita sempat membahas ini — ringkas dari catatanku: " +
+    merged.slice(0, 4).join("; ") + ".";
+}
+
+/** The BRAIN's act() — decide already picked a strategy; this executes it. */
 export async function act(
   env: Env,
   owner: number,
@@ -679,98 +762,122 @@ export async function act(
 
     case "simple_llm":
     default: {
+      // The rail is BUILT here (not pre-baked) so the deterministic no-menu
+      // guard can regenerate the answer with the SAME rail plus a nudge.
+      const recallBlock = (enrichedContext ?? []).find((c) =>
+        /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
+      const buildRail = () => {
+        // m9-v11 ANTI-FABRICATION RAIL (owner principle): never confidently
+        // explain a platform/product/term that isn't in the conversation and
+        // you aren't sure is real (live failure: fabricated "platform AGE").
+        // Applies to ALL simple_llm turns, continuation or not.
+        // m9-v11.10: when the context carries a TOPIC-RETURN block the owner
+        // pointed AWAY from the current thread — the rail must say so loudly,
+        // or the model merges the old subject with the recent thread (live
+        // failure: "tadi kita bahas bekerja remote" → storyboard gabungan
+        // dengan anak-anak bermain pasir).
+        // m9-v11.13: UNIVERSAL rail — the content-first / human-voice /
+        // no-menu rules are NOT a recall-topic quirk. They load for EVERY
+        // simple_llm answer on EVERY topic, then branch-specific refinements
+        // are appended below.
+        const baseRail =
+          `Balas seperti orang ngobrol: paragraf ringkas yang mengalir, langsung ke inti. ` +
+          `JANGAN menyusun jawaban sebagai laporan — tanpa tabel, daftar bernomor, ` +
+          `daftar berpoin panjang, atau judul seksi. ` +
+          `Beri ISI jawaban SEKARANG; JANGAN membuka dengan pertanyaan pilihan atau ` +
+          `menawarkan menu (pola seperti "Mau saya lanjutkan dengan X, Y, atau Z?", ` +
+          `"Mau bahas yang mana?", "Mau aku gali lebih dalam yang mana?"). ` +
+          `JANGAN membuka dengan kalimat PENGUMUMAN rencana yang kosong isi, seperti ` +
+          `"Saya akan jelaskan...", "Berikut yang akan saya bahas...", "Selanjutnya ` +
+          `saya akan...", "Saya akan uraikan...", "Kamu ingin mengetahui..." atau ` +
+          `"Anda ingin mengetahui..." — langsung JAWAB isinya tanpa bingkai perkenalan. ` +
+          `JANGAN menutup dengan ajakan kosong generik seperti "kalau ada bagian yang ` +
+          `ingin kamu dalami, beri tahu saya" atau "jika ada yang ingin kamu tanyakan, ` +
+          `silakan bilang" — berhenti di konten. ` +
+          `Panggil pemilik dengan "kamu", BUKAN "Anda" — tetap akrab seperti orang ngobrol. ` +
+          `Aturan ini berlaku untuk SEMUA topik percakapan. ` +
+          `JANGAN mengarang atau menjelaskan dengan percaya diri tentang platform, produk, merek, ` +
+          `atau istilah yang tidak kamu kenal dan tidak muncul di konteks percakapan — kalau ` +
+          `sebuah istilah tidak jelas bagimu, jawab jujur: "Aku belum paham yang kamu maksud — ` +
+          `bisa dijelaskan sedikit?" — JANGAN menebak-nebak platform yang mungkin tidak nyata. ` +
+          `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
+          `([Memori kerja], [Kenangan relevan], [Riwayat percakapan sebelumnya], [Ringkasan]) ` +
+          `dalam jawaban — itu konteks internal, bukan bahan jawaban.`;
+        // m9-v11.16 ANSWER vs VERIFY separation (owner hypothesis confirmed):
+        // when a heavy capability was ambiguous the pipeline appends a SEPARATE
+        // verification question AFTER the reply — so the model's own answer must
+        // NOT also end with an offer/invite, or answer and verification blur into
+        // one indistinguishable response. The deterministic suffix is the ONLY
+        // closer on these turns.
+        const heavyNote = perception.intent.entities?.heavyVerify
+          ? `\n\n(Catatan teknis: setelah jawabanmu akan ada SATU pertanyaan verifikasi terpisah. ` +
+            `JANGAN tambahkan di jawabanmu tawaran, pertanyaan, atau ajakan balasan apa pun — ` +
+            `jawablah bersih sampai akhir. Verifikasi akan menyusul dari sistem, bukan darimu.)`
+          : "";
+        if (recallBlock) {
+          return (baseRail +
+            `\n\nPemilik menunjuk KEMBALI ke topik lama yang dijelaskan pada blok ` +
+            `"[Riwayat percakapan sebelumnya]" / "[Catatan riwayat]" di konteks. ` +
+            `Jawab HANYA berdasarkan blok riwayat itu: LANGSUNG lanjutkan topik lamanya. ` +
+            `Jangan bertanya balik seperti "Mau aku melanjutkan dengan X atau Y?" — ` +
+            `jawablah lanjutannya LANGSUNG tanpa menu. ` +
+            `Bila bloknya menyatakan riwayat tidak ditemukan, jawab jujur ` +
+            `singkat dan minta pemilik mengingatkan konteksnya. ` +
+            `ABAIKAN topik percakapan terakhir — JANGAN menggabungkan topik lama dengan ` +
+            `topik baru dari percakapan terakhir (mis. jangan mencampur "bekerja remote" ` +
+            `dengan thread gambar/storyboard).`) + heavyNote;
+        }
+        if (perception.isContinuation && topic) {
+          const isSimplify = /\b(lebih mudah|sederhanakan|belum mengerti|nggak paham|gampang|mudah dipahami|biar paham|tolong sederhanakan)\b/i.test(text);
+          if (isSimplify) {
+            return baseRail +
+              `\n\nPemilik minta penjelasan lebih sederhana tentang topik yang sedang dibahas. ` +
+              `Topik aktif: "${topic}". ` +
+              `Jawab ULANG penjelasan tentang topik itu dengan bahasa sehari-hari yang sangat sederhana: ` +
+              `tanpa jargon, tanpa poin-poin panjang, kalimat pendek mengalir, seperti menjelaskan ke teman. ` +
+              `Tetap pada topik itu — JANGAN ganti topik.` +
+              heavyNote;
+          }
+          return baseRail +
+            `\n\nPemilik MENERUSKAN percakapan tentang "${topic}". ` +
+            `Pesan ini ringkas dan tidak menyebut ulang topiknya. ` +
+            `Jawab sebagai LANJUTAN dari percakapan tentang topik itu. ` +
+            `TETAP pada topik "${topic}" — JANGAN menyimpang ke topik lain, ` +
+            `JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas.` +
+            heavyNote;
+        }
+        return baseRail + heavyNote;
+      };
       const result = await llmRespond(env, text, {
         topic: topic ?? undefined,
         context: enrichedContext,
         contextIsEnriched: true,
-systemOverride: (() => {
-          // m9-v11 ANTI-FABRICATION RAIL (owner principle): never confidently
-          // explain a platform/product/term that isn't in the conversation and
-          // you aren't sure is real (live failure: fabricated "platform AGE").
-          // Applies to ALL simple_llm turns, continuation or not.
-          // m9-v11.10: when the context carries a TOPIC-RETURN block the owner
-          // pointed AWAY from the current thread — the rail must say so loudly,
-          // or the model merges the old subject with the recent thread (live
-          // failure: "tadi kita bahas bekerja remote" → storyboard gabungan
-          // dengan anak-anak bermain pasir).
-          // m9-v11.13: UNIVERSAL rail — the content-first / human-voice /
-          // no-menu rules are NOT a recall-topic quirk. They load for EVERY
-          // simple_llm answer on EVERY topic, then branch-specific refinements
-          // are appended below.
-          const baseRail =
-            `Balas seperti orang ngobrol: paragraf ringkas yang mengalir, langsung ke inti. ` +
-            `JANGAN menyusun jawaban sebagai laporan — tanpa tabel, daftar bernomor, ` +
-            `daftar berpoin panjang, atau judul seksi. ` +
-            `Beri ISI jawaban SEKARANG; JANGAN membuka dengan pertanyaan pilihan atau ` +
-            `menawarkan menu (pola seperti "Mau saya lanjutkan dengan X, Y, atau Z?", ` +
-            `"Mau bahas yang mana?", "Mau aku gali lebih dalam yang mana?"). ` +
-            `JANGAN membuka dengan kalimat PENGUMUMAN rencana yang kosong isi, seperti ` +
-            `"Saya akan jelaskan...", "Berikut yang akan saya bahas...", "Selanjutnya ` +
-            `saya akan...", "Saya akan uraikan...", "Kamu ingin mengetahui..." atau ` +
-            `"Anda ingin mengetahui..." — langsung JAWAB isinya tanpa bingkai perkenalan. ` +
-            `JANGAN menutup dengan ajakan kosong generik seperti "kalau ada bagian yang ` +
-            `ingin kamu dalami, beri tahu saya" atau "jika ada yang ingin kamu tanyakan, ` +
-            `silakan bilang" — berhenti di konten. ` +
-            `Panggil pemilik dengan "kamu", BUKAN "Anda" — tetap akrab seperti orang ngobrol. ` +
-            `Aturan ini berlaku untuk SEMUA topik percakapan. ` +
-            `JANGAN mengarang atau menjelaskan dengan percaya diri tentang platform, produk, merek, ` +
-            `atau istilah yang tidak kamu kenal dan tidak muncul di konteks percakapan — kalau ` +
-            `sebuah istilah tidak jelas bagimu, jawab jujur: "Aku belum paham yang kamu maksud — ` +
-            `bisa dijelaskan sedikit?" — JANGAN menebak-nebak platform yang mungkin tidak nyata. ` +
-            `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
-            `([Memori kerja], [Kenangan relevan], [Riwayat percakapan sebelumnya], [Ringkasan]) ` +
-            `dalam jawaban — itu konteks internal, bukan bahan jawaban.`;
-          const recallBlock = (enrichedContext ?? []).find((c) =>
-            /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
-          // m9-v11.16 ANSWER vs VERIFY separation (owner hypothesis confirmed):
-          // when a heavy capability was ambiguous the pipeline appends a SEPARATE
-          // verification question AFTER the reply — so the model's own answer must
-          // NOT also end with an offer/invite, or answer and verification blur into
-          // one indistinguishable response. The deterministic suffix is the ONLY
-          // closer on these turns.
-          const heavyNote = perception.intent.entities?.heavyVerify
-            ? `\n\n(Catatan teknis: setelah jawabanmu akan ada SATU pertanyaan verifikasi terpisah. ` +
-              `JANGAN tambahkan di jawabanmu tawaran, pertanyaan, atau ajakan balasan apa pun — ` +
-              `jawablah bersih sampai akhir. Verifikasi akan menyusul dari sistem, bukan darimu.)`
-            : "";
-          if (recallBlock) {
-            return (baseRail +
-              `\n\nPemilik menunjuk KEMBALI ke topik lama yang dijelaskan pada blok ` +
-              `"[Riwayat percakapan sebelumnya]" / "[Catatan riwayat]" di konteks. ` +
-              `Jawab HANYA berdasarkan blok riwayat itu: LANGSUNG lanjutkan topik lamanya. ` +
-              `Jangan bertanya balik seperti "Mau aku melanjutkan dengan X atau Y?" — ` +
-              `jawablah lanjutannya LANGSUNG tanpa menu. ` +
-              `Bila bloknya menyatakan riwayat tidak ditemukan, jawab jujur ` +
-              `singkat dan minta pemilik mengingatkan konteksnya. ` +
-              `ABAIKAN topik percakapan terakhir — JANGAN menggabungkan topik lama dengan ` +
-              `topik baru dari percakapan terakhir (mis. jangan mencampur "bekerja remote" ` +
-              `dengan thread gambar/storyboard).`) + heavyNote;
-          }
-          if (perception.isContinuation && topic) {
-            const isSimplify = /\b(lebih mudah|sederhanakan|belum mengerti|nggak paham|gampang|mudah dipahami|biar paham|tolong sederhanakan)\b/i.test(text);
-            if (isSimplify) {
-              return baseRail +
-                `\n\nPemilik minta penjelasan lebih sederhana tentang topik yang sedang dibahas. ` +
-                `Topik aktif: "${topic}". ` +
-                `Jawab ULANG penjelasan tentang topik itu dengan bahasa sehari-hari yang sangat sederhana: ` +
-                `tanpa jargon, tanpa poin-poin panjang, kalimat pendek mengalir, seperti menjelaskan ke teman. ` +
-                `Tetap pada topik itu — JANGAN ganti topik.` +
-                heavyNote;
-            }
-            return baseRail +
-              `\n\nPemilik MENERUSKAN percakapan tentang "${topic}". ` +
-              `Pesan ini ringkas dan tidak menyebut ulang topiknya. ` +
-              `Jawab sebagai LANJUTAN dari percakapan tentang topik itu. ` +
-              `TETAP pada topik "${topic}" — JANGAN menyimpang ke topik lain, ` +
-              `JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas.` +
-              heavyNote;
-          }
-          return baseRail + heavyNote;
-        })(),
+        systemOverride: buildRail(),
         deep: perception.intent.type === "code",
       });
       if (result.reply) {
-        return { reply: result.reply, source: result.source ?? "llm" };
+        let reply = result.reply;
+        // m9-v11.19 DETERMINISTIC NO-MENU GUARD: when the answer OPENS with a
+        // menu/announcement (model ignored the rail), regenerate ONCE with a
+        // targeted nudge; if it STILL leads with a menu, strip menu sentences
+        // and, for recall turns, degrade into a deterministic continuation of
+        // the recalled lines — never ship a menu-first reply.
+        if (isMenuFirstLine(reply)) {
+          const retry = await llmRespond(env, text, {
+            topic: topic ?? undefined,
+            context: enrichedContext,
+            contextIsEnriched: true,
+            systemOverride: buildRail() + MENU_FOLLOWUP_NUDGE,
+            deep: perception.intent.type === "code",
+          }).catch(() => null);
+          if (retry?.reply && !isMenuFirstLine(retry.reply)) {
+            reply = retry.reply;
+          } else {
+            reply = stripLeadingMenuSentences(retry?.reply ?? reply) ||
+              deterministicRecallContinuation(recallBlock);
+          }
+        }
+        return { reply, source: result.source ?? "llm" };
       }
       return { reply: "Maaf, saya sedang mengalami kendala teknis. Silakan coba lagi.", source: "fallback" };
     }
