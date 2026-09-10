@@ -621,9 +621,21 @@ export function isMenuFirstLine(content: string): boolean {
     /\b(?:mau|ingin|apakah kamu|apakah anda|boleh)\b[^!?？]{0,60}\b(?:saya|aku|kita)\b/i.test(first) &&
     /(?:lanjutkan|melanjutkan|bahas|membahas|bicarakan|jelaskan|menjelaskan|berikan|contoh|opsi|pilihan|gali|yang mana|atau)/i.test(first) &&
     /[?？]/.test(first);
+  // m9-v11.26: menu question WITHOUT a first-person pronoun slips past the
+  // pattern above ("Mau lanjut ke topik mana ... — misalnya X, Y, atau Z?" —
+  // owner live failure after the recall fix). Catch any leading QUESTION that
+  // explicitly enumerates choices (misalnya ... atau / mana yang / pilih).
+  const menuOffer =
+    /[?？]/.test(first) &&
+    (/\b(?:misalnya|misal|contohnya)\b/i.test(first) ||
+     /\b(?:mana yang|yang mana)\b[^?？]{0,30}/i.test(first) ||
+     /\bpilih salah satu\b/i.test(first));
+  const bareMau =
+    /^(?:mau|apakah kamu mau|apakah anda mau|boleh mau)\b[^!?？]{0,80}?[?？]/i.test(first) &&
+    /(?:lanjutkan|melanjutkan|bahas|bicarakan|tentang|ke|soal)/i.test(first);
   const announceLead =
     /^(?:saya akan|aku akan|saya siap|aku siap|saya jelaskan|aku jelaskan|saya bahas|aku bahas|saya uraikan|aku uraikan|berikut yang akan saya|berikut yang akan aku|berikut ini yang akan saya|berikut ini yang akan aku|rencana saya|kamu ingin mengetahui|anda ingin mengetahui|selanjutnya saya akan)/i.test(first);
-  return looksMenu || announceLead;
+  return looksMenu || menuOffer || bareMau || announceLead;
 }
 
 /** Strip a LEADING run of menu-question / empty-announcement sentences. The
