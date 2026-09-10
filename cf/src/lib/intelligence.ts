@@ -703,6 +703,10 @@ systemOverride: (() => {
             `Beri ISI jawaban SEKARANG; JANGAN membuka dengan pertanyaan pilihan atau ` +
             `menawarkan menu (pola seperti "Mau saya lanjutkan dengan X, Y, atau Z?", ` +
             `"Mau bahas yang mana?", "Mau aku gali lebih dalam yang mana?"). ` +
+            `JANGAN membuka dengan kalimat PENGUMUMAN rencana yang kosong isi, seperti ` +
+            `"Saya akan jelaskan...", "Berikut yang akan saya bahas...", "Selanjutnya ` +
+            `saya akan...", "Saya akan uraikan...", atau "Kamu ingin mengetahui..." — ` +
+            `langsung JAWAB isinya tanpa bingkai perkenalan. ` +
             `Aturan ini berlaku untuk SEMUA topik percakapan. ` +
             `JANGAN mengarang atau menjelaskan dengan percaya diri tentang platform, produk, merek, ` +
             `atau istilah yang tidak kamu kenal dan tidak muncul di konteks percakapan — kalau ` +
@@ -718,6 +722,8 @@ systemOverride: (() => {
               `\n\nPemilik menunjuk KEMBALI ke topik lama yang dijelaskan pada blok ` +
               `"[Riwayat percakapan sebelumnya]" / "[Catatan riwayat]" di konteks. ` +
               `Jawab HANYA berdasarkan blok riwayat itu: LANGSUNG lanjutkan topik lamanya. ` +
+              `Jangan bertanya balik seperti "Mau aku melanjutkan dengan X atau Y?" — ` +
+              `jawablah lanjutannya LANGSUNG tanpa menu. ` +
               `Bila bloknya menyatakan riwayat tidak ditemukan, jawab jujur ` +
               `singkat dan minta pemilik mengingatkan konteksnya. ` +
               `ABAIKAN topik percakapan terakhir — JANGAN menggabungkan topik lama dengan ` +
