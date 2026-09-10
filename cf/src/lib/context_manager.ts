@@ -348,10 +348,10 @@ export function isMenuOfferQuestion(content: string): boolean {
     /\b(?:mau|ingin|apakah kamu|apakah anda|boleh)\b[^.!?\n]{0,60}\b(?:saya|aku|kita)\b/i.test(
       content,
     ) &&
-    /(?:lanjutkan|melanjutkan|bahas|membahas|bicarakan|jelaskan|menjelaskan|berikan|contoh|opsi|pilihan|atau)/i.test(
+    /(?:lanjutkan|melanjutkan|bahas|membahas|bicarakan|jelaskan|menjelaskan|berikan|contoh|opsi|pilihan|gali|yang mana|atau)/i.test(
       content,
     );
-  return offers && /[?？]/.test(content);
+  return offers && /[?？]/.test(content) && content.length < 260;
 }
 
 /** m9-v11.10: LET THE MODEL UNDERSTAND the recalled topic — the owner's
