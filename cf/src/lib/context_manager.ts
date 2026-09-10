@@ -605,7 +605,10 @@ export async function buildEnrichedContext(
         recalledLines.join(" | ").slice(0, Math.min(1400, charBudget)) +
         `. Pemilik menunjuk KEMBALI ke topik ini DARI TOPIK LAIN. ` +
         `Percakapan terakhir (topik berbeda) tidak disertakan — jawab HANYA berdasarkan ` +
-        `riwayat ini. JANGAN menggabungkan topik lama dengan topik percakapan terakhir, ` +
+        `riwayat ini. Lanjutkan topik itu LANGSUNG dengan tanggapan yang mengalir seperti ` +
+        `orang ngobrol — JANGAN membuka dengan pertanyaan pilihan/menawarkan menu, ` +
+        `JANGAN pakai tabel, daftar bernomor, atau judul bagian. ` +
+        `JANGAN menggabungkan topik lama dengan topik percakapan terakhir, ` +
         `JANGAN kutip verbatim, dan JANGAN tampilkan riwayat sebagai bagian jawaban.`;
       if (recallText.length < charBudget) {
         context.push({ role: "system", content: recallText });
