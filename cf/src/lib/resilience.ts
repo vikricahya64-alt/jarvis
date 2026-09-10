@@ -27,6 +27,7 @@ const TIMEOUT_MS = {
   openrouter: 8000,
   gemini: 8000,
   workers_ai: 20000,
+  nvidia_nim: 8000,
   web: 10000,
 } as const;
 
@@ -49,7 +50,7 @@ const RETRY = {
 
 /** True for providers that only ever get a single attempt (slow/hanging paths). */
 function isSingleAttemptProvider(provider: string): boolean {
-  return provider === "gemini" || provider === "openrouter" || provider === "web";
+  return provider === "gemini" || provider === "openrouter" || provider === "web" || provider === "nvidia_nim";
 }
 
 /** Classify an HTTP status into retryable (true) vs hard-fail (false). */

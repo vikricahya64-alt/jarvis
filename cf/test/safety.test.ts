@@ -1465,6 +1465,7 @@ async function testFreeServiceLayers() {
   const ps = await probeProviders(FAKE_ENV as never);
   assert.ok(ps.some((p) => p.name === "groq"), "probe lists groq");
   assert.ok(ps.some((p) => p.name === "openrouter"), "probe lists openrouter");
+  assert.ok(ps.some((p) => p.name === "nvidia_nim"), "probe lists nvidia_nim");
   assert.ok(ps.some((p) => p.name === "gemini"), "probe lists gemini");
   assert.ok(ps.some((p) => p.name === "workers_ai"), "probe lists workers_ai");
   assert.ok(ps.some((p) => p.name === "memory_vec"), "probe lists memory_vec binding");
