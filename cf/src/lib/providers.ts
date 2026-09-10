@@ -51,32 +51,38 @@ export async function probeProviders(env: Env): Promise<ProviderProbe[]> {
   const hit = cache.get("probe");
   if (hit && Date.now() - hit.at < TTL_MS) return hit.value;
 
+  // Mirror the ACTUAL egress path: when the AI Gateway is configured every
+  // free provider is routed through it, so the probe must ping the very same
+  // gateway URLs (a direct ping can 403 for reasons that the gateway hides).
+  const gw = env.AI_GATEWAY_URL ? `${env.AI_GATEWAY_URL}` : "";
   const probes: Array<{ name: string; configured: boolean; url?: string; headers?: Record<string, string>; note: string }> = [
     {
       name: "groq",
       configured: !!env.GROQ_API_KEY,
-      url: "https://api.groq.com/openai/v1/models",
+      url: gw ? `${gw}/groq/v1/models` : "https://api.groq.com/openai/v1/models",
       headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` },
       note: "list-models",
     },
     {
       name: "openrouter",
       configured: !!env.OPENROUTER_API_KEY,
-      url: "https://openrouter.ai/api/v1/models",
+      url: gw ? `${gw}/openrouter/v1/models` : "https://openrouter.ai/api/v1/models",
       headers: { Authorization: `Bearer ${env.OPENROUTER_API_KEY}` },
       note: "list-models",
     },
     {
       name: "gemini",
       configured: !!env.GEMINI_API_KEY,
-      url: `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(env.GEMINI_API_KEY ?? "")}`,
+      url: gw
+        ? `${gw}/google-ai-studio/v1beta/models?key=${encodeURIComponent(env.GEMINI_API_KEY ?? "")}`
+        : `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(env.GEMINI_API_KEY ?? "")}`,
       note: "list-models",
     },
   ];
   const runs = await Promise.allSettled(probes.map(async (p) => {
     if (!p.configured || !p.url) return { name: p.name, configured: false, live: false, ms: null, detail: "key tidak terpasang" };
     const status = await ping(p.url, p.headers);
-    const live = status !== null && status >= 200 && status < 500;
+    const live = status !== null && status >= 200 && status < 300;
     return {
       name: p.name,
       configured: true,
