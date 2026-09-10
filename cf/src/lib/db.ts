@@ -544,6 +544,44 @@ export async function appendMemory(env: Env, owner: number, role: "user" | "assi
   } catch { /* availability */ }
 }
 
+/** m9-v11.8: search OLDER conversation turns (ts < beforeTs) whose content
+ *  shares significant terms with the current message — the human "I remember
+ *  we talked about X earlier" recall that lets one chat roam across topics.
+ *  Owner-bounded (~100 rows) so a per-term LIKE scan is cheap. Internal-state
+ *  dumps are excluded; results ranked by distinct term hits. */
+export async function searchConversationLog(
+  env: Env,
+  owner: number,
+  terms: string[],
+  n = 6,
+  beforeTs = Infinity,
+): Promise<Array<{ role: string; content: string; ts: number }>> {
+  try {
+    const clean = terms.filter((t) => /^[a-z0-9]{3,}$/i.test(t)).map((t) => t.toLowerCase());
+    if (clean.length === 0) return [];
+    const placeholders = clean.map(() => `content LIKE ?`).join(" OR ");
+    const params: Array<string | number> = [owner, beforeTs, ...clean.map((t) => `%${t}%`)];
+    const { results } = await env.DB.prepare(
+      `SELECT role, content, ts FROM conversation_log
+       WHERE owner_id = ? AND ts < ?
+         AND (${placeholders})
+       ORDER BY ts DESC LIMIT ?`,
+    ).bind(...params, Math.min(120, n * 8)).all<{ role: string; content: string; ts: number }>();
+    const scored = (results ?? [])
+      .filter((r) => r.role !== "assistant" || !isInternalEchoDump(r.content))
+      .map((r) => {
+        const rc = (r.content || "").toLowerCase();
+        const hits = clean.filter((t) => rc.includes(t)).length;
+        return { role: r.role, content: r.content, ts: r.ts, hits };
+      })
+      .sort((a, b) => (b.hits - a.hits) || (b.ts - a.ts))
+      .slice(0, n);
+    return scored.map(({ role, content, ts }) => ({ role, content, ts }));
+  } catch {
+    return [];
+  }
+}
+
 /** Retrieve the last N turns of conversation context for the LLM. */
 export async function recentContext(env: Env, owner: number, n = 6): Promise<Array<{ role: string; content: string; ts?: number }>> {
   try {

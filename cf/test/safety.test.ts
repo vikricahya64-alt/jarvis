@@ -19,7 +19,7 @@ import {
 import { validateAction, conflictScore } from "../src/lib/constitutional_guard";
 import { unknownEntitySignal } from "../src/lib/ai";
 import { isDesignIntent } from "../src/lib/subagents";
-import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary } from "../src/lib/context_manager";
+import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, detectTopicRecall } from "../src/lib/context_manager";
 import { isInternalEchoDump } from "../src/lib/db";
 
 const FAKE_ENV = {
@@ -1259,6 +1259,34 @@ async function testInternalDumpSanitization() {
   assert.ok(!/\|/.test(related), "related summary still sanitizes pipe-facts");
 }
 
+async function testTopicRecall() {
+  // m9-v11.8: the human "I remember we talked about X earlier" dispatch must
+  // fire on returns to earlier topics...
+  const yes = [
+    "lanjutkan desain pasir pantai yang tadi",
+    "balik ke soal gambar uang tadi",
+    "tadi kita bahas kelebihan bekerja remote",
+    "kembali ke topik anak-anak bermain pasir",
+    "lanjut dimanakah desain video karton tadi",
+  ];
+  for (const t of yes) {
+    assert.strictEqual(detectTopicRecall(t), true, `must detect recall: "${t}"`);
+  }
+  // ...and must NOT trip on fresh questions or bare continuations.
+  const no = [
+    "harga saham bca berapa",
+    "terus",
+    "oke",
+    "itu",
+    "yang tadi",
+    "ya",
+    "apa itu ai all in one",
+  ];
+  for (const t of no) {
+    assert.strictEqual(detectTopicRecall(t), false, `must NOT detect recall: "${t}"`);
+  }
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -1288,6 +1316,7 @@ async function main() {
   await testGlobalComprehension();
   await testWorkingMemoryLeaks();
   await testInternalDumpSanitization();
+  await testTopicRecall();
   console.log("SAFETY TESTS PASSED");
 }
 

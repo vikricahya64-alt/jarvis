@@ -94,8 +94,9 @@ const TOPIC_STOP = new Set([
 ]);
 
 /** Significant (non-stopword) lowercase tokens from a phrase — video-length
- *  words only, so overlap is cheap and deterministic (no LLM). */
-function topicTokens(s: string): string[] {
+ *  words only, so overlap is cheap and deterministic (no LLM). Exported for
+ *  the topic-recall history search (context_manager). */
+export function topicTokens(s: string): string[] {
   return (s.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []).filter((t) => !TOPIC_STOP.has(t));
 }
 
