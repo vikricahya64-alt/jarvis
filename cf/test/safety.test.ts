@@ -19,7 +19,7 @@ import {
 import { validateAction, conflictScore } from "../src/lib/constitutional_guard";
 import { unknownEntitySignal } from "../src/lib/ai";
 import { isDesignIntent } from "../src/lib/subagents";
-import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, detectTopicRecall, topicRecallSubjects, extractRecallSubject } from "../src/lib/context_manager";
+import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, detectTopicRecall, topicRecallSubjects, extractRecallSubject, isMenuOfferQuestion } from "../src/lib/context_manager";
 import { isInternalEchoDump, isAdminChaff } from "../src/lib/db";
 
 const FAKE_ENV = {
@@ -1306,6 +1306,26 @@ async function testRecallSubjects() {
   assert.ok(Array.isArray(s2), "extractRecallSubject returns an array even on fallback");
   assert.ok(s2.includes("bekerja"), `fallback keeps "bekerja" (got [${s2.join(", ")}])`);
   assert.ok(s2.includes("remote"), `fallback keeps "remote" (got [${s2.join(", ")}])`);
+
+  // m9-v11.11: assistant menu-offer questions ("Mau saya lanjutkan dengan X, Y,
+  // atau Z?") are NOT recalled content — feeding them back only teaches the
+  // model to anchor its topic-return answer on asking the menu again.
+  assert.ok(
+    isMenuOfferQuestion("Mau saya lanjutkan dengan detail tentang tantangan, strategi sukses, atau contoh praktis kerja remote yang spesifik?"),
+    "menu-offer question must be detected",
+  );
+  assert.ok(
+    isMenuOfferQuestion("Apakah kamu ingin saya membahas tantangan khusus, tips praktis, atau alat-alat yang bisa kamu pakai?"),
+    "menu-offer question (apakah kamu ingin) must be detected",
+  );
+  assert.ok(
+    !isMenuOfferQuestion("bekerja remote memang berat di konsisten waktu, tapi bisa dikelola dengan zona fokus dan istirahat teratur."),
+    "a substantive continuation must NOT be flagged as menu-offer",
+  );
+  assert.ok(
+    !isMenuOfferQuestion("Ya"),
+    "a bare owner yes must not be flagged as menu-offer",
+  );
 }
 
 async function testAdminChaff() {

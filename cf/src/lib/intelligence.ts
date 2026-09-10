@@ -700,7 +700,9 @@ export async function act(
               `"[Riwayat percakapan sebelumnya]" / "[Catatan riwayat]" di konteks. ` +
               `Jawab HANYA berdasarkan blok riwayat itu: LANGSUNG lanjutkan topik lamanya ` +
               `dengan tanggapan yang mengalir seperti orang ngobrol dalam paragraf — ` +
-              `JANGAN membuka dengan pertanyaan pilihan/menawarkan menu ("mau bahas apa?"), ` +
+              `JANGAN membuka dengan pertanyaan pilihan/menawarkan menu — termasuk TIDAK ` +
+              `boleh pola "Mau saya lanjutkan dengan X, Y, atau Z?" atau "Apakah kamu ingin ` +
+              `saya bahas...?" — jawablah isinya SEKARANG tanpa meminta pemilik memilih. ` +
               `JANGAN pakai tabel, daftar bernomor, daftar berpoin panjang, atau judul seksi. ` +
               `Bila bloknya menyatakan riwayat tidak ditemukan, jawab jujur ` +
               `singkat dan minta pemilik mengingatkan konteksnya. ` +
