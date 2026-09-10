@@ -29,7 +29,7 @@ import { Env } from "./db";
 import { detectEmotion, getMoodState, moodSummary, inferEmotionFromContext, type MoodState } from "./emotion";
 import {
   buildEnrichedContext, detectConversationMode, extractTopicLabel,
-  getSession, buildContextSummary,
+  getSession, buildContextSummary, wmTopicRelevant,
 } from "./context_manager";
 import { detectLanguage, type Language } from "./jarvis_language";
 import { JARVIS_IDENTITY } from "./identity";
@@ -585,9 +585,12 @@ export async function buildConversationMessages(
 
   // Working memory hint
   let workingMemoryHint = "";
-  const wm = session.workingMemory;
-  if (wm.currentTask && wm.stepsCompleted.length > 0) {
-    workingMemoryHint = `[Memori kerja aktif: ${wm.stepsCompleted.length} langkah selesai untuk "${wm.currentTask.slice(0, 50)}"]`;
+  // m9-v11.6: only surface the hint when the tracked task is THIS thread's
+  // topic — an unguarded hint nagged the model toward an unrelated "task
+  // status" echo ("Audit Status") on every quick follow-up.
+  if (wmTopicRelevant(session, topic, userText)) {
+    const wm = session.workingMemory;
+    workingMemoryHint = `[Memori kerja aktif: ${wm.stepsCompleted.length} langkah selesai untuk "${wm.currentTask!.slice(0, 50)}"]`;
   }
 
   // Cultural context for international support

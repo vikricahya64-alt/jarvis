@@ -19,6 +19,7 @@ import {
 import { validateAction, conflictScore } from "../src/lib/constitutional_guard";
 import { unknownEntitySignal } from "../src/lib/ai";
 import { isDesignIntent } from "../src/lib/subagents";
+import { updateWorkingMemory, wmTopicRelevant, getSession } from "../src/lib/context_manager";
 
 const FAKE_ENV = {
   CLARITY_GATE: "0.95",
@@ -1141,6 +1142,79 @@ async function testGlobalComprehension() {
     "detectGarbledInput must instruct against echoing internal memory blocks");
 }
 
+async function testWorkingMemoryLeaks() {
+  // m9-v11.6 regression: the "Audit Status" hallucination. A long negation
+  // redirect ("Bukan membuat AI all in one buatan sendiri") must ARCHIVE a
+  // stale unrelated task instead of keeping it alive in WM.
+  const owner = 990001;
+  const s = getSession(owner);
+  s.workingMemory.currentTask = "Cari kelebihan dan kekurangan bekerja remote";
+  s.workingMemory.stepsCompleted = ["langkah-1", "langkah-2", "langkah-3", "langkah-4", "langkah-5"];
+  s.workingMemory.extractedFacts = ["Tugas lama", "h | Konsep AI yang dipakai | Layanan con"];
+  s.workingMemory.lastUpdated = Date.now();
+
+  updateWorkingMemory(s, "Bukan membuat AI all in one buatan sendiri", "Baik, mari kita bahas itu.");
+
+  assert.notStrictEqual(
+    (s.workingMemory.currentTask ?? "").toLowerCase(),
+    "cari kelebihan dan kekurangan bekerja remote",
+    "stale unrelated task must be archived on a long negation redirect",
+  );
+  assert.ok(
+    (s.workingMemory.currentTask ?? "").toLowerCase().includes("buat"),
+    `negation redirect becomes the new task (got: "${s.workingMemory.currentTask}")`,
+  );
+  assert.strictEqual(s.workingMemory.stepsCompleted.length, 0, "archived task resets steps");
+  assert.ok(
+    !s.workingMemory.extractedFacts.some((f) => f.includes("|")),
+    "pipe-garbage facts must not survive archival",
+  );
+  assert.ok(
+    s.workingMemory.extractedFacts.some((f) => f.startsWith("Tugas sebelumnya:")),
+    "archival audit line kept for the stale task",
+  );
+
+  // Short continuation keeps the task.
+  const s2 = getSession(owner + 1);
+  s2.workingMemory.currentTask = "Analisis UI apps muat cepat";
+  s2.workingMemory.stepsCompleted = ["langkah-1"];
+  s2.workingMemory.lastUpdated = Date.now();
+  updateWorkingMemory(s2, "itu", "Saya lanjutkan.");
+  assert.ok((s2.workingMemory.currentTask ?? "").includes("Analisis UI"), "short continuation keeps the task");
+
+  // wmTopicRelevant gate: unrelated topic + long redirect message → WM must NOT
+  // be injected (the echo can't happen if the block never reaches the LLM).
+  const s3 = getSession(owner + 2);
+  s3.workingMemory.currentTask = "Cari kelebihan dan kekurangan bekerja remote";
+  s3.workingMemory.stepsCompleted = ["langkah-1"];
+  s3.workingMemory.lastUpdated = Date.now();
+  assert.strictEqual(
+    wmTopicRelevant(s3, "4 konsep AI dalam 1 software", "Bukan membuat AI all in one buatan sendiri"),
+    false,
+    "unrelated WM task must not be injected into a long redirect",
+  );
+
+  // wmTopicRelevant: topically-overlapping topic → still injects.
+  assert.strictEqual(
+    wmTopicRelevant(s3, "kelebihan dan kekurangan bekerja remote", "ok"),
+    true,
+    "topically-overlapping task stays injected",
+  );
+
+  // wmTopicRelevant: short continuation within 30s → carries the WM (multi-step
+  // coercion) but does NOT carry a long unrelated message.
+  const s4 = getSession(owner + 3);
+  s4.workingMemory.currentTask = "Analisis UI apps muat cepat";
+  s4.workingMemory.stepsCompleted = ["langkah-1"];
+  s4.workingMemory.lastUpdated = Date.now();
+  assert.strictEqual(wmTopicRelevant(s4, "UI bagus", "itu"), true, "short continuation carries the WM");
+  assert.strictEqual(
+    wmTopicRelevant(s4, "UI bagus", "Bukan membuat AI all in one buatan sendiri"),
+    false,
+    "long message never rides the 30s window",
+  );
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -1168,6 +1242,7 @@ async function main() {
   await testComprehensionGate();
   await testHeavyCapabilityVerify();
   await testGlobalComprehension();
+  await testWorkingMemoryLeaks();
   console.log("SAFETY TESTS PASSED");
 }
 
