@@ -640,19 +640,5 @@ export async function buildConversationMessages(
   return messages;
 }
 
-/** Detect the language of a text (uses jarvis_language for enhanced detection).
- *  Returns Language object with code, name, confidence, and cultural context. */
-export function detectLanguageFromText(text: string): Language {
-  return detectLanguage(text);
-}
-
-/** Legacy detectLanguage for backward compatibility (returns "id" | "en" | "other"). */
-export function detectLanguageLegacy(text: string): "id" | "en" | "other" {
-  const lang = detectLanguage(text);
-  if (lang.code === "id" || lang.code === "ms") return "id";
-  if (lang.code === "en") return "en";
-  return "other";
-}
-
 /** Re-export detectLanguage from jarvis_language for backward compatibility. */
 export { detectLanguage } from "./jarvis_language";
