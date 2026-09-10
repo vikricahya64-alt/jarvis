@@ -54,7 +54,6 @@ import {
 import { readFailureTally } from "./failure";
 import { describeGapProposals } from "./gap_upgrade";
 import { reflectOnTurn } from "./evolution";
-import { ensureReciprocalQuestion } from "./response_formatter";
 import { SELF_REF_RE } from "./identity";
 
 // ============================================================================
@@ -943,29 +942,21 @@ export async function processIntelligence(
     ? reply
     : reply.replace(/https?:\/\/[^\s)]+/g, "").replace(/\[([^\]]*)\]\(\s*https?:\/\/[^\s)]+\)/g, "$1").trim();
 
-  // m9-v10 RECIPROCAL QUESTION (basis of human communication): after an
-  // answer a person asks back — verifying the answer matched what the owner
-  // meant. ensureReciprocalQuestion appends ONE natural follow-up question,
-  // unless the owner is ALREADY steering the thread (follow-up/continuation —
-  // double-asking would nag), the turn is a system/closed-loop result
-  // (canned/fallback/self-ref/translate/relevance-gate), or there is no topic
-  // to probe around. Anchors, memory, and metrics all keep the PLAIN answer.
+  // m9-v10 RECIPROCAL QUESTION — REMOVED in m9-v11.14: the deterministic
+  // appender appended a canned menu question ("Mau aku gali lebih dalam bagian
+  // yang mana?") to every topic-bearing answer, contradicting the owner's
+  // persona rail which forbids opening/closing with menu questions. Replies
+  // keep the model's own natural closing; no canned follow-up is force-added.
+  // Anchors, memory, and metrics all keep the PLAIN answer.
   const heavyCap = perception.intent.entities?.heavyVerify;
-  const probeSkip =
-    perception.isFollowUp || perception.isContinuation ||
-    /^(canned|fallback|self_ref|understand_clarify|relevance_gate|translate|translate_bare)$/i.test(source) ||
-    /^(command|emergency|translation|self_referential)$/i.test(perception.intent.type) ||
-    !!heavyCap ||
-    !perception.topic;
-  const deliverable =
-    heavyCap
-      ? // m9-v11.1 RESPOND-THEN-VERIFY: the capability was ambiguous in the text
-        // ("cara buat poster?" / "bagaimana cara riset X?") — we ANSWERED it via
-        // the cheap question path above, and now ask whether the HEAVY act should
-        // actually run. Never verify when the text was clear (that path keeps a
-        // plain answer, no nagging).
-        heavyVerifySuffix(heavyCap, safeReply)
-      : ensureReciprocalQuestion(safeReply, { skip: probeSkip });
+  const deliverable = heavyCap
+    ? // m9-v11.1 RESPOND-THEN-VERIFY: the capability was ambiguous in the text
+      // ("cara buat poster?" / "bagaimana cara riset X?") — we ANSWERED it via
+      // the cheap question path above, and now ask whether the HEAVY act should
+      // actually run. Never verify when the text was clear (that path keeps a
+      // plain answer, no nagging).
+      heavyVerifySuffix(heavyCap, safeReply)
+    : safeReply;
 
   return {
     text: deliverable,
