@@ -21,9 +21,9 @@
 // - CORAL (2026): self-evolving multi-agent shared persistent memory
 //=====================================================================
 
-import { Env, recentContext, searchMemory } from "./db";
+import { Env, recentContext, searchMemory, searchConversationLog } from "./db";
 import { getMoodState, setMoodState, moodSummary, type MoodState } from "./emotion";
-import { topicOverlaps } from "./ai";
+import { topicOverlaps, topicTokens } from "./ai";
 
 /** A single conversation turn. */
 export interface Turn {
@@ -319,6 +319,25 @@ export function detectTopicContinuity(
   return { isContinuation: false, topic: null, confidence: 0.3 };
 }
 
+/** m9-v11.8: true when the message signals RETURNING to an EARLIER topic —
+ *  the human "I remember we talked about X earlier" dispatch that lets a chat
+ *  roam across topics ("lanjutkan desain pasir pantai yang tadi", "balik ke
+ *  soal gambar uang", "tadi kita bahas bekerja remote"). Marker-driven
+ *  (deterministic, zero budget) AND requires a real subject (>=2 significant
+ *  tokens beyond the marker/stopwords), so a bare "tadi"/"terus" continuation
+ *  never trips it. Marker words are excluded from the subject count. */
+export function detectTopicRecall(text: string): boolean {
+  if (!text || typeof text !== "string") return false;
+  const low = text.toLowerCase().trim();
+  const recallMarkers =
+    /\b(?:tadi|barusan|kemarin|kemaren|sebelumnya|terakhir|waktu\s+itu|tadi\s+(?:kita|saya|aku|kami)?\s*(?:bahas|bicarakan|omong\w*|soal|tentang)|soal\s+\w+\s+tadi|yang\s+tadi|yg\s+tadi|tadi\s+itu|tadi\s+(?:aja|saja)|balik\s+(?:ke|lagi)|kembali\s+ke|lanjut(?:kan|in)?\s+(?:soal|tentang|ke|di|dimana|mana)|masalah\s+tadi|topik\s+tadi)\b/i;
+  if (!recallMarkers.test(low)) return false;
+  const subject = topicTokens(text).filter(
+    (t) => !/^(?:tadi|barusan|kemarin|kemaren|sebelumnya|terakhir|itu|lalu|balik|kembali|lanjut|lanjutkan|lanjutin|soal|tentang|masalah|topik|waktu)$/.test(t),
+  );
+  return subject.length >= 2;
+}
+
 /** Update working memory based on conversation context.
  *  m9-v11.3 SANITIZATION: (a) don't store raw markdown-sliced assistant
  *  replies as steps (was leaking table rows like "h | Konsep AI | Layanan
@@ -493,6 +512,37 @@ export async function buildEnrichedContext(
       }
     }
   } catch { /* fail-open */ }
+
+  // 2b) TOPIC-RECALL (m9-v11.8): signals pointing back at an EARLIER thread
+  // ("yang tadi", "balik ke soal X", "tadi kita bahas Y") pull that older
+  // history into context — the reference humans use to re-enter a topic mid-
+  // chat. Excludes turns already served as recent context; reference-only.
+  if (detectTopicRecall(userText)) {
+    const cutoff = recent.reduce<number>((m, r) => {
+      const ts = (r as { ts?: number }).ts;
+      return typeof ts === "number" && ts < m ? ts : m;
+    }, Infinity);
+    const recalled = await searchConversationLog(
+      env, owner, topicTokens(userText), 6,
+      Number.isFinite(cutoff) ? cutoff : Infinity,
+    ).catch(() => [] as Array<{ role: string; content: string; ts: number }>);
+    if (recalled.length > 0) {
+      const lines = recalled.map((r) => {
+        const who = r.role === "user" ? "pemilik" : "kamu";
+        return `${who}: ${(r.content || "").slice(0, 220)}`;
+      });
+      const recallText =
+        `[Riwayat percakapan sebelumnya — KONTEKS INTERNAL saja, bukan bahan kutipan]: ` +
+        lines.join(" | ").slice(0, Math.min(1200, charBudget)) +
+        `. Pemilik sedang menunjuk kembali ke topik yang pernah dibahas ini. ` +
+        `Pakai sebagai referensi untuk melanjutkan; JANGAN kutip verbatim dan ` +
+        `JANGAN tampilkan riwayat sebagai bagian jawaban.`;
+      if (recallText.length < charBudget) {
+        context.push({ role: "system", content: recallText });
+        charBudget -= recallText.length;
+      }
+    }
+  }
 
   // 3) Working memory (only if active AND topically relevant to THIS conversation)
   // m9-v11.6: the bare ≤30s window used alone could inject a STALE unrelated
