@@ -616,8 +616,11 @@ export function stripLeadingMenuSentences(content: string): string {
 }
 
 /** Deterministic continuation for a recall turn that STILL opens with a menu
- *  even after the regenerate-nudge: re-narrate the recalled lines as a short
- *  honest paragraph instead of a question. Content-first, no menu, no invite. */
+ *  even after the regenerate-nudge: re-narrate the recalled SUBJECT as a short
+ *  natural paragraph instead of a question — NEVER a dump of raw data
+ *  (timestamps / "User menanyakan tentang:" / pipe separators). Content-first,
+ *  no menu, no invite (m9-v11.20: owner's "one door" principle — data is
+ *  translated to speech the way a human remembers, never displayed raw). */
 export function deterministicRecallContinuation(recallBlock?: { content?: string }): string {
   const raw = (recallBlock?.content ?? "").replace(/^\[[^\]]+\]\s*\([^)]*\)\s*:/, "");
   const pick = (re: RegExp): string[] =>
@@ -628,6 +631,8 @@ export function deterministicRecallContinuation(recallBlock?: { content?: string
       .map((l) =>
         l
           .replace(/^(pemilik|kenangan|kamu):\s*/i, "")
+          .replace(/\d{4}-\d{2}-\d{2}\s*/g, "")
+          .replace(/user\s+menanyakan\s+tentang:\s*/gi, "")
           .replace(/\.\s*Pemilik menunjuk[\s\S]*$/i, ""),
       )
       .filter((l) => l.length > 0);
@@ -640,8 +645,21 @@ export function deterministicRecallContinuation(recallBlock?: { content?: string
   if (merged.length === 0) {
     return "Aku belum berhasil menemukan catatan percakapan itu — tolong ingatkan aku sedikit konteksnya.";
   }
-  return "Sebelumnya kita sempat membahas ini — ringkas dari catatanku: " +
-    merged.slice(0, 4).join("; ") + ".";
+  // Translate remaining data-level artifacts ("owner membicarakan X") into a
+  // human memory ("kita sempat membahas X") — one door in, one door out.
+  const humanize = (s: string): string =>
+    s
+      .replace(/^owner\s+(membicarakan|membahas|sempat membicarakan|sempat membahas)\s+/i, "kita sempat membahas ")
+      .replace(/^owner\s+/i, "kita ")
+      .replace(/kelebihan dan kekurangan|pro dan kontra|plus minus/gi, "").trim();
+  const clean = merged.map((s) => humanize(s).replace(/\s{2,}/g, " ").trim()).filter(Boolean);
+  if (clean.length === 0) {
+    return "Aku belum berhasil menemukan catatan percakapan itu — tolong ingatkan aku sedikit konteksnya.";
+  }
+  // Natural human-like recall: name the subject once — no timestamps, labels,
+  // or tables — and stop.
+  const subject = clean[0];
+  return `Soal itu — dari pembicaraan kita dulu, intinya ${subject[0].toLowerCase() + subject.slice(1)}${clean.length > 1 ? `, antara lain ${clean.slice(1, 3).map((b) => b[0].toLowerCase() + b.slice(1)).join(" dan ")}` : ""}. Aku ingat konteks ini dan siap lanjut dari situ.`;
 }
 
 // ============================================================================
@@ -711,7 +729,13 @@ export function buildUniversalFrame(opts: {
     `bisa dijelaskan sedikit?" — JANGAN menebak-nebak platform yang mungkin tidak nyata. ` +
     `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
     `([Memori kerja], [Kenangan relevan], [Riwayat percakapan sebelumnya], [Ringkasan]) ` +
-    `dalam jawaban — itu konteks internal, bukan bahan jawaban.`;
+    `dalam jawaban — itu konteks internal, bukan bahan jawaban. ` +
+    `JANGAN PERNAH menampilkan data mentah dari konteks: timestamp (mis. "2026-09-07"), ` +
+    `label seperti "User menanyakan tentang:", separator "|", atau format data ` +
+    `terstruktur — konteks adalah REFERENSI internal untuk dipahami, bukan untuk ` +
+    `disebut apa adanya. Ingat SUBSTANSINYA dan tulis ulang dengan kata-katamu ` +
+    `seperti orang yang benar-benar ingat percakapan — satu pintu masuk, satu ` +
+    `pintu keluar: jawaban yang keluar terlihat persis seperti manusia bicara.`;
   // m9-v11.16 ANSWER-vs-VERIFY separation evolved (m9-v11.19): the external
   // suffix is retired — the verification question now lives at the END of the
   // recommendation paragraph, written by the model under this note. Answer and
@@ -731,7 +755,10 @@ export function buildUniversalFrame(opts: {
       `Jawab HANYA berdasarkan blok riwayat itu: LANGSUNG lanjutkan topik lamanya. ` +
       `Jangan bertanya balik seperti "Mau aku melanjutkan dengan X atau Y?" — ` +
       `jawablah lanjutannya LANGSUNG tanpa menu. ` +
-      `Bila bloknya menyatakan riwayat tidak ditemukan, jawab jujur ` +
+      `JANGAN membaca blok riwayat MENTAH (timestamp, "User menanyakan tentang:", ` +
+      `separator "|"): simpulkan topiknya lalu lanjutkan seolah kamu memang ` +
+      `mengingatnya secara alami. Bila bloknya menyatakan riwayat tidak ditemukan, ` +
+      `jawab jujur ` +
       `singkat dan minta pemilik mengingatkan konteksnya. ` +
       `ABAIKAN topik percakapan terakhir — JANGAN menggabungkan topik lama dengan ` +
       `topik baru dari percakapan terakhir (mis. jangan mencampur "bekerja remote" ` +
