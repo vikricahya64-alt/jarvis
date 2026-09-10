@@ -698,8 +698,11 @@ export async function act(
           if (recallBlock) {
             return `Pemilik menunjuk KEMBALI ke topik lama yang dijelaskan pada blok ` +
               `"[Riwayat percakapan sebelumnya]" / "[Catatan riwayat]" di konteks. ` +
-              `Jawab HANYA berdasarkan blok riwayat itu: lanjutkan topik lamanya secara ` +
-              `langsung; bila bloknya menyatakan riwayat tidak ditemukan, jawab jujur ` +
+              `Jawab HANYA berdasarkan blok riwayat itu: LANGSUNG lanjutkan topik lamanya ` +
+              `dengan tanggapan yang mengalir seperti orang ngobrol dalam paragraf — ` +
+              `JANGAN membuka dengan pertanyaan pilihan/menawarkan menu ("mau bahas apa?"), ` +
+              `JANGAN pakai tabel, daftar bernomor, daftar berpoin panjang, atau judul seksi. ` +
+              `Bila bloknya menyatakan riwayat tidak ditemukan, jawab jujur ` +
               `singkat dan minta pemilik mengingatkan konteksnya. ` +
               `ABAIKAN topik percakapan terakhir — JANGAN menggabungkan topik lama dengan ` +
               `topik baru dari percakapan terakhir (mis. jangan mencampur "bekerja remote" ` +
@@ -726,6 +729,9 @@ export async function act(
               `Jawab sebagai LANJUTAN dari percakapan tentang topik itu. ` +
               `TETAP pada topik "${topic}" — JANGAN menyimpang ke topik lain, ` +
               `JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas. ` +
+              `Jawab mengalir seperti orang ngobrol dalam paragraf ringkas dan padat — ` +
+              `JANGAN menyusun hanya demi terlihat lengkap berupa tabel, daftar bernomor ` +
+              `panjang, atau judul seksi. ` +
               `Jika ada platform/produk/istilah yang tidak kamu kenal atau tidak muncul di percakapan, ` +
               `JANGAN menjelaskannya secara detail — katakan jujur tidak yakin dan kembali ke topik yang dibahas. ` +
               `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
