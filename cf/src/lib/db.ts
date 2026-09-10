@@ -510,11 +510,28 @@ export async function recordTaskCounters(env: Env, queue: string, owner: number)
   } catch { /* availability */ }
 }
 
+/** m9-v11.7: true when a persisted turn is an internal-state DUMP (the
+ *  hallucinated "Audit Status" echo: WM block replayed verbatim, or an
+ *  assistant reply that reproduced Tugas/Langkah/Catatan/Keyakinan lines).
+ *  Such turns must never be re-injected into context (recentContext) nor
+ *  persisted again (appendMemory) — otherwise the drift self-perpetuates even
+ *  after the WM injection gates are fixed. */
+export function isInternalEchoDump(content: string): boolean {
+  if (!content) return false;
+  return (
+    /\[(?:Memori kerja|Kenangan relevan|Ringkasan)\]/.test(content) ||
+    /^\s*(?:Audit Status|Langkah selesai\s*:|Catatan percakapan|Keyakinan pemahaman\s*:|Tugas aktif\s*:)\s*/im.test(content)
+  );
+}
+
 /** Append a turn to the conversation log (bounded). Returns true. When
  *  privacy_mode is on, the write is skipped (owner `/privacy on` switch). */
 export async function appendMemory(env: Env, owner: number, role: "user" | "assistant", content: string, searchUsed = ""): Promise<void> {
   try {
     if ((await (await getDmsConfig(env, owner)).privacy_mode)) return;
+    // Never re-persist an internal-state dump (m9-v11.7) — user turns are
+    // always kept, only assistant echo-turns are dropped at the source.
+    if (role === "assistant" && isInternalEchoDump(content)) return;
     await env.DB.prepare(
       `INSERT INTO conversation_log (owner_id, ts, role, content, search_used) VALUES (?, ?, ?, ?, ?)`,
     ).bind(owner, Date.now(), role, content.slice(0, 2000), searchUsed).run();
@@ -533,7 +550,11 @@ export async function recentContext(env: Env, owner: number, n = 6): Promise<Arr
     const { results } = await env.DB.prepare(
       `SELECT role, content, ts FROM conversation_log WHERE owner_id = ? ORDER BY ts DESC LIMIT ?`,
     ).bind(owner, n).all<{ role: string; content: string; ts: number }>();
-    return (results ?? []).reverse().map((r) => ({ role: r.role, content: r.content, ts: r.ts }));
+    // m9-v11.7: never hand an internal-state dump back to any consumer — the
+    // persisted echo would keep steering new turns into the same drift.
+    return (results ?? [])
+      .filter((r) => r.role !== "assistant" || !isInternalEchoDump(r.content))
+      .reverse().map((r) => ({ role: r.role, content: r.content, ts: r.ts }));
   } catch {
     return [];
   }

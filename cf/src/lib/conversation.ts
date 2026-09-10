@@ -566,7 +566,7 @@ export async function buildConversationMessages(
 
   // Get session and working memory
   const session = opts.session ?? getSession(owner);
-  const contextSummary = buildContextSummary(owner);
+  const contextSummary = buildContextSummary(owner, { topic, userText });
 
   // Get dynamic personality based on context, mood, and language
   const adaptedPersonality = adaptPersonality(DEFAULT_PERSONALITY, {

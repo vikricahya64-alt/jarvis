@@ -19,7 +19,8 @@ import {
 import { validateAction, conflictScore } from "../src/lib/constitutional_guard";
 import { unknownEntitySignal } from "../src/lib/ai";
 import { isDesignIntent } from "../src/lib/subagents";
-import { updateWorkingMemory, wmTopicRelevant, getSession } from "../src/lib/context_manager";
+import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary } from "../src/lib/context_manager";
+import { isInternalEchoDump } from "../src/lib/db";
 
 const FAKE_ENV = {
   CLARITY_GATE: "0.95",
@@ -1215,6 +1216,49 @@ async function testWorkingMemoryLeaks() {
   );
 }
 
+async function testInternalDumpSanitization() {
+  // The observed "Audit Status" echo must be recognized as an internal dump so
+  // it is never re-persisted nor re-injected into context.
+  const echo = [
+    "Audit Status \n- Tugas: Cari kelebihan dan kekurangan bekerja remote \n- Langkah selesai: 5 (semua langkah telah diproses) \n- Catatan percakapan: \"h | Konsep AI yang dipakai | Layanan con\" \n- Keyakinan pemahaman: 55% (masih ada ruang untuk klarifikasi)",
+    "[Memori kerja] Tugas: Cari kelebihan dan kekurangan bekerja remote\nLangkah selesai: 5\nKeyakinan: 55%",
+    "Langkah selesai: 3\nCatatan percakapan: n model ML",
+  ];
+  for (const c of echo) {
+    assert.strictEqual(isInternalEchoDump(c), true, `must detect internal dump: ${c.slice(0, 40)}…`);
+  }
+  // Legitimate conversational turns are never dropped.
+  const legit = [
+    "Kelebihan bekerja remote adalah fleksibilitas waktu.",
+    "Langkah selesai ya, silakan lanjut ke topik berikutnya.",
+  ];
+  for (const c of legit) {
+    assert.strictEqual(isInternalEchoDump(c), false, `must keep legit turn: ${c.slice(0, 40)}`);
+  }
+
+  // Hidden third vector: buildContextSummary must NOT emit "Tugas aktif" for an
+  // unrelated thread, and MUST sanitize pipe-facts when it does.
+  const owner = 990101;
+  const s = getSession(owner);
+  s.workingMemory.currentTask = "Cari kelebihan dan kekurangan bekerja remote";
+  s.workingMemory.stepsCompleted = ["langkah-1"];
+  s.workingMemory.extractedFacts = ["h | Konsep AI yang dipakai | Layanan con", "remote lebih fleksibel"];
+  s.workingMemory.lastUpdated = Date.now();
+  const unrelated = buildContextSummary(owner, {
+    topic: "4 konsep AI dalam 1 software",
+    userText: "Bukan membuat AI all in one buatan sendiri",
+  });
+  assert.ok(!/Tugas aktif/.test(unrelated), `unrelated summary must not leak WM (got: "${unrelated}")`);
+  assert.ok(!/Konsep AI/.test(unrelated), "pipe-garbage facts must not reach the system prompt");
+
+  const related = buildContextSummary(owner, {
+    topic: "kelebihan dan kekurangan bekerja remote",
+    userText: "ok",
+  });
+  assert.ok(/Tugas aktif/.test(related), "topically-related summary still carries the task");
+  assert.ok(!/\|/.test(related), "related summary still sanitizes pipe-facts");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -1243,6 +1287,7 @@ async function main() {
   await testHeavyCapabilityVerify();
   await testGlobalComprehension();
   await testWorkingMemoryLeaks();
+  await testInternalDumpSanitization();
   console.log("SAFETY TESTS PASSED");
 }
 
