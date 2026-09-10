@@ -369,7 +369,7 @@ export function stripAssistantRecallJunk(content: string): string {
       "",
     )
     .replace(
-      /^(?:saya akan|aku akan|saya siap|aku siap|saya jelaskan|aku jelaskan|saya bahas|aku bahas|saya uraikan|aku uraikan|berikut yang akan saya|berikut yang akan aku|berikut ini yang akan saya|berikut ini yang akan aku|outlook saya akan|rencana saya)\s[^.]*\.\s*/i,
+      /^(?:saya akan|aku akan|saya siap|aku siap|saya jelaskan|aku jelaskan|saya bahas|aku bahas|saya uraikan|aku uraikan|berikut yang akan saya|berikut yang akan aku|berikut ini yang akan saya|berikut ini yang akan aku|outlook saya akan|rencana saya|kamu ingin mengetahui|anda ingin mengetahui)\s[^.]*\.\s*/i,
       "",
     );
 }
