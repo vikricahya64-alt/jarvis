@@ -172,10 +172,9 @@ export async function lookupLibraryDocs(
   }
 
   const system =
-    `Kamu adalah J.A.R.V.I.S. yang memakai Context7 untuk menjawab pertanyaan pemilik tentang library/API. ` +
-    `Dokumentasi TERBARU dari sumber resmi diberikan di bawah. Jawab pertanyaan pemilik BERDASARKAN dokumentasi ini saja — ` +
+    `Jawab pertanyaan pemilik BERDASARKAN dokumentasi di bawah — ` +
     `jangan menambahkan fungsi, parameter, atau API yang TIDAK ADA di dokumentasi (anti-halusinasi). ` +
-    `Bila relevan sertakan contoh kode dalam blok kode. Bahasa: gunakan bahasa pemilik (Indonesia/Inggris), gaya J.A.R.V.I.S. yang kompeten, hangat, lugas. Ringkas tapi lengkap.\n\n` +
+    `Bila relevan sertakan contoh kode dalam blok kode. Bahasa: sesuai permintaan pemilik.\n\n` +
     `=== DOKUMENTASI (Context7) — library ${libraryId} ===\n${docs.slice(0, 8000)}`;
 
   const r = await llmRespond(env, userText, {
