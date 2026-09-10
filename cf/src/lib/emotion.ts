@@ -425,10 +425,10 @@ export function updateMood(owner: number, signal: EmotionSignal): MoodState {
   if (mood.history.length > 20) mood.history.shift();
 
   // Detect trajectory (compare last 3 vs previous 3).
-  // Contract fix: the axis must be VALENCE-signed intensity, not raw magnitude.
+// Contract fix: the axis must be VALENCE-signed intensity, not raw magnitude.
   // The old code compared |intensity| averages, so an owner whose JOY was
-  // escalating triggered "declining" (magnitude rose) — emotionToStyle then
-  // answered rising happiness with grief-empathy. Signed value: positive
+  // escalating triggered "declining" (magnitude rose) — the trajectory logic
+  // then answered rising happiness with grief-empathy. Signed value: positive
   // emotions count up, negative count down, neutral counts zero.
   if (mood.history.length >= 6) {
     const recent = mood.history.slice(-3);
@@ -448,40 +448,6 @@ export function updateMood(owner: number, signal: EmotionSignal): MoodState {
   mood.lastUpdate = now;
 
   return mood;
-}
-
-/** Map emotion to conversational style adjustment. */
-export function emotionToStyle(emotion: EmotionSignal, mood?: MoodState): {
-  tone: "warm" | "neutral" | "firm" | "empathetic" | "encouraging";
-  formality: "casual" | "neutral" | "formal";
-  length: "short" | "normal" | "detailed";
-} {
-  // Use mood trajectory for additional context
-  const trajectory = mood?.trajectory ?? "stable";
-
-  if (emotion.sentiment === "negative" && emotion.intensity > 0.5) {
-    // If trajectory is declining, be extra supportive
-    if (trajectory === "declining") {
-      return { tone: "empathetic", formality: "neutral", length: "detailed" };
-    }
-    return { tone: "empathetic", formality: "neutral", length: "normal" };
-  }
-  if (emotion.sentiment === "positive" && emotion.intensity > 0.5) {
-    return { tone: "encouraging", formality: "casual", length: "short" };
-  }
-  if (emotion.plutchik === "anger") {
-    return { tone: "firm", formality: "formal", length: "short" };
-  }
-  if (emotion.plutchik === "fear" || emotion.plutchik === "sadness") {
-    return { tone: "empathetic", formality: "neutral", length: "normal" };
-  }
-  if (emotion.plutchik === "joy") {
-    return { tone: "warm", formality: "casual", length: "short" };
-  }
-  if (emotion.plutchik === "anticipation") {
-    return { tone: "encouraging", formality: "neutral", length: "normal" };
-  }
-  return { tone: "neutral", formality: "neutral", length: "normal" };
 }
 
 /** Get a human-readable summary of the current mood state. */

@@ -1080,8 +1080,10 @@ async function testHeavyCapabilityVerify() {
   const brainSrc = readFileSync(new URL("../src/lib/intelligence.ts", import.meta.url), "utf-8");
   assert.ok(/heavyCapVerdict/.test(brainSrc),
     "brain must have a heavy-capability ask-vs-execute verdict (design/search/code)");
-  assert.ok(/heavyVerifySuffix/.test(brainSrc),
-    "brain must append a verification suffix when a heavy capability was ambiguous");
+  assert.ok(/buildUniversalFrame/.test(brainSrc) && /heavyNote/.test(brainSrc),
+    "ambiguous heavy-capability messages must fold verification INTO the P2 recommendation (buildUniversalFrame heavyNote rail)");
+  assert.ok(!/function heavyVerifySuffix/.test(brainSrc),
+    "the old post-hoc heavyVerifySuffix appender must be retired — no system-added suffix after the reply");
   assert.ok(/heavyVerify/.test(brainSrc),
     "ambiguous heavy-capability messages must carry the heavyVerify marker");
   assert.ok(/execute.*answer.*verify|"execute" \| "answer" \| "verify"/.test(brainSrc),

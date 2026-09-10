@@ -239,18 +239,6 @@ function heavyCapVerdict(type: "search" | "design" | "code", text: string): "exe
   return "verify";
 }
 
-/** Human, capability-specific verification suffix: asked AND answered, then we
- *  confirm whether the heavy capability should actually run. */
-function heavyVerifySuffix(cap: string, reply: string): string {
-  const ask =
-    cap === "search"
-      ? `\n\nKalau yang kamu maksud adalah aku langsung cari/riset detailnya — mau aku eksekusi sekarang?`
-      : cap === "code"
-        ? `\n\nKalau yang kamu maksud adalah aku langsung tulis/kerjakan kodenya — mau aku eksekusi sekarang?`
-        : `\n\nKalau yang kamu maksud adalah aku langsung buatkan desain/gambarnya — mau aku eksekusi sekarang?`;
-  return `${reply}${ask}`;
-}
-
 // ============================================================================
 // GLOBAL MODE CLASSIFIER: communicate vs execute
 // ============================================================================
