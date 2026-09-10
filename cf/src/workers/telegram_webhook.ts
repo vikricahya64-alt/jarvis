@@ -26,6 +26,7 @@ import {
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus, recordTaskCounters, recentContext, auditIntegrity } from "../lib/db";
+import { probeProviders } from "../lib/providers";
 import { extractTopic, parseTranslate, translateText, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, storeResearchAnchor } from "../lib/ai";
 import { getWeatherText } from "../lib/weather";
 
@@ -408,7 +409,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   if (trimmed === "/status") {
     await safeDBReply(env, r, async () => {
       const paused = await isAutonomyPaused(env, r);
-      return statusReport(paused);
+      return statusReport(env, paused);
     });
     return new Response("ok", { status: 200 });
   }
@@ -1481,8 +1482,8 @@ async function understandMedia(env: Env, owner: number, msg: TelegramMessage): P
   return null;
 }
 
-/** Compose the /status reply. */
-function statusReport(paused: boolean): string {
+/** Compose the /status reply (static health + live provider probe). */
+async function statusReport(env: Env, paused: boolean): Promise<string> {
   const lines = [
     `📊 *Status J.A.R.V.I.S.*`,
     ``,
@@ -1490,8 +1491,20 @@ function statusReport(paused: boolean): string {
     ``,
     `${STATUS.systemOk}`,
     ``,
-    `Perintah: /health · /dms_status · /queue_status · /pause · /resume · /obedience_report · /todo · /kota`,
   ];
+  try {
+    const probe = await probeProviders(env);
+    lines.push(`*Provider (live):*`);
+    for (const p of probe) {
+      const face = p.configured ? (p.live ? "🟢" : "🔴") : "⚪";
+      lines.push(`${face} ${p.name}: ${p.detail}`);
+    }
+    lines.push(``);
+  } catch {
+    lines.push(`Provider probe: error`);
+    lines.push(``);
+  }
+  lines.push(`Perintah: /health · /dms_status · /queue_status · /pause · /resume · /obedience_report · /todo · /kota`);
   return lines.join("\n");
 }
 
