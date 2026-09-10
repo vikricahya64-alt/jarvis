@@ -337,14 +337,18 @@ export function updateWorkingMemory(
   // with the new user message (and it's not a short clarification), archive
   // the old task so it doesn't leak into a new thread as "Audit Status".
   if (wm.currentTask && userText.length > 8) {
-    const taskStillRelevant =
-      topicOverlaps(wm.currentTask, userText) ||
-      // Negations / clarifications continue the same task
-      /\b(?:bukan|maksudku|yang\s+saya\s+maksud|maksudnya|soalnya|sebenarnya)\b/i.test(userText) ||
-      // Short continuations ("ya", "oke", "itu") keep current task
-      userText.trim().length <= 15;
+    // m9-v11.6: a negation/clarification ("Bukan membuat AI all in one buatan
+    // sendiri") is a REDIRECT — it names the real subject in the SAME message.
+    // Keeping the old task on the negation alone would re-inject an unrelated,
+    // stale task (the "Audit Status" echo from a previous thread) into the new
+    // conversation. Only genuine continuations (topical overlap or short words
+    // like "ya" / "itu" / "yang kedua") keep the current task.
+    const taskStillRelevant = topicOverlaps(wm.currentTask, userText) || userText.trim().length <= 15;
     if (!taskStillRelevant) {
-      wm.extractedFacts.push(`Tugas sebelumnya: ${wm.currentTask} (${wm.stepsCompleted.length} langkah selesai)`);
+      // Archive keeps ONE audit line; all other facts belong to the old task
+      // and are dropped — stops pre-sanitization garbage ("h | Konsep AI yang
+      // dipakai | Layanan con") from surviving inside KV-restored sessions.
+      wm.extractedFacts = [`Tugas sebelumnya: ${wm.currentTask} (${wm.stepsCompleted.length} langkah selesai)`];
       wm.currentTask = null;
       wm.stepsCompleted = [];
       wm.pendingItems = [];
@@ -355,15 +359,18 @@ export function updateWorkingMemory(
   const taskSwitch = /\b(coba|lanjut|ganti|sekarang|next|switch|gimana|bagaimana|cari|search|info)\b/i.test(userText);
 
   if (taskSwitch && wm.currentTask && wm.stepsCompleted.length > 0) {
-    // Archive current task to facts
-    wm.extractedFacts.push(`Tugas sebelumnya: ${wm.currentTask} (${wm.stepsCompleted.length} langkah selesai)`);
+    // Archive current task to facts (keep the audit line; drop stale facts)
+    wm.extractedFacts = [`Tugas sebelumnya: ${wm.currentTask} (${wm.stepsCompleted.length} langkah selesai)`];
     wm.currentTask = null;
     wm.stepsCompleted = [];
     wm.pendingItems = [];
   }
 
-  // Set current task if not set (only substantive messages, not short echoes)
-  if (!wm.currentTask && userText.length > 15 && !/\b(?:ya|oke|ok|bukan|bener|benar|betul)\b/i.test(userText.trim())) {
+  // Set current task if not set (only substantive messages; a PURE
+  // acknowledgement like "bukan", "ya", "oke" never spawns a task, but a long
+  // negation redirect ("Bukan membuat AI all in one buatan sendiri") that just
+  // archived an old task SHOULD become the new task).
+  if (!wm.currentTask && userText.length > 15 && !/^\s*(?:ya|bukan|nope|nggak|tidak|oke|ok|bener|benar|betul)\s*[.!?]?\s*$/i.test(userText.trim())) {
     wm.currentTask = userText.slice(0, 100);
   }
 
@@ -407,6 +414,21 @@ export function updateWorkingMemory(
   } else {
     wm.reasoningConfidence = Math.min(1, wm.reasoningConfidence + 0.05);
   }
+}
+
+/**
+ * m9-v11.6: true when the session's working-memory task is relevant to the
+ * given conversation topic — gates ALL WM injection (the enriched-context
+ * block AND the system-prompt hint) so an unrelated tracked task never leaks
+ * into replies as an "Audit Status" echo. Short continuations ("ya", "itu")
+ * carry the WM because they can't be matched topically.
+ */
+export function wmTopicRelevant(session: SessionState, topic: string, userText: string): boolean {
+  const wm = session.workingMemory;
+  if (!wm.currentTask || wm.stepsCompleted.length === 0) return false;
+  if (topic && topicOverlaps(wm.currentTask, topic)) return true;
+  if (userText.trim().length <= 15 && (Date.now() - wm.lastUpdated) < 30_000) return true;
+  return false;
 }
 
 /** Compress old turns into summaryBuffer if threshold exceeded. */
@@ -473,20 +495,16 @@ export async function buildEnrichedContext(
   } catch { /* fail-open */ }
 
   // 3) Working memory (only if active AND topically relevant to THIS conversation)
+  // m9-v11.6: the bare ≤30s window used alone could inject a STALE unrelated
+  // task into a quick follow-up (the "Audit Status" echo bug). Shared helper:
+  // topological overlap OR a short pure continuation within 30s.
   const wm = session.workingMemory;
-  // m9-v11.3: stale WM guard — don't inject "[Memori kerja] Tugas: Cari
-  // kelebihan dan kekurangan bekerja remote" into a conversation about "4 konsep
-  // AI dalam 1 software". Only inject when the WM task overlaps with the
-  // current thread's topic/userText, OR the task was set within this same turn.
-  const wmRelevant = wm.currentTask && wm.stepsCompleted.length > 0 && (
-    topicOverlaps(wm.currentTask, topic ?? userText) ||
-    (Date.now() - wm.lastUpdated) < 30_000 // set ≤30s ago = same turn
-  );
+  const wmRelevant = wmTopicRelevant(session, topic ?? userText, userText);
   if (wmRelevant) {
     const wmContent = [
       `[Memori kerja] Tugas: ${wm.currentTask}`,
       `Langkah selesai: ${wm.stepsCompleted.length}`,
-      `Catatan percakapan (belum diverifikasi): ${wm.extractedFacts.slice(-3).join("; ")}`,
+      `Catatan percakapan (belum diverifikasi): ${wm.extractedFacts.filter((f) => f && !/[|\[\]]/.test(f)).slice(-3).join("; ")}`,
       `Keyakinan: ${(wm.reasoningConfidence * 100).toFixed(0)}%`,
     ].join("\n");
     if (wmContent.length < charBudget) {
@@ -505,15 +523,19 @@ export async function buildEnrichedContext(
   }
 
   // 5) Relevant memories (shared [recent, mems] fetched in parallel above)
+  // m9-v11.6: memories are CONTEXT ONLY. Previously role="assistant" + "natural
+  // saja menyebutnya" actively invited the model to drag unrelated old memories
+  // ("desain visual anak-anak bermain pasir", "kota Malang") into a clarify
+  // reply and offer them as fabricated options. Now: system role, no enticement.
   try {
     if (mems.length > 0) {
       const memText = mems.map((m) => m.content).join(" | ").slice(0, Math.min(1000, charBudget));
       context.push({
-        role: "assistant",
-        content: `[Kenangan relevan tentang "${topic}" — dari memori kami]: ${memText}. ` +
-          `Jika topik ini relevan dengan yang pernah dibahas sebelumnya, natural saja menyebutnya ` +
-          `(mis. "Oh iya, dulu kamu pernah bahas soal..." atau "Ini relates ke yang tadi..."). ` +
-          `Tapi JANGAN paksa menyebut memori kalau memang tidak relevan.`,
+        role: "system",
+        content: `[Kenangan relevan tentang "${topic}" — KONTEKS INTERNAL saja, bukan bahan jawaban]: ${memText}. ` +
+          `Blok ini hanya petunjuk arah. JANGAN mengutip daftarnya sebagai jawaban, ` +
+          `JANGAN tawarkan memori lama sebagai pilihan kepada pemilik, dan JANGAN menyebutnya ` +
+          `kalau tidak menjawab pertanyaan pemilik secara langsung.`,
       });
       charBudget -= memText.length;
     }

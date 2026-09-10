@@ -715,7 +715,10 @@ export async function act(
             `JANGAN mengarang atau menjelaskan dengan percaya diri tentang platform, produk, merek, ` +
             `atau istilah yang tidak kamu kenal dan tidak muncul di konteks percakapan. ` +
             `Kalau sebuah istilah tidak jelas bagimu, jawab jujur: "Aku belum paham yang kamu maksud — ` +
-            `bisa dijelaskan sedikit?" — JANGAN menebak-nebak platform yang mungkin tidak nyata.`;
+            `bisa dijelaskan sedikit?" — JANGAN menebak-nebak platform yang mungkin tidak nyata. ` +
+            `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
+            `(seperti [Memori kerja], [Kenangan relevan], [Ringkasan]) dalam jawaban — ` +
+            `itu konteks internal, bukan bahan jawaban.`;
         })(),
         deep: perception.intent.type === "code",
       });
