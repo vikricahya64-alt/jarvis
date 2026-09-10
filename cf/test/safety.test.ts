@@ -23,7 +23,7 @@ import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, 
 import { isInternalEchoDump, isAdminChaff } from "../src/lib/db";
 import { semanticSearchMemory, semanticUpsertMemory } from "../src/lib/memory_vec";
 import { probeProviders } from "../src/lib/providers";
-import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation, translateInput, hasDegenerateEcho } from "../src/lib/intelligence";
+import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation, translateInput, hasDegenerateEcho, isAcknowledgeOnly } from "../src/lib/intelligence";
 import { cleanRecallLine } from "../src/lib/context_manager";
 
 const FAKE_ENV = {
@@ -1429,9 +1429,25 @@ async function testMenuGuard() {
   assert.ok(cont.includes("bekerja remote menuntut disiplin tinggi"), "recall continuation cites the discussed topic");
   assert.ok(cont.includes("fokus dan jadwal itu kunci"), "recall continuation cites the substance");
   assert.ok(!cont.includes("Mau"), "recall continuation never opens a menu");
+  // m9-v11.27: the continuation is a RECOLLECTION, never an empty invite.
+  assert.ok(!cont.includes("siap lanjut"), "no empty invitation tail");
+  assert.ok(!cont.includes("aku ingat"), "no meta-acknowledgement");
 
   const missing = deterministicRecallContinuation({ content: "[Riwayat percakapan sebelumnya] (tidak ditemukan)." });
   assert.ok(missing.includes("belum berhasil menemukan"), "empty recall degrades into an honest line");
+
+  // m9-v11.27: the acknowledge-only stub must be recognized as a failure so the
+  // content-forced retry can fire; a genuine contentful answer must not.
+  assert.strictEqual(
+    isAcknowledgeOnly("Soal itu — dari pembicaraan kita dulu, intinya bekerja remote. Aku ingat konteks ini dan siap lanjut dari situ."),
+    true,
+    "acknowledge-only stub is caught",
+  );
+  assert.strictEqual(
+    isAcknowledgeOnly("Aku ingat kita sempat membahas hal itu, tapi yang perlu kita lakukan sekarang adalah menyusun langkah berikutnya."),
+    false,
+    "contentful answer mentioning memory is not flagged",
+  );
 
   // m9-v11.25 DEGENERATE-ECHO GUARD: memory echoed back verbatim instead of
   // content (owner live failure: "tadi kita bahas bekerja remote" → "bekerja

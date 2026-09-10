@@ -577,6 +577,32 @@ const ECHO_FOLLOWUP_NUDGE =
   `kalimat baru, tanpa mengulang frasa atau kata yang sama, dan berhenti di ` +
   `konten. Jangan menyebut soal penulisan ulang ini.`;
 
+// m9-v11.27: last-ditch recall regeneration — force REAL content, banning the
+// meta-acknowledgement stub ("Aku ingat konteks ini dan siap lanjut dari situ")
+// the model keeps falling back to on recall turns.
+const RECALL_CONTENT_NUDGE =
+  `\n\nCatatan proses: jawaban yang kamu kirimkan sebelumnya hanya mengakui ` +
+  `mengingat dan menawarkan lanjut, tanpa menyampaikan isi. TULIS ULANG sekarang: ` +
+  `LANGSUNG tulis satu paragraf yang berisi lanjutan topik itu — sampaikan poin ` +
+  `nyata (definisi, contoh, tantangan, atau tips) yang sesuai dengan topik yang ` +
+  `kamu ingat. JANGAN menulis "aku ingat", "aku siap lanjut", "soal itu dari ` +
+  `pembicaraan kita dulu", atau "intinya ...". Berhenti di konten. Jangan ` +
+  `menyebut soal penulisan ulang ini.`;
+
+/** True when the reply only ACKNOWLEDGES remembering + invites continuation
+ *  without delivering any substance — the meta-stub "Soal itu — dari
+ *  pembicaraan kita dulu, intinya X. Aku ingat konteks ini dan siap lanjut dari
+ *  situ." (owner live failure 2026-09-10, deterministic recall fallback). */
+export function isAcknowledgeOnly(content: string): boolean {
+  const t = (content ?? "").trim();
+  if (t.length > 400) return false;
+  return (
+    /\b(?:aku|saya)\s+(?:ingat|masih ingat|paham)\s+konteks\b/i.test(t) ||
+    /\bsiap lanjut\b/i.test(t) ||
+    /dari pembicaraan kita dulu,?\s+intinya/i.test(t)
+  );
+}
+
 /** Kata-kata terlalu umum untuk jadi sinyal pengulangan yang bermakna. Subset
  *  kecil lokal (hindari cycle import dari verifier). */
 const ECHO_STOP = new Set([
@@ -657,8 +683,9 @@ export function stripLeadingMenuSentences(content: string): string {
  *  even after the regenerate-nudge: re-narrate the recalled SUBJECT as a short
  *  natural paragraph instead of a question — NEVER a dump of raw data
  *  (timestamps / "User menanyakan tentang:" / pipe separators). Content-first,
- *  no menu, no invite (m9-v11.20: owner's "one door" principle — data is
- *  translated to speech the way a human remembers, never displayed raw). */
+ *  no menu, and m9-v11.27: no empty invite either — the old tail ("...Aku ingat
+ *  konteks ini dan siap lanjut dari situ.") was a stub that DELIVERED no
+ *  substance (owner live failure). Now it states the recollection honestly. */
 export function deterministicRecallContinuation(recallBlock?: { content?: string }): string {
   const raw = (recallBlock?.content ?? "").replace(/^\[[^\]]+\]\s*\([^)]*\)\s*:/, "");
   const pick = (re: RegExp): string[] =>
@@ -684,20 +711,24 @@ export function deterministicRecallContinuation(recallBlock?: { content?: string
     return "Aku belum berhasil menemukan catatan percakapan itu — tolong ingatkan aku sedikit konteksnya.";
   }
   // Translate remaining data-level artifacts ("owner membicarakan X") into a
-  // human memory ("kita sempat membahas X") — one door in, one door out.
+  // human memory ("kita sempat membahas X") — one door in, one door out. The
+  // remembered DETAIL (kelebihan/kekurangan/pro-kontra) is kept — it is the
+  // substance of the recollection, not filler.
   const humanize = (s: string): string =>
     s
       .replace(/^owner\s+(membicarakan|membahas|sempat membicarakan|sempat membahas)\s+/i, "kita sempat membahas ")
       .replace(/^owner\s+/i, "kita ")
-      .replace(/kelebihan dan kekurangan|pro dan kontra|plus minus/gi, "").trim();
+      .replace(/\s{2,}/g, " ")
+      .trim();
   const clean = merged.map((s) => humanize(s).replace(/\s{2,}/g, " ").trim()).filter(Boolean);
   if (clean.length === 0) {
     return "Aku belum berhasil menemukan catatan percakapan itu — tolong ingatkan aku sedikit konteksnya.";
   }
-  // Natural human-like recall: name the subject once — no timestamps, labels,
-  // or tables — and stop.
+  // m9-v11.27: honest recollection WITHOUT an invitation — name what we
+  // actually discussed, stop. No "siap lanjut", no question, no fabrication.
   const subject = clean[0];
-  return `Soal itu — dari pembicaraan kita dulu, intinya ${subject[0].toLowerCase() + subject.slice(1)}${clean.length > 1 ? `, antara lain ${clean.slice(1, 3).map((b) => b[0].toLowerCase() + b.slice(1)).join(" dan ")}` : ""}. Aku ingat konteks ini dan siap lanjut dari situ.`;
+  const extra = clean.length > 1 ? ` Yang aku catat dulu antara lain ${clean.slice(1, 3).join(" dan ")}.` : "";
+  return `Dari pembicaraan kita dulu, kita sempat membahas ${subject}.${extra}`;
 }
 
 // ============================================================================
@@ -1031,9 +1062,13 @@ export async function act(
         // m9-v11.19 NO-MENU GUARD: when the answer OPENS with a menu or an
         // announcement (model ignored the rail) regenerate ONCE with a targeted
         // nudge. m9-v11.25: the same one-shot retry fires for a DEGENERATE ECHO.
+        // m9-v11.27: acknowledge-only stubs also retry — and a SECOND retry
+        // forces real content on recall turns instead of the empty stub.
         // The final strip/continuation is enforced GLOBALLY at the
         // processIntelligence choke point (covers EVERY strategy).
-        if (isMenuFirstLine(reply) || hasDegenerateEcho(reply)) {
+        const badAnswer =
+          isMenuFirstLine(reply) || hasDegenerateEcho(reply) || isAcknowledgeOnly(reply);
+        if (badAnswer) {
           const nudge = isMenuFirstLine(reply) ? MENU_FOLLOWUP_NUDGE : ECHO_FOLLOWUP_NUDGE;
           const retry = await llmRespond(env, d, {
             topic: topic ?? undefined,
@@ -1042,11 +1077,29 @@ export async function act(
             systemOverride: frame() + nudge,
             deep: perception.intent.type === "code",
           }).catch(() => null);
-          if (retry?.reply && !isMenuFirstLine(retry.reply) && !hasDegenerateEcho(retry.reply)) {
-            reply = retry.reply;
+          const retryGood = (r: { reply: string | null } | null | undefined): boolean =>
+            !!r?.reply && !isMenuFirstLine(r.reply) && !hasDegenerateEcho(r.reply) && !isAcknowledgeOnly(r.reply);
+          if (retryGood(retry)) {
+            reply = retry!.reply!;
+          } else if (recallBlock) {
+            // Recall turns get ONE content-forced second pass (the deterministic
+            // continuation is a recollection, not a continuation — content must
+            // come from the LLM when at all possible).
+            const retry2 = await llmRespond(env, d, {
+              topic: topic ?? undefined,
+              context: task.payload,
+              contextIsEnriched: true,
+              systemOverride: frame() + RECALL_CONTENT_NUDGE,
+              deep: perception.intent.type === "code",
+            }).catch(() => null);
+            reply = retryGood(retry2)
+              ? retry2!.reply!
+              : stripLeadingMenuSentences(retry2?.reply ?? retry?.reply ?? reply) ||
+                deterministicRecallContinuation(recallBlock);
           } else {
-            reply = stripLeadingMenuSentences(retry?.reply ?? reply) ||
-              deterministicRecallContinuation(recallBlock);
+            reply =
+              stripLeadingMenuSentences(retry?.reply ?? reply) ||
+              reply;
           }
         }
         return { reply, source: result.source ?? "llm" };
@@ -1256,7 +1309,7 @@ export async function processIntelligence(
   //    under buildUniversalFrame's heavyNote rail — produced by the model,
   //    distinguishable (answer vs verify) by the owner. (m9-v11.19)
   let deliverable = safeReply;
-  if (isMenuFirstLine(deliverable) || hasDegenerateEcho(deliverable)) {
+  if (isMenuFirstLine(deliverable) || hasDegenerateEcho(deliverable) || isAcknowledgeOnly(deliverable)) {
     const recallBlock = (perception.enrichedContext ?? []).find((c) =>
       /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
     deliverable =
