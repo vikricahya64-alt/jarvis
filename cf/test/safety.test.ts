@@ -1394,6 +1394,26 @@ async function testMenuGuard() {
     "contentful line is not flagged",
   );
 
+  // m9-v11.26: a menu question WITHOUT the first-person pronoun ("Mau lanjut ke
+  // topik mana ... — misalnya X, Y, atau Z?") escaped the previous regex — the
+  // exact owner live failure that followed the recall-echo fix. Option-list
+  // questions must be caught; genuine content questions must not.
+  assert.strictEqual(
+    isMenuFirstLine("Mau lanjut ke topik mana tentang kerja remote—misalnya tantangan yang perlu diatasi, tips meningkatkan produktivitas, atau contoh alat kolaborasi yang efektif?"),
+    true,
+    "bare mau + misalnya-options menu is caught",
+  );
+  assert.strictEqual(
+    isMenuFirstLine("Mau yang mana — dibahas dari sisi tantangan, tips, atau alatnya?"),
+    true,
+    "mana yang choice question is caught",
+  );
+  assert.strictEqual(
+    isMenuFirstLine("Apa pilihan terbaik untuk kerja remote?"),
+    false,
+    "content question about options is not flagged as menu",
+  );
+
   // Strip: a content paragraph after a menu sentence keeps the content only.
   const stripped = stripLeadingMenuSentences(
     "Mau saya lanjutkan dengan tantangan atau tips?\nKerja remote menuntut disiplin tinggi dan batas waktu kerja yang tegas.",
