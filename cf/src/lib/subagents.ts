@@ -315,10 +315,14 @@ function attributionSuffix(gathers: AngleGather[]): string {
     }
   }
   if (rows.length === 0) return "";
-  const cap = rows.slice(0, 6);
-  const lines = cap.map((r) => `- ${(r.title || r.url).slice(0, 90)} — ${r.url}`).join("\n");
-  const more = rows.length > 6 ? `\n- …dan ${rows.length - 6} sumber lain (lihat catatan lengkap).` : "";
-  return `\n\n📚 *Sumber:*\n${lines}${more}`;
+  // m9-v11.22: the source footer is PROSE (one natural sentence), not a 📚
+  // bullet table — mirroring the universal output door so sub-agent research
+  // can never leak report styling. URLs stay plain text (renders clickable in
+  // Telegram); each one is verified against the real search hits upstream.
+  const cap = rows.slice(0, 5);
+  const inline = cap.map((r) => r.url.replace(/\?.*$/, "")).join(", ");
+  const more = rows.length > 5 ? `, serta ${rows.length - 5} sumber lain.` : ".";
+  return `\n\nSumber yang saya pakai: ${inline}${more}`;
 }
 /** Gather top-N findings for one angle (deterministic; no LLM call per angle).
  *  Every hit is untrusted and gets spotlighted by the caller before the writer. */

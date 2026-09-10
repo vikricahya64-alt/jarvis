@@ -1645,9 +1645,6 @@ export async function searchAndSynthesize(
     
     // Format reply for natural conversation
     let formatted = buildFinalReply(generated, "research", finalSentiment);
-    if (hits.length > 0 && !/sumber:|📚/i.test(formatted)) {
-      formatted = `${formatted}\n\n📚 *Sumber:*\n${formatSourceList(hits, 4)}`;
-    }
     if (formatted.length > 120) {
       void reflectOnTurn(env, userText, formatted, []).catch(() => {});
     }
@@ -1658,9 +1655,8 @@ export async function searchAndSynthesize(
     await storeLearnedKnowledge(env, topic, searchResult, "web_search").catch(() => {});
     // Use topic sentiment for fallback formatting
     const topicSentiment = detectTopicSentiment(topic);
-    const sourceBlock = hits.length > 0 ? `\n\n📚 *Sumber:*\n${formatSourceList(hits, 4)}` : "";
     const formatted = buildFinalReply(
-      `Berikut hasil pencarian tentang *${topic}*:\n\n${searchResult}\n\n(J.A.R.V.I.S. edge — tanpa LLM generatif, tampilkan hasil mentah.)${sourceBlock}`,
+      `Berikut hasil pencarian tentang *${topic}*:\n\n${searchResult}\n\n(J.A.R.V.I.S. edge — tanpa LLM generatif, tampilkan hasil mentah.)`,
       "research",
       topicSentiment.sentiment,
     );

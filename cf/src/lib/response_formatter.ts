@@ -154,6 +154,14 @@ export function proseifyResearch(text: string): string {
   // 4. Bullet markers → plain sentences.
   t = t.replace(/^\s*(?:[-*•–]|\d+[.)])\s+/gm, "");
 
+  // 4b. Word-ordinal enumeration (the live m9-v11.21 shape: "Pertama, …",
+  //     "Kedua, …", "Kelima, …") → drop the ordinal so the list reads as
+  //     flowing prose instead of an enumerated report.
+  t = t.replace(
+    /(^|[.,!?;:]\s+)(Pertama|Kedua|Ketiga|Keempat|Kelima|Keenam|Ketujuh|Kedelapan|Kesembilan|Kesepuluh)\s*[,:]\s*/gi,
+    "$1",
+  );
+
   // 5. Report-style openers/closers (Indonesian + English, context-safe).
   t = t
     .replace(/^\s*Berikut\s+(?:adalah\s+)?(?:rangkuman|ringkasan|hasil|informasi)[^\n]*\n{1,3}/im, "")
