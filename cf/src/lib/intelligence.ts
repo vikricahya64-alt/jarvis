@@ -683,7 +683,7 @@ export async function act(
         topic: topic ?? undefined,
         context: enrichedContext,
         contextIsEnriched: true,
-        systemOverride: (() => {
+systemOverride: (() => {
           // m9-v11 ANTI-FABRICATION RAIL (owner principle): never confidently
           // explain a platform/product/term that isn't in the conversation and
           // you aren't sure is real (live failure: fabricated "platform AGE").
@@ -693,60 +693,56 @@ export async function act(
           // or the model merges the old subject with the recent thread (live
           // failure: "tadi kita bahas bekerja remote" → storyboard gabungan
           // dengan anak-anak bermain pasir).
+          // m9-v11.13: UNIVERSAL rail — the content-first / human-voice /
+          // no-menu rules are NOT a recall-topic quirk. They load for EVERY
+          // simple_llm answer on EVERY topic, then branch-specific refinements
+          // are appended below.
+          const baseRail =
+            `Balas seperti orang ngobrol: paragraf ringkas yang mengalir, langsung ke inti. ` +
+            `JANGAN menyusun jawaban sebagai laporan — tanpa tabel, daftar bernomor, ` +
+            `daftar berpoin panjang, atau judul seksi. ` +
+            `Beri ISI jawaban SEKARANG; JANGAN membuka dengan pertanyaan pilihan atau ` +
+            `menawarkan menu (pola seperti "Mau saya lanjutkan dengan X, Y, atau Z?", ` +
+            `"Mau bahas yang mana?", "Mau aku gali lebih dalam yang mana?"). ` +
+            `Aturan ini berlaku untuk SEMUA topik percakapan. ` +
+            `JANGAN mengarang atau menjelaskan dengan percaya diri tentang platform, produk, merek, ` +
+            `atau istilah yang tidak kamu kenal dan tidak muncul di konteks percakapan — kalau ` +
+            `sebuah istilah tidak jelas bagimu, jawab jujur: "Aku belum paham yang kamu maksud — ` +
+            `bisa dijelaskan sedikit?" — JANGAN menebak-nebak platform yang mungkin tidak nyata. ` +
+            `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
+            `([Memori kerja], [Kenangan relevan], [Riwayat percakapan sebelumnya], [Ringkasan]) ` +
+            `dalam jawaban — itu konteks internal, bukan bahan jawaban.`;
           const recallBlock = (enrichedContext ?? []).find((c) =>
             /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
           if (recallBlock) {
-            return `Pemilik menunjuk KEMBALI ke topik lama yang dijelaskan pada blok ` +
+            return baseRail +
+              `\n\nPemilik menunjuk KEMBALI ke topik lama yang dijelaskan pada blok ` +
               `"[Riwayat percakapan sebelumnya]" / "[Catatan riwayat]" di konteks. ` +
-              `Jawab HANYA berdasarkan blok riwayat itu: LANGSUNG lanjutkan topik lamanya ` +
-              `dengan tanggapan yang mengalir seperti orang ngobrol dalam paragraf — ` +
-              `JANGAN membuka dengan pertanyaan pilihan/menawarkan menu — termasuk TIDAK ` +
-              `boleh pola "Mau saya lanjutkan dengan X, Y, atau Z?" atau "Apakah kamu ingin ` +
-              `saya bahas...?" — jawablah isinya SEKARANG tanpa meminta pemilik memilih. ` +
-              `JANGAN pakai tabel, daftar bernomor, daftar berpoin panjang, atau judul seksi. ` +
+              `Jawab HANYA berdasarkan blok riwayat itu: LANGSUNG lanjutkan topik lamanya. ` +
               `Bila bloknya menyatakan riwayat tidak ditemukan, jawab jujur ` +
               `singkat dan minta pemilik mengingatkan konteksnya. ` +
               `ABAIKAN topik percakapan terakhir — JANGAN menggabungkan topik lama dengan ` +
               `topik baru dari percakapan terakhir (mis. jangan mencampur "bekerja remote" ` +
-              `dengan thread gambar/storyboard). ` +
-              `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
-              `([Memori kerja], [Kenangan relevan], [Riwayat percakapan sebelumnya], ` +
-              `[Ringkasan]) dalam jawaban — itu konteks internal, bukan bahan jawaban.`;
+              `dengan thread gambar/storyboard).`;
           }
           if (perception.isContinuation && topic) {
             const isSimplify = /\b(lebih mudah|sederhanakan|belum mengerti|nggak paham|gampang|mudah dipahami|biar paham|tolong sederhanakan)\b/i.test(text);
             if (isSimplify) {
-              return `Pemilik minta penjelasan lebih sederhana tentang topik yang sedang dibahas. ` +
+              return baseRail +
+                `\n\nPemilik minta penjelasan lebih sederhana tentang topik yang sedang dibahas. ` +
                 `Topik aktif: "${topic}". ` +
                 `Jawab ULANG penjelasan tentang topik itu dengan bahasa sehari-hari yang sangat sederhana: ` +
                 `tanpa jargon, tanpa poin-poin panjang, kalimat pendek mengalir, seperti menjelaskan ke teman. ` +
-                `Tetap pada topik itu — JANGAN ganti topik. ` +
-                `Jika ada platform/produk/istilah yang tidak kamu kenal atau tidak muncul di percakapan, ` +
-                `JANGAN menjelaskannya secara detail — katakan jujur tidak yakin dan kembalikan ke topik yang dibahas. ` +
-                `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
-                `(seperti [Memori kerja], [Kenangan relevan], [Ringkasan]) dalam jawaban — itu konteks internal.`;
+                `Tetap pada topik itu — JANGAN ganti topik.`;
             }
-            return `Pemilik MENERUSKAN percakapan tentang "${topic}". ` +
+            return baseRail +
+              `\n\nPemilik MENERUSKAN percakapan tentang "${topic}". ` +
               `Pesan ini ringkas dan tidak menyebut ulang topiknya. ` +
               `Jawab sebagai LANJUTAN dari percakapan tentang topik itu. ` +
               `TETAP pada topik "${topic}" — JANGAN menyimpang ke topik lain, ` +
-              `JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas. ` +
-              `Jawab mengalir seperti orang ngobrol dalam paragraf ringkas dan padat — ` +
-              `JANGAN menyusun hanya demi terlihat lengkap berupa tabel, daftar bernomor ` +
-              `panjang, atau judul seksi. ` +
-              `Jika ada platform/produk/istilah yang tidak kamu kenal atau tidak muncul di percakapan, ` +
-              `JANGAN menjelaskannya secara detail — katakan jujur tidak yakin dan kembali ke topik yang dibahas. ` +
-              `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
-              `(seperti [Memori kerja], [Kenangan relevan], [Ringkasan]) dalam jawaban.`;
+              `JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas.`;
           }
-          return `Jawab pertanyaan ini secara langsung, jujur, dan fokus. ` +
-            `JANGAN mengarang atau menjelaskan dengan percaya diri tentang platform, produk, merek, ` +
-            `atau istilah yang tidak kamu kenal dan tidak muncul di konteks percakapan. ` +
-            `Kalau sebuah istilah tidak jelas bagimu, jawab jujur: "Aku belum paham yang kamu maksud — ` +
-            `bisa dijelaskan sedikit?" — JANGAN menebak-nebak platform yang mungkin tidak nyata. ` +
-            `LARANGAN ECHO: JANGAN PERNAH mengulang atau menyebut blok markup internal ` +
-            `(seperti [Memori kerja], [Kenangan relevan], [Ringkasan]) dalam jawaban — ` +
-            `itu konteks internal, bukan bahan jawaban.`;
+          return baseRail;
         })(),
         deep: perception.intent.type === "code",
       });

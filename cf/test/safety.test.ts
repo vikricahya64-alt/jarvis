@@ -1319,6 +1319,10 @@ async function testRecallSubjects() {
     "menu-offer question (apakah kamu ingin) must be detected",
   );
   assert.ok(
+    isMenuOfferQuestion("Mau aku gali lebih dalam bagian yang mana?"),
+    "gali-lebih-dalam offer must be detected",
+  );
+  assert.ok(
     !isMenuOfferQuestion("bekerja remote memang berat di konsisten waktu, tapi bisa dikelola dengan zona fokus dan istirahat teratur."),
     "a substantive continuation must NOT be flagged as menu-offer",
   );
