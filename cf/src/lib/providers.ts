@@ -43,6 +43,7 @@ export async function probeProviders(env: Env): Promise<ProviderProbe[]> {
       { name: "groq", configured: env.GROQ_API_KEY !== undefined, live: false, ms: null, detail: "test-env (no outbound)" },
       { name: "workers_ai", configured: env.AI !== undefined, live: false, ms: null, detail: "test-env (binding only)" },
       { name: "openrouter", configured: env.OPENROUTER_API_KEY !== undefined, live: false, ms: null, detail: "test-env (no outbound)" },
+      { name: "nvidia_nim", configured: env.NVIDIA_NIM_API_KEY !== undefined, live: false, ms: null, detail: "test-env (no outbound)" },
       { name: "gemini", configured: env.GEMINI_API_KEY !== undefined, live: false, ms: null, detail: "test-env (no outbound)" },
       { name: "memory_vec", configured: env.MEM_VEC !== undefined, live: false, ms: null, detail: "test-env (binding only)" },
     ];
@@ -76,6 +77,13 @@ export async function probeProviders(env: Env): Promise<ProviderProbe[]> {
       url: gw
         ? `${gw}/google-ai-studio/v1beta/models?key=${encodeURIComponent(env.GEMINI_API_KEY ?? "")}`
         : `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(env.GEMINI_API_KEY ?? "")}`,
+      note: "list-models",
+    },
+    {
+      name: "nvidia_nim",
+      configured: !!env.NVIDIA_NIM_API_KEY,
+      url: "https://integrate.api.nvidia.com/v1/models",
+      headers: { Authorization: `Bearer ${env.NVIDIA_NIM_API_KEY}` },
       note: "list-models",
     },
   ];

@@ -29,6 +29,16 @@ export { repairTruncatedReply, isLikelyTruncated, gateVerdict, tallyGate };
 
 const GROQ_MODEL = "openai/gpt-oss-120b";
 
+// NVIDIA NIM — hosted, OpenAI-compatible, free-tier trial (build.nvidia.com,
+// key generated free at build.nvidia.com/settings, no credit card, rate-limited
+// per key). Verified 2026-09-10: base URL + auth + chat completions/tool
+// calling from build.nvidia.com/llms.txt and docs.nvidia.com NIM LLM API ref.
+// Default + deep models are overridable via NVIDIA_NIM_MODEL /
+// NVIDIA_NIM_DEEP_MODEL envs (defaults pinned to free NIM endpoints).
+const NIM_BASE = "https://integrate.api.nvidia.com/v1";
+const NVIDIA_NIM_MODEL = "nvidia/nemotron-3-super-120b-a12b";
+const NVIDIA_NIM_DEEP_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b";
+
 /** Brief/max-depth control request (ECC token-budget-advisor pattern): the
  *  owner explicitly asks for a SHORT answer — we honor it with a system hint
  *  instead of dumping a wall of text (their budget, their call). Absent the
@@ -207,6 +217,8 @@ export async function continueAnalysis(
   try {
     const groq = await groqRespond(env, step, { prebuiltMessages: messages, topic: "continuation" });
     if (groq) return tidyContinuation(groq);
+    const nim = await nvidiaNimRespond(env, step, { prebuiltMessages: messages, topic: "continuation" });
+    if (nim) return tidyContinuation(nim);
     const or = await openrouterRespond(env, step, { prebuiltMessages: messages, topic: "continuation", deep: true });
     return or ? tidyContinuation(or) : null;
   } catch {
@@ -789,6 +801,65 @@ body: JSON.stringify({
   return ok ? reply : null;
 }
 
+/** NVIDIA NIM generative response (hosted free-trial models) — resilience
+ *  fallback parallel to OpenRouter, plus tool-calling support so JARVIS can
+ *  reach NVIDIA's hosted open models for the same capabilities. Mirrors
+ *  groqRespond's OpenAI-compatible shape; null on any failure so the chain
+ *  stays fail-closed. Uses the free tier on integrate.api.nvidia.com. */
+export async function nvidiaNimRespond(
+  env: Env,
+  userText: string,
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }>; deep?: boolean; tools?: Array<{ type: "function"; function: { name: string; description?: string; parameters?: Record<string, unknown> } }> } = {},
+): Promise<string | null> {
+  const key = env.NVIDIA_NIM_API_KEY;
+  if (!key) return null; // fail-open: not configured
+  const context = opts.context ?? [];
+
+  const messages = opts.prebuiltMessages ?? await buildConversationMessages(
+    env,
+    Number(env.OWNER_TELEGRAM_ID),
+    userText,
+    opts.contextIsEnriched && context.length > 0
+      ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
+      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined, skipUserMessage: opts.skipUserMessage },
+  ).catch(() => buildFallbackMessages(context, userText));
+
+  const model = opts.deep
+    ? (env.NVIDIA_NIM_DEEP_MODEL || NVIDIA_NIM_DEEP_MODEL)
+    : (env.NVIDIA_NIM_MODEL || NVIDIA_NIM_MODEL);
+  let reply: string | null = null;
+  const ok = await withResilience(env, "nvidia_nim", 0, async (timeoutMs) => {
+    const res = await fetchWithTimeout(`${NIM_BASE}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.6,
+        messages,
+        max_tokens: opts.deep ? 4096 : 2200,
+        ...(opts.tools && opts.tools.length > 0 ? { tools: opts.tools } : {}),
+      }),
+    }, timeoutMs);
+    if (!res.ok) return { ok: false, status: res.status };
+    const data = (await res.json()) as { choices?: { message?: { content?: string | null }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+    const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
+    const content = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(raw) : isLikelyTruncated(raw) ? repairTruncatedReply(raw) : raw;
+    if (!content) return { ok: false, status: res.status };
+    reply = content;
+    void trackTokenUsage(
+      env, "nvidia_nim",
+      data.usage?.prompt_tokens ?? messages.reduce((a, m) => a + estimateTokens(m.content ?? ""), 0),
+      data.usage?.completion_tokens ?? estimateTokens(reply),
+      { estimated: data.usage?.prompt_tokens == null || data.usage?.completion_tokens == null },
+    ).catch(() => {});
+    return { ok: true, status: res.status };
+  });
+  return ok ? reply : null;
+}
+
 /** Google Gemini generative response (free-tier gemma) — resilience fallback
  *  to Groq. Mirrors groqRespond's shape; returns null on any failure so the
  *  chain stays fail-closed. Supports a primary + backup API key rotation. */
@@ -923,15 +994,19 @@ export async function workersAiRespond(
   return ok ? reply : null;
 }
 
-/** Generative LLM dispatch with Workers AI → Groq → Gemini resilience ordering.
- *  Returns the first provider that answers, or null if all fail. Source tells
- *  the caller which provider carried the response.
- *  Builds conversation messages ONCE and shares across all providers (4x → 1x). */
+/** Generative LLM dispatch with Workers AI → Groq → NVIDIA NIM → OpenRouter →
+ *  Gemini resilience ordering. Returns the first provider that answers, or null
+ *  if all fail. Source tells the caller which provider carried the response.
+ *  Builds conversation messages ONCE and shares across all providers.
+ *  Because this is the single door back to the LLM, adding NVIDIA NIM here
+ *  gives every JARVIS capability (chat, research, translate, prompt-master,
+ *  context7, subagents, evolution, design) access to NVIDIA's hosted free
+ *  models and tool calling — "plugin" access to all tools from one point. */
 export async function llmRespond(
   env: Env,
   userText: string,
   opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; systemOverride?: string; deep?: boolean } = {},
-): Promise<{ reply: string | null; source: "workers_ai" | "groq" | "openrouter" | "gemini" | "self_ref" | null }> {
+): Promise<{ reply: string | null; source: "workers_ai" | "groq" | "nvidia_nim" | "openrouter" | "gemini" | "self_ref" | null }> {
   // SELF-REFERENTIAL INTERCEPT — the brain's first and most important guard.
   // If the input asks "who are you" or "what can you do", answer directly from
   // the identity's single source of truth. NEVER call an external LLM for this,
@@ -963,27 +1038,34 @@ export async function llmRespond(
   const sharedOpts = { ...opts, prebuiltMessages };
 
   // Provider cascade with circuit-breaker awareness (free-tier smoothing).
-  // Default: Groq (free, strong model) → Workers AI (free edge) → OpenRouter
-  // (free models) → Gemini (free last-resort). Quality first: the owner wants
-  // answers that read like a person, so the best free conversational model
-  // speaks first; Workers AI remains an unlimited resilience backstop.
+  // Default: Groq (free, strong model) → Workers AI (free edge) → NVIDIA NIM
+  // (hosted free trial) → OpenRouter (free models) → Gemini (free last-resort).
+  // Quality first: the owner wants answers that read like a person, so the
+  // best free conversational model speaks first; Workers AI remains an
+  // unlimited resilience backstop. Each addition shares the SAME message
+  // prebuild (1x build → N providers) and the same breaker/retry/token ledger
+  // rails, so every capability routed through llmRespond (chat, research,
+  // translate, prompt-master, context7, subagents, evolution) reaches NVIDIA
+  // NIM automatically — "plugin" access to all tools via one door.
   // Deep mode (research synthesis, hard coding questions): OpenRouter's free
   // reasoning model leads — it reads intent the most accurately — then the
   // usual fallbacks. A provider whose breaker is OPEN is skipped up front
   // (fast-fail) instead of burning an HTTP attempt + latency; its cooldown
   // will reopen it later automatically via half-open probing. D1 reads only
   // happen when the breaker has not been consulted recently (KV warm cache).
-  const preferred: Array<{ p: "workers_ai" | "groq" | "openrouter" | "gemini"; fn: () => Promise<string | null>; src: "workers_ai" | "groq" | "openrouter" | "gemini" }> = (
+  const preferred: Array<{ p: "workers_ai" | "groq" | "nvidia_nim" | "openrouter" | "gemini"; fn: () => Promise<string | null>; src: "workers_ai" | "groq" | "nvidia_nim" | "openrouter" | "gemini" }> = (
     opts.deep
       ? [
           { p: "openrouter", fn: () => openrouterRespond(env, userText, sharedOpts), src: "openrouter" },
           { p: "groq", fn: () => groqRespond(env, userText, sharedOpts), src: "groq" },
           { p: "workers_ai", fn: () => workersAiRespond(env, userText, sharedOpts), src: "workers_ai" },
+          { p: "nvidia_nim", fn: () => nvidiaNimRespond(env, userText, sharedOpts), src: "nvidia_nim" },
           { p: "gemini", fn: () => geminiRespond(env, userText, sharedOpts), src: "gemini" },
         ]
       : [
           { p: "groq", fn: () => groqRespond(env, userText, sharedOpts), src: "groq" },
           { p: "workers_ai", fn: () => workersAiRespond(env, userText, sharedOpts), src: "workers_ai" },
+          { p: "nvidia_nim", fn: () => nvidiaNimRespond(env, userText, sharedOpts), src: "nvidia_nim" },
           { p: "openrouter", fn: () => openrouterRespond(env, userText, sharedOpts), src: "openrouter" },
           { p: "gemini", fn: () => geminiRespond(env, userText, sharedOpts), src: "gemini" },
         ]

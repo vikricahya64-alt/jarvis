@@ -32,6 +32,9 @@ export interface Env {
   OPENROUTER_API_KEY?: string;
   OPENROUTER_MODEL?: string;
   OPENROUTER_DEEP_MODEL?: string;
+  NVIDIA_NIM_API_KEY?: string;
+  NVIDIA_NIM_MODEL?: string;
+  NVIDIA_NIM_DEEP_MODEL?: string;
   CONTEXT7_API_KEY?: string;
   AGENT_TOKEN?: string;
   GITHUB_TOKEN?: string;
