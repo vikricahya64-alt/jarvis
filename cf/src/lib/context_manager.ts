@@ -22,6 +22,7 @@
 //=====================================================================
 
 import { Env, recentContext, searchMemory, searchConversationLog } from "./db";
+import { semanticSearchMemory } from "./memory_vec";
 import { getMoodState, setMoodState, moodSummary, type MoodState } from "./emotion";
 import { topicOverlaps, topicTokens, groqRespond } from "./ai";
 
@@ -579,9 +580,19 @@ export async function buildEnrichedContext(
   //     conversational grounding.
   const topic = opts.topic ?? userText.slice(0, 80);
   const isRecall = detectTopicRecall(userText);
+  // m9-v11.18 SEMANTIC MEMORY: meaning-based recall first (Vectorize +
+  // bge-m3, both free), keyword FTS as the deterministic fallback. The semantic
+  // path understands paraphrases ("tadi kita bahas bekerja remote") that an
+  // exact-match FTS query misses — the fragile part we previously patched with
+  // dictionaries and recall pivots.
+  const searchMem = async (q: string, k: number) => {
+    const sem = await semanticSearchMemory(env, q, k).catch(() => []);
+    if (sem.length > 0) return sem as Array<{ content: string }>;
+    return searchMemory(env, q, k).catch(() => [] as Array<{ content: string }>);
+  };
   const [recent, mems] = await Promise.all([
     recentContext(env, owner, maxRecent).catch(() => [] as Array<{ role: string; content: string }>),
-    searchMemory(env, topic, maxMems).catch(() => [] as Array<{ content: string }>),
+    searchMem(topic, maxMems),
   ]);
 
   if (!isRecall) {
@@ -623,7 +634,7 @@ export async function buildEnrichedContext(
         Number.isFinite(cutoff) ? cutoff : Infinity,
       ).catch(() => [] as Array<{ role: string; content: string; ts: number }>),
       subjects.length >= 2
-        ? searchMemory(env, subjects.join(" "), 4).catch(
+        ? searchMem(subjects.join(" "), 4).catch(
             () => [] as Array<{ content: string }>,
           )
         : Promise.resolve([] as Array<{ content: string }>),

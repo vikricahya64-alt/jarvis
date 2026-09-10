@@ -695,7 +695,10 @@ export async function groqRespond(
 
   let reply: string | null = null;
   const ok = await withResilience(env, "groq", 0, async (timeoutMs) => {
-    const res = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
+    // m9-v11.18 AI GATEWAY: when AI_GATEWAY_URL is set, route egress through
+    // Cloudflare's free AI Gateway (observability + cache + rate limit).
+    const base = env.AI_GATEWAY_URL ? `${env.AI_GATEWAY_URL}/groq/v1` : "https://api.groq.com/openai/v1";
+    const res = await fetchWithTimeout(`${base}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -752,7 +755,8 @@ export async function openrouterRespond(
     : (env.OPENROUTER_MODEL || OPENROUTER_MODEL);
   let reply: string | null = null;
   const ok = await withResilience(env, "openrouter", 0, async (timeoutMs) => {
-    const res = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
+    const base = env.AI_GATEWAY_URL ? `${env.AI_GATEWAY_URL}/openrouter/v1` : "https://openrouter.ai/api/v1";
+    const res = await fetchWithTimeout(`${base}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -820,8 +824,11 @@ export async function geminiRespond(
     const model = env.GEMINI_MODEL || GEMINI_FREE_MODEL;
     let reply: string | null = null;
     const ok = await withResilience(env, "gemini", 1, async (timeoutMs) => {
+      const base = env.AI_GATEWAY_URL
+        ? `${env.AI_GATEWAY_URL}/google-ai-studio/v1beta/models`
+        : GEMINI_API;
       const res = await fetchWithTimeout(
-        `${GEMINI_API}${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        `${base}/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
