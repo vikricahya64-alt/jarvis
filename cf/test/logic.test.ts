@@ -1550,6 +1550,15 @@ function testProseRails() {
   const final = buildFinalReply(leaked, "research", "neutral");
   assert.ok(!final.includes("- Situs resmi"), "buildFinalReply research output is prose");
   assert.ok(!final.includes("]("), "buildFinalReply research output has no markdown links");
+
+  // m9-v11.22: word-ordinal enumeration ("Pertama, … Kedua, … Kelima, …") — the
+  // live search-leak shape — flattens into flowing prose, never stays a list.
+  const ordinal = "Pertama, fleksibilitas waktu. Kedua, menghindari perjalanan. Kelima, biaya lebih hemat.";
+  const flatOrd = proseifyResearch(ordinal);
+  assert.ok(!/[A-Z]ertama,/.test(flatOrd), "word-ordinal opener stripped: " + flatOrd);
+  assert.ok(!/[A-Z]edua,/.test(flatOrd), "word-ordinal second marker stripped: " + flatOrd);
+  assert.ok(!/[A-Z]elima,/.test(flatOrd), "word-ordinal fifth marker stripped: " + flatOrd);
+  assert.ok(/fleksibilitas waktu/.test(flatOrd) && /biaya lebih hemat/.test(flatOrd), "list content survives as prose");
 }
 
 async function main() {
