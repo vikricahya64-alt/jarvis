@@ -23,7 +23,7 @@ import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, 
 import { isInternalEchoDump, isAdminChaff } from "../src/lib/db";
 import { semanticSearchMemory, semanticUpsertMemory } from "../src/lib/memory_vec";
 import { probeProviders } from "../src/lib/providers";
-import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation } from "../src/lib/intelligence";
+import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation, translateInput } from "../src/lib/intelligence";
 
 const FAKE_ENV = {
   CLARITY_GATE: "0.95",
@@ -1411,6 +1411,44 @@ async function testMenuGuard() {
   assert.ok(missing.includes("belum berhasil menemukan"), "empty recall degrades into an honest line");
 }
 
+async function testInputDoor() {
+  // m9-v11.21 INPUT DOOR: the owner's natural sentence is TRANSLATED into a
+  // structured task — a clean directive + params + raw payload — so the module
+  // never re-parses human phrasing. Mirrors the output door (naturalize back
+  // into a reply): both doors are where naturalization/understanding happen.
+
+  const perception = {
+    topic: "bekerja remote",
+    intent: { type: "search", entities: { topic: "bekerja remote" } },
+    enrichedContext: [{ role: "user", content: "[Riwayat percakapan sebelumnya] pemilik: bekerja remote" }],
+  } as any;
+  const task = translateInput(
+    "tolong cari kelebihan bekerja remote",
+    perception,
+    { approach: "search_synthesize" } as any,
+  );
+  assert.strictEqual(task.module, "search_synthesize", "input door routes to the right module");
+  assert.strictEqual(task.directive, "cari kelebihan bekerja remote", "gesture verb stripped, ask preserved");
+  assert.strictEqual(task.params.topic, "bekerja remote", "params carry extracted topic");
+  assert.deepEqual(task.payload, perception.enrichedContext, "raw payload passes through untouched (modules process data)");
+
+  // Non-gesture natural text stays intact.
+  const chatTask = translateInput(
+    "apa yang kamu ingat tentang bekerja remote",
+    { topic: "bekerja remote", intent: { entities: {} }, enrichedContext: [] } as any,
+    { approach: "simple_llm" } as any,
+  );
+  assert.strictEqual(chatTask.directive, "apa yang kamu ingat tentang bekerja remote", "question phrasing is not mangled");
+
+  // Commands with a leading verb are NOT gesture-stripped.
+  const cmdTask = translateInput(
+    "hapus semua memori lama",
+    { topic: null, intent: { entities: {} }, enrichedContext: [] } as any,
+    { approach: "simple_llm" } as any,
+  );
+  assert.strictEqual(cmdTask.directive, "hapus semua memori lama", "real command verb survives the door");
+}
+
 async function testFreeServiceLayers() {
   // m9-v11.18 SEMANTIC MEMORY: the whole Vectorize/embedding layer must no-op
   // (never throw) when the bindings or a model are absent — FTS stays the
@@ -1504,6 +1542,7 @@ async function main() {
   await testTopicRecall();
   await testRecallSubjects();
   await testMenuGuard();
+  await testInputDoor();
   await testFreeServiceLayers();
   await testAdminChaff();
   console.log("SAFETY TESTS PASSED");
