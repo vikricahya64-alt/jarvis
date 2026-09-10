@@ -878,8 +878,11 @@ export async function act(
       // PLUS a real flux image of the subject — flux is merged into the image
       // generation path. Fail-closed: outline failure falls back to search;
       // image failure degrades to text-only.
-      const outline = await llmRespond(env, `Buat konsep desain singkat (4-6 baris, markdown) untuk: "${d}".\nTermasuk: ide utama, gaya visual, warna dominan, dan elemen utama. Bahasa Indonesia. Jangan sebut storyboard/keyframe/video.` , {
+      const outline = await llmRespond(env, d, {
         topic: `desain-${topic}`,
+        contextIsEnriched: true,
+        context: [{ role: "system", content: `Buat konsep desain singkat (4-6 baris, prose paragraphs) untuk: "${d}".\nTermasuk: ide utama, gaya visual, warna dominan, dan elemen utama. Bahasa Indonesia. Jangan sebut storyboard/keyframe/video.` }],
+        systemOverride: buildUniversalFrame({ text: d, topic, perception, context: enrichedContext }),
       }).catch(() => null);
       let image: { bytes: Uint8Array; mime: string } | undefined;
       try {
