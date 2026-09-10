@@ -25,7 +25,7 @@ import {
   setPrivacyMode, isPrivacyMode,
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
-import { queueStatus, recordTaskCounters, recentContext } from "../lib/db";
+import { queueStatus, recordTaskCounters, recentContext, auditIntegrity } from "../lib/db";
 import { extractTopic, parseTranslate, translateText, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, storeResearchAnchor } from "../lib/ai";
 import { getWeatherText } from "../lib/weather";
 
@@ -409,6 +409,23 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     await safeDBReply(env, r, async () => {
       const paused = await isAutonomyPaused(env, r);
       return statusReport(paused);
+    });
+    return new Response("ok", { status: 200 });
+  }
+  // /audit_status (and the typo-prone bare /auditstatus) — read-only integrity
+  // report over the append-only audit tables. Mirrors the HTTP admin endpoint
+  // (index.ts /audit_status) so the chat edge and the HTTP edge answer the
+  // SAME deterministic data — never the LLM, whose invented "Audit Status"
+  // report format used to drift into every following turn.
+  if (trimmed === "/audit_status" || trimmed === "/auditstatus") {
+    await safeDBReply(env, r, async () => {
+      const a = await auditIntegrity(env);
+      const lines = ["🔎 *Audit Integritas (append-only)*", ""];
+      for (const [t, v] of Object.entries(a)) {
+        const state = v.count < 0 ? "⚠️ tak tersedia" : v.gap ? "⚠️ CELAH TERDETEKSI" : "✅ utuh";
+        lines.push(`• \`${t}\`: ${v.count} baris${v.maxId >= 0 ? ` (max id ${v.maxId})` : ""} — ${state}`);
+      }
+      return lines.join("\n");
     });
     return new Response("ok", { status: 200 });
   }

@@ -524,13 +524,50 @@ export function isInternalEchoDump(content: string): boolean {
   );
 }
 
+/** Admin slash-command stems that are DIAGNOSTIC chatter, not conversation.
+ *  Determined deterministically at the webhook edge; they must never reach the
+ *  LLM brain nor be replayed into its context. The owner-facing equivalent of
+ *  the HTTP admin surface (/status, /audit_status, …). Kept out of the LLM:
+ *  a bare "/audit_status" falling through to the model produced the literal
+ *  "Audit Status" drift that then anchored every following turn. */
+const ADMIN_SLASH_STEMS = new Set([
+  "audit_status", "auditstatus", "audit", "status", "dms_status",
+  "queue_status", "health", "privacy", "debug_bypass", "obedience_report",
+  "checkin", "stop", "kill", "pause", "pause_autonomy", "resume",
+  "resume_autonomy", "covenant_status", "debug", "ai_diag", "setwebhook",
+]);
+
+/** m9-v11.9: admin/diagnostic chatter is NOT conversation. Matches (a) any
+ *  bare slash-command turn for an admin endpoint ("/audit_status", "/status")
+ *  and (b) assistant replies that discuss slash-command names or the literal
+ *  audit-status drift shapes ("Maksud Anda dengan perintah '/auditstatus'…").
+ *  Applied at the write source (appendMemory) and both read paths
+ *  (recentContext, searchConversationLog) so these turns can never anchor or
+ *  be recalled into the LLM context. Conversational slash commands (/tugas,
+ *  /todo, /cari, /mark_stop, …) keep their commands + follow-ups. */
+export function isAdminChaff(role: "user" | "assistant", content: string): boolean {
+  if (!content) return false;
+  const trimmed = content.trim();
+  if (role === "user") {
+    const m = trimmed.match(/^\/([a-zA-Z_0-9]+)(?:\s+\S.*)?$/);
+    return !!m && ADMIN_SLASH_STEMS.has(m[1].toLowerCase());
+  }
+  return (
+    /perintah\s+['"`]?\/(?:audit_status|auditstatus|audit|status|dms_status|queue_status|obedience_report|debug_bypass)/.test(trimmed) ||
+    /\/(?:audit_status|auditstatus)\b/i.test(trimmed) ||
+    /(?:audit\s*status|status\s+audit)\s*(?:percakapan|dialog|cek|status|keadaan|logging|tindakan|anda|kamu)?\b/i.test(trimmed)
+  );
+}
+
 /** Append a turn to the conversation log (bounded). Returns true. When
  *  privacy_mode is on, the write is skipped (owner `/privacy on` switch). */
 export async function appendMemory(env: Env, owner: number, role: "user" | "assistant", content: string, searchUsed = ""): Promise<void> {
   try {
     if ((await (await getDmsConfig(env, owner)).privacy_mode)) return;
-    // Never re-persist an internal-state dump (m9-v11.7) — user turns are
-    // always kept, only assistant echo-turns are dropped at the source.
+    // Never re-persist an internal-state dump (m9-v11.7) nor admin/diagnostic
+    // chatter (m9-v11.9) — both are machine-generated noise that would replay
+    // into the LLM as "conversation" and anchor it onto admin concepts.
+    if (isAdminChaff(role, content)) return;
     if (role === "assistant" && isInternalEchoDump(content)) return;
     await env.DB.prepare(
       `INSERT INTO conversation_log (owner_id, ts, role, content, search_used) VALUES (?, ?, ?, ?, ?)`,
@@ -568,6 +605,7 @@ export async function searchConversationLog(
        ORDER BY ts DESC LIMIT ?`,
     ).bind(...params, Math.min(120, n * 8)).all<{ role: string; content: string; ts: number }>();
     const scored = (results ?? [])
+      .filter((r) => !isAdminChaff(r.role as "user" | "assistant", r.content))
       .filter((r) => r.role !== "assistant" || !isInternalEchoDump(r.content))
       .map((r) => {
         const rc = (r.content || "").toLowerCase();
@@ -590,7 +628,10 @@ export async function recentContext(env: Env, owner: number, n = 6): Promise<Arr
     ).bind(owner, n).all<{ role: string; content: string; ts: number }>();
     // m9-v11.7: never hand an internal-state dump back to any consumer — the
     // persisted echo would keep steering new turns into the same drift.
+    // m9-v11.9: admin/diagnostic chatter is excluded too, so a stale
+    // "/audit_status" or its reply can no longer anchor the next 6 turns.
     return (results ?? [])
+      .filter((r) => !isAdminChaff(r.role as "user" | "assistant", r.content))
       .filter((r) => r.role !== "assistant" || !isInternalEchoDump(r.content))
       .reverse().map((r) => ({ role: r.role, content: r.content, ts: r.ts }));
   } catch {
