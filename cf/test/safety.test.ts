@@ -19,8 +19,8 @@ import {
 import { validateAction, conflictScore } from "../src/lib/constitutional_guard";
 import { unknownEntitySignal } from "../src/lib/ai";
 import { isDesignIntent } from "../src/lib/subagents";
-import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, detectTopicRecall } from "../src/lib/context_manager";
-import { isInternalEchoDump } from "../src/lib/db";
+import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, detectTopicRecall, topicRecallSubjects } from "../src/lib/context_manager";
+import { isInternalEchoDump, isAdminChaff } from "../src/lib/db";
 
 const FAKE_ENV = {
   CLARITY_GATE: "0.95",
@@ -1287,6 +1287,61 @@ async function testTopicRecall() {
   }
 }
 
+async function testRecallSubjects() {
+  // m9-v11.9: the recall SUBJECT must be stripped down to the clean FTS-usable
+  // tokens — a raw query like "tadi kita bahas bekerja remote" would never
+  // match memory rows verbatim (AND-query on filler words breaks FTS).
+  const s = topicRecallSubjects("tadi kita bahas bekerja remote");
+  assert.ok(Array.isArray(s), "topicRecallSubjects returns an array");
+  assert.ok(s.includes("bekerja"), `subject must keep "bekerja" (got [${s.join(", ")}])`);
+  assert.ok(s.includes("remote"), `subject must keep "remote" (got [${s.join(", ")}])`);
+  for (const filler of ["tadi", "kita", "bahas"]) {
+    assert.ok(!s.includes(filler), `subject must strip connector "${filler}"`);
+  }
+  assert.ok(topicRecallSubjects("terus").length === 0, "bare continuation yields no subject");
+}
+
+async function testAdminChaff() {
+  // m9-v11.9: admin/diagnostic chatter is NOT conversation. The bare slash
+  // commands (the /audit_status the LLM kept echoing) and the replies that
+  // discuss them by name must never reach the LLM context or be re-persisted.
+  const chaffUser = [
+    "/audit_status", "/auditstatus", "/status", "/health",
+    "/dms_status", "/queue_status", "/obedience_report", "/privacy on",
+  ];
+  for (const c of chaffUser) {
+    assert.strictEqual(isAdminChaff("user", c), true, `user admin chaff: "${c}"`);
+  }
+  // Conversational/action slash commands keep their commands AND follow-ups.
+  const keepUser = [
+    "/tugas list", "/tugas buat skrip python", "/cari artikel sejarah komputer",
+    "/mark_stop jangan kirim berita", "/never kirim berita malam", "/todo",
+    "/remind saya minum jam 3", "/figma", "/notion search desain",
+  ];
+  for (const c of keepUser) {
+    assert.strictEqual(isAdminChaff("user", c), false, `conversational command kept: "${c}"`);
+  }
+  // Free text about audit is REAL conversation — only the bare command + its
+  // interpretive replies are chaff.
+  assert.strictEqual(isAdminChaff("user", "apa itu audit status"), false, "free-text audit topic is conversation");
+  // Assistant replies interpreting slash commands / drifting into status-audit talk.
+  const chaffAsst = [
+    "Maksud Anda dengan perintah '/auditstatus' ini?",
+    "Apakah Anda ingin saya menampilkan status audit percakapan ini?",
+    "perintah '/audit_status' tidak dapat ditampilkan.",
+  ];
+  for (const c of chaffAsst) {
+    assert.strictEqual(isAdminChaff("assistant", c), true, `assistant admin chaff: "${c}"`);
+  }
+  const keepAsst = [
+    "Kelebihan bekerja remote adalah fleksibilitas waktu.",
+    "Audit integritas data mencatat tidak ada celah pada tabel.",
+  ];
+  for (const c of keepAsst) {
+    assert.strictEqual(isAdminChaff("assistant", c), false, `real assistant reply kept: "${c}"`);
+  }
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -1317,6 +1372,8 @@ async function main() {
   await testWorkingMemoryLeaks();
   await testInternalDumpSanitization();
   await testTopicRecall();
+  await testRecallSubjects();
+  await testAdminChaff();
   console.log("SAFETY TESTS PASSED");
 }
 

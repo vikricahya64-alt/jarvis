@@ -319,6 +319,25 @@ export function detectTopicContinuity(
   return { isContinuation: false, topic: null, confidence: 0.3 };
 }
 
+/** Significant subject tokens behind a topic-recall signal ("bekerja remote"
+ *  from "tadi kita bahas bekerja remote") — markers AND conversational
+ *  connectors stripped, so the result is the CLEAN subject usable as an FTS
+ *  AND-query too ("bekerja" + "remote" match memory rows; the filler "kita
+ *  bahas" would silently break FTS matching). Shared by detectTopicRecall AND
+ *  the recall-branch search so both engines query the SAME clean subject. */
+const RECALL_STOP = new Set([
+  "tadi", "barusan", "kemarin", "kemaren", "sebelumnya", "terakhir",
+  "itu", "ini", "lalu", "balik", "kembali", "lanjut", "lanjutkan",
+  "lanjutin", "terus", "soal", "tentang", "masalah", "topik", "waktu",
+  "kita", "saya", "aku", "kami", "kamu", "bahas", "bicarakan",
+  "omong", "ngomong", "membahas", "dibahas", "yang", "mau", "sama",
+  "lagi", "dulu", "ke", "di", "dari", "pada", "saja", "aja",
+]);
+export function topicRecallSubjects(text: string): string[] {
+  if (!text || typeof text !== "string") return [];
+  return topicTokens(text).filter((t) => !RECALL_STOP.has(t));
+}
+
 /** m9-v11.8: true when the message signals RETURNING to an EARLIER topic —
  *  the human "I remember we talked about X earlier" dispatch that lets a chat
  *  roam across topics ("lanjutkan desain pasir pantai yang tadi", "balik ke
@@ -332,10 +351,7 @@ export function detectTopicRecall(text: string): boolean {
   const recallMarkers =
     /\b(?:tadi|barusan|kemarin|kemaren|sebelumnya|terakhir|waktu\s+itu|tadi\s+(?:kita|saya|aku|kami)?\s*(?:bahas|bicarakan|omong\w*|soal|tentang)|soal\s+\w+\s+tadi|yang\s+tadi|yg\s+tadi|tadi\s+itu|tadi\s+(?:aja|saja)|balik\s+(?:ke|lagi)|kembali\s+ke|lanjut(?:kan|in)?\s+(?:soal|tentang|ke|di|dimana|mana)|masalah\s+tadi|topik\s+tadi)\b/i;
   if (!recallMarkers.test(low)) return false;
-  const subject = topicTokens(text).filter(
-    (t) => !/^(?:tadi|barusan|kemarin|kemaren|sebelumnya|terakhir|itu|lalu|balik|kembali|lanjut|lanjutkan|lanjutin|soal|tentang|masalah|topik|waktu)$/.test(t),
-  );
-  return subject.length >= 2;
+  return topicRecallSubjects(text).length >= 2;
 }
 
 /** Update working memory based on conversation context.
@@ -517,29 +533,60 @@ export async function buildEnrichedContext(
   // ("yang tadi", "balik ke soal X", "tadi kita bahas Y") pull that older
   // history into context — the reference humans use to re-enter a topic mid-
   // chat. Excludes turns already served as recent context; reference-only.
+  // m9-v11.9: ALSO queries the durable FTS memories (session/KV threads can
+  // rotate out of the 100-turn log, but curated memories survive rotation),
+  // using the recall's CLEAN subject tokens — the raw text failed FTS match
+  // ("tadi kita bahas bekerja remote" never appears in memory verbatim).
   if (detectTopicRecall(userText)) {
     const cutoff = recent.reduce<number>((m, r) => {
       const ts = (r as { ts?: number }).ts;
       return typeof ts === "number" && ts < m ? ts : m;
     }, Infinity);
-    const recalled = await searchConversationLog(
-      env, owner, topicTokens(userText), 6,
-      Number.isFinite(cutoff) ? cutoff : Infinity,
-    ).catch(() => [] as Array<{ role: string; content: string; ts: number }>);
-    if (recalled.length > 0) {
-      const lines = recalled.map((r) => {
-        const who = r.role === "user" ? "pemilik" : "kamu";
-        return `${who}: ${(r.content || "").slice(0, 220)}`;
-      });
+    const subjects = topicRecallSubjects(userText);
+    const [recalled, recalledMems] = await Promise.all([
+      searchConversationLog(
+        env, owner, subjects.length >= 2 ? subjects : topicTokens(userText), 6,
+        Number.isFinite(cutoff) ? cutoff : Infinity,
+      ).catch(() => [] as Array<{ role: string; content: string; ts: number }>),
+      subjects.length >= 2
+        ? searchMemory(env, subjects.join(" "), 4).catch(
+            () => [] as Array<{ content: string }>,
+          )
+        : Promise.resolve([] as Array<{ content: string }>),
+    ]);
+    const recalledLines: string[] = recalled.map((r) => {
+      const who = r.role === "user" ? "pemilik" : "kamu";
+      return `${who}: ${(r.content || "").slice(0, 220)}`;
+    });
+    for (const m of recalledMems.slice(0, 3)) {
+      recalledLines.push(`kenangan: ${(m.content || "").slice(0, 180)}`);
+    }
+    if (recalledLines.length > 0) {
       const recallText =
         `[Riwayat percakapan sebelumnya — KONTEKS INTERNAL saja, bukan bahan kutipan]: ` +
-        lines.join(" | ").slice(0, Math.min(1200, charBudget)) +
+        recalledLines.join(" | ").slice(0, Math.min(1400, charBudget)) +
         `. Pemilik sedang menunjuk kembali ke topik yang pernah dibahas ini. ` +
         `Pakai sebagai referensi untuk melanjutkan; JANGAN kutip verbatim dan ` +
         `JANGAN tampilkan riwayat sebagai bagian jawaban.`;
       if (recallText.length < charBudget) {
         context.push({ role: "system", content: recallText });
         charBudget -= recallText.length;
+      }
+    } else {
+      // m9-v11.9: the recall signal fired but the older thread is NOT in
+      // memory. Without this rail the model anchored onto the MOST RECENT
+      // stale thread (the audit-status cascade) and answered as if the owner
+      // typed "/auditstatus" again. Tell it plainly instead of guessing.
+      const missText =
+        `[Catatan riwayat]: Pemilik menunjuk kembali ke topik yang pernah dibahas ` +
+        `sebelumnya, tapi kamu TIDAK menemukan riwayat topik itu di memori. ` +
+        `JANGAN mengalihkan ke topik lain dari riwayat terbaru (mis. laporan ` +
+        `status/audit) dan JANGAN menebak isi topik lamanya. Jawab jujur singkat ` +
+        `bahwa riwayat topik itu sudah tidak tersimpan, lalu minta pemilik ` +
+        `mengingatkan inti konteksnya.`;
+      if (missText.length < charBudget) {
+        context.push({ role: "system", content: missText });
+        charBudget -= missText.length;
       }
     }
   }
