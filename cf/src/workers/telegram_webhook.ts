@@ -2020,7 +2020,7 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
     const items = await listAgentTasks(env, from, 15);
     if (!items.length) {
       await fire(sendMessage(env, from,
-        "📦 *Tugas serverless*\n\nBelum ada tugas. Kirim: `/tugas <pekerjaan>` (mis. `/tugas riset kompetitor AI 2026 jadi laporan markdown`).\n\nBisa juga: `/tugas <pekerjaan> setiap Senin 09:00` (jadwal berulang), `/tugas lanjut <id>` (ulang tugas), `/tugas tanya <id> <soal>` (tanya hasil), `/tugas hapus <id>`.\n\n💡 Eksekutor cloud (GitHub Actions + opencode) untuk *kemampuan berat* yang tak bisa kubuh sendiri — eksekusi nyata (shell/file/browser/riset). Untuk tanya-jawab biasa, cukup chat langsung."));
+        "📦 *Tugas serverless*\n\nBelum ada tugas. Kirim: `/tugas <pekerjaan>` (mis. `/tugas riset kompetitor AI 2026 jadi laporan markdown`).\n\nBisa juga: `/tugas --riset <pekerjaan>` (laporan bersumber), `/tugas <pekerjaan> setiap Senin 09:00` (jadwal berulang), `/tugas lanjut <id>` (ulang tugas), `/tugas tanya <id> <soal>` (tanya hasil), `/tugas hapus <id>`.\n\n💡 Eksekutor cloud (GitHub Actions + opencode) untuk *kemampuan berat* yang tak bisa kubuh sendiri — eksekusi nyata (shell/file/browser/riset). Input diteruskan apa adanya; tambah `--riset` untuk laporan bersumber. Untuk tanya-jawab biasa, cukup chat langsung."));
       return;
     }
     const lines = items.map((t) => {
