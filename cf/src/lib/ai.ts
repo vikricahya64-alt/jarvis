@@ -1474,7 +1474,7 @@ export async function searchAndSynthesize(
   owner: number,
   userText: string,
   topic: string,
-  opts: { followupPrior?: string } = {},
+  opts: { followupPrior?: string; replyLang?: string } = {},
 ): Promise<{ reply: string; source: string }> {
   // SELF-REFERENTIAL GUARD — if a self-referential question somehow reaches the
   // search path, answer directly from identity instead of searching/hallucinating.
@@ -1533,7 +1533,7 @@ export async function searchAndSynthesize(
     // returns null, fall through to single-pass (never burns budget twice).
     // M8-v27: institutional asks bypass orchestration → deterministic single-pass
     // with site:-filtered institutional hits (the frame owns the whole pipeline).
-    const sub = await orchestrateResearch(env, owner, userText, topic, followupAnchor);
+    const sub = await orchestrateResearch(env, owner, userText, topic, followupAnchor, opts.replyLang ?? "");
     if (sub) {
       if (sub.length > 120) void reflectOnTurn(env, userText, sub, []).catch(() => {});
       return { reply: sub, source: "subagents" };
@@ -1611,6 +1611,7 @@ export async function searchAndSynthesize(
       `BICARALAH JADI MANUSIA BIASA: langsung ke inti, pilih 1–2 poin paling berdampak ` +
       `(jangan mendaftar semua kemungkinan), pakai kalimat sehari-hari yang pendek, ` +
       `dan berhenti begitu pertanyaan sudah terjawab — kalau cukup 2 kalimat, jangan 10. ` +
+      (opts.replyLang ? `JAWABLAH DALAM BAHASA: ${opts.replyLang}. Seluruh jawaban (kalimat, sapaan, pertanyaan penutup) ditulis dalam bahasa itu. ` : "") +
       `JANGAN menambah topik atau informasi yang TIDAK diminta oleh pemilik. ` +
       `Jika pertanyaan sudah terjawab, BERHENTI — jangan lanjut ke topik lain. ` +
       `Tutup dengan SATU pertanyaan lanjutan yang alami dan relevan dengan topik ` +

@@ -956,6 +956,12 @@ export async function act(
   const task = translateInput(text, perception, strategy);
   const d = task.directive;
   const { topic, enrichedContext } = perception;
+  // m9-v11.32 ROOT COMPREHENSION → reply language for EVERY ability: research,
+  // search, design all answer in the language the owner actually used.
+  const replyLang =
+    perception.comprehension.language.code === "unknown"
+      ? ""
+      : perception.comprehension.language.name;
 
   switch (strategy.approach) {
     case "self_referential":
@@ -987,7 +993,7 @@ export async function act(
       const outline = await llmRespond(env, d, {
         topic: `desain-${topic}`,
         contextIsEnriched: true,
-        context: [{ role: "system", content: `Buat konsep desain singkat (4-6 baris, prose paragraphs) untuk: "${d}".\nTermasuk: ide utama, gaya visual, warna dominan, dan elemen utama. Bahasa Indonesia. Jangan sebut storyboard/keyframe/video.` }],
+        context: [{ role: "system", content: `Buat konsep desain singkat (4-6 baris, prose paragraphs) untuk: "${d}".\nTermasuk: ide utama, gaya visual, warna dominan, dan elemen utama. ${replyLang ? `Tulis dalam bahasa ${replyLang}. ` : "Bahasa Indonesia. "}Jangan sebut storyboard/keyframe/video.` }],
         systemOverride: buildUniversalFrame({ text: d, topic, perception, context: enrichedContext }),
       }).catch(() => null);
       let image: { bytes: Uint8Array; mime: string } | undefined;
@@ -1000,23 +1006,23 @@ export async function act(
         console.error("orchestrate_design image failed:", String(e).slice(0, 120));
       }
       if (outline?.reply) return { reply: outline.reply.slice(0, 900), source: "design", image };
-      const fallback = await searchAndSynthesize(env, owner, d, topic);
+      const fallback = await searchAndSynthesize(env, owner, d, topic, { replyLang });
       return { reply: fallback.reply ?? "Gagal memproses desain.", source: "design_fallback", image };
     }
 
     case "orchestrate_research": {
       if (!topic) return { reply: "Topik tidak ditemukan.", source: "research" };
       const anchor = isFollowUpQuery(d) ? resolveFollowUpAnchor(enrichedContext)?.prior ?? "" : "";
-      const result = await orchestrateResearch(env, owner, d, topic, anchor);
+      const result = await orchestrateResearch(env, owner, d, topic, anchor, replyLang);
       if (result) return { reply: result, source: "research" };
       // Fallback to search
-      const fallback = await searchAndSynthesize(env, owner, d, topic);
+      const fallback = await searchAndSynthesize(env, owner, d, topic, { replyLang });
       return { reply: fallback.reply ?? "Gagal melakukan riset.", source: "research_fallback" };
     }
 
     case "search_synthesize": {
       if (!topic) return { reply: "Topik tidak ditemukan.", source: "search" };
-      const result = await searchAndSynthesize(env, owner, d, topic);
+      const result = await searchAndSynthesize(env, owner, d, topic, { replyLang });
       return { reply: result.reply ?? "Pencarian tidak menghasilkan jawaban.", source: result.source ?? "search" };
     }
 
