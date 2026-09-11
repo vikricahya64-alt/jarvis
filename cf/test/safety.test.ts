@@ -21,6 +21,7 @@ import { unknownEntitySignal } from "../src/lib/ai";
 import { isDesignIntent } from "../src/lib/subagents";
 import { updateWorkingMemory, wmTopicRelevant, getSession, buildContextSummary, detectTopicRecall, topicRecallSubjects, extractRecallSubject, isMenuOfferQuestion, stripAssistantRecallJunk } from "../src/lib/context_manager";
 import { isInternalEchoDump, isAdminChaff } from "../src/lib/db";
+import { cmdAlias, isBareUnknownSlashCmd } from "../src/workers/telegram_webhook";
 import { semanticSearchMemory, semanticUpsertMemory } from "../src/lib/memory_vec";
 import { probeProviders } from "../src/lib/providers";
 import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation, translateInput, hasDegenerateEcho, isAcknowledgeOnly } from "../src/lib/intelligence";
@@ -1435,6 +1436,25 @@ async function testMenuGuard() {
 
   const missing = deterministicRecallContinuation({ content: "[Riwayat percakapan sebelumnya] (tidak ditemukan)." });
   assert.ok(missing.includes("belum berhasil menemukan"), "empty recall degrades into an honest line");
+
+  // m9-v11.28: underscore-less slash aliases the owner actually types
+  // ("/queuestatus", "/dmsstatus", "/obediencereport") must resolve to the
+  // real commands, and a bare unmatched slash must be caught deterministically
+  // instead of leaking into the LLM chat (live: "/dmsstatus" answered with a
+  // stray 'kerja remote' memory bleed).
+  assert.strictEqual(cmdAlias("/queuestatus", "/queue_status"), true, "bare queue_status alias");
+  assert.strictEqual(cmdAlias("/dmsstatus", "/dms_status"), true, "bare dms_status alias");
+  assert.strictEqual(cmdAlias("/obediencereport", "/obedience_report"), true, "bare obedience_report alias");
+  assert.strictEqual(cmdAlias("/maestrostatus", "/maestro_status"), true, "bare maestro_status alias");
+  assert.strictEqual(cmdAlias("/status", "/status"), true, "exact match still works");
+  assert.strictEqual(cmdAlias("/st", "/status"), false, "partial match is not an alias");
+  assert.strictEqual(cmdAlias("/hello", "/status"), false, "unrelated command is not an alias");
+  assert.strictEqual(isBareUnknownSlashCmd("/foobar"), true, "bare unknown command caught");
+  assert.strictEqual(isBareUnknownSlashCmd("/queue_status"), true, "known-but-unmatched bare form also caught");
+  assert.strictEqual(isBareUnknownSlashCmd("/cari topik ini"), false, "command with args is not bare");
+  assert.strictEqual(isBareUnknownSlashCmd("tadi kita bahas bekerja remote"), false, "natural sentence is not a command");
+  assert.strictEqual(isBareUnknownSlashCmd("https://a.b/c"), false, "URL is not a bare command");
+  assert.strictEqual(isBareUnknownSlashCmd("/"), false, "bare slash alone is not a command");
 
   // m9-v11.27: the acknowledge-only stub must be recognized as a failure so the
   // content-forced retry can fire; a genuine contentful answer must not.
