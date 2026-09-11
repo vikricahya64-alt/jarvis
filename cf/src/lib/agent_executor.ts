@@ -23,10 +23,23 @@ const GITHUB_API = "https://api.github.com/repos/";
 
 export type DelegateResult = { runId?: string; error?: string };
 
-/** Source-cited report protocol appended to every delegated task (P2
- *  deep-research parity): the executor must separate verifiable facts from
- *  judgments and give a live source URL per claim. Keeps JARVIS's audit
- *  discipline intact end-to-end — the DM the owner receives stays sourced. */
+/** True when the delegated task carries the "--riset" flag. */
+export function usesDeepResearchProtocol(task: string): boolean {
+  return /^--riset\b/i.test((task ?? "").trimStart());
+}
+
+/** Strip the "--riset" flag (forward the rest verbatim). */
+export function stripDeepResearchFlag(task: string): string {
+  return usesDeepResearchProtocol(task)
+    ? task.trimStart().replace(/^--riset\b\s*/i, "").trim()
+    : task;
+}
+
+/** Source-cited report protocol appended ONLY when the owner opts in with the
+ *  "--riset" prefix (P2 deep-research parity): the executor must separate
+ *  verifiable facts from judgments and give a live source URL per claim.
+ *  Default delegation forwards the task VERBATIM (pure bridge) so the report
+ *  faithfully answers the literal request without extra scaffolding. */
 const DEEP_RESEARCH_PROTOCOL = `
 
 PROTOKOL LAPORAN (wajib):
@@ -56,7 +69,8 @@ export async function delegateToGithub(
   const token = env.GITHUB_TOKEN ?? "";
   if (!repo) return { error: "executor-not-configured" };
 
-  const payload = `${task}${DEEP_RESEARCH_PROTOCOL}`.slice(0, 3800);
+  const cleanTask = stripDeepResearchFlag(task);
+  const payload = (usesDeepResearchProtocol(task) ? `${cleanTask}${DEEP_RESEARCH_PROTOCOL}` : cleanTask).slice(0, 3800);
   const [owner, repoName] = repo.split("/");
 
   // Path 1: Vercel Connector (repository_dispatch with token server-side).
