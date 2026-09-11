@@ -26,6 +26,7 @@ import {
   type EmotionSignal, type MoodState,
 } from "./emotion";
 import { detectLanguage, type Language } from "./jarvis_language";
+import { comprehend, comprehensionNote, LANG_NAMES, type ComprehensionProfile } from "./comprehension";
 import {
   getSession, type SessionState,
   detectConversationMode, detectTopicContinuity,
@@ -64,6 +65,10 @@ import { probeProviders } from "./providers";
 /** Perception result — what the brain understands about the input. */
 export interface Perception {
   language: Language;
+  /** m9-v11.32: ROOT comprehension engine — universal language, literacy
+   *  register, and knowledge-domain awareness. Aditif; cabang lain tetap
+   *  memakai `language`/`intent` lama. */
+  comprehension: ComprehensionProfile;
   emotion: EmotionSignal;
   mood: MoodState;
   intent: IntentResult;
@@ -200,6 +205,7 @@ export async function perceive(
 
   return {
     language,
+    comprehension: comprehend(text),
     emotion,
     mood,
     intent,
@@ -810,6 +816,22 @@ export function buildUniversalFrame(opts: {
   // recommendation paragraph, written by the model under this note. Answer and
   // verification stay distinguishable: content answer, then a single crisp
   // verify line inside P2 — never a menu opener.
+  // m9-v11.32 ROOT COMPREHENSION — the FOUNDATION rail. Every capability's
+  // output (conversation, search, design, research, prompt_master) is built on
+  // the ability to understand the owner's text universally: reply in the SAME
+  // language, at the SAME literacy register, aware of the SAME knowledge field,
+  // with the per-language adaptation (formality/honorifics/tone). This is
+  // deterministic & additive — unknown input keeps the neutral default.
+  const p = perception.comprehension;
+  const compRail =
+    `\n\nPemahaman input yang jadi pijakan jawabanmu:\n` +
+    `- Bahasa pemilik: ${p.language.code === "unknown" ? "belum teridentifikasi (gunakan bahasa yang paling masuk akal)" : p.language.name}${p.mixed.length ? ` (campur: ${p.mixed.map((l) => LANG_NAMES[l] ?? l).join(", ")})` : ""}.\n` +
+    `- Registrasi bahasa: ${p.literacy.type === "unknown" ? "biasa" : p.literacy.type}.\n` +
+    `- Bidang pembicaraan: ${p.domain.type === "umum" ? "umum" : p.domain.type}.\n` +
+    `- Arah adaptasi: balas DALAM BAHASA yang sama dengan pemilik di atas; ` +
+    `${p.adapt.honorifics ? "pakai sapaan yang menghargai" : "sapaan sederhana"}; ` +
+    `nada ${p.adapt.tone}.${p.adapt.formality === "formal" ? " Pertahankan tingkat kesopanan formal." : ""}`;
+
   const heavyNote = perception.intent.entities?.heavyVerify
     ? `\n\n(Catatan: permintaan ini menyiratkan aksi berat yang belum pasti jelas ` +
       `(riset/gambar/kode). Tuangkan VERIFIKASINYA di akhir paragraf kedua/rekomendasi ` +
@@ -831,7 +853,8 @@ export function buildUniversalFrame(opts: {
       `singkat dan minta pemilik mengingatkan konteksnya. ` +
       `ABAIKAN topik percakapan terakhir — JANGAN menggabungkan topik lama dengan ` +
       `topik baru dari percakapan terakhir (mis. jangan mencampur "bekerja remote" ` +
-      `dengan thread gambar/storyboard).`) + heavyNote;
+      `dengan thread gambar/storyboard).` +
+      compRail) + heavyNote;
   }
   if (perception.isContinuation && topic) {
     const isSimplify = /\b(lebih mudah|sederhanakan|belum mengerti|nggak paham|gampang|mudah dipahami|biar paham|tolong sederhanakan)\b/i.test(text);
@@ -842,6 +865,7 @@ export function buildUniversalFrame(opts: {
         `Jawab ULANG penjelasan tentang topik itu dengan bahasa sehari-hari yang sangat sederhana: ` +
         `tanpa jargon, tanpa poin-poin panjang, kalimat pendek mengalir, seperti menjelaskan ke teman. ` +
         `Tetap pada topik itu — JANGAN ganti topik.` +
+        compRail +
         heavyNote;
     }
     return baseRail +
@@ -850,9 +874,10 @@ export function buildUniversalFrame(opts: {
       `Jawab sebagai LANJUTAN dari percakapan tentang topik itu. ` +
       `TETAP pada topik "${topic}" — JANGAN menyimpang ke topik lain, ` +
       `JANGAN menjawab tentang hal yang tidak berkaitan dengan topik di atas.` +
+      compRail +
       heavyNote;
   }
-  return baseRail + heavyNote;
+  return baseRail + compRail + heavyNote;
 }
 
 // ============================================================================
@@ -997,7 +1022,14 @@ export async function act(
 
     case "understand_intent": {
       // Decode what the user actually WANTS, even for unknown/vague requests.
-      const result = await understandUserWants(env, d, owner, enrichedContext);
+      // m9-v11.32: feed the ROOT comprehension (universal language/literacy/
+      // domain) so understanding works across all human languages & fields.
+      const result = await understandUserWants(env, d, owner, enrichedContext, {
+        lang: perception.comprehension.language.name,
+        literacy: perception.comprehension.literacy.type,
+        domain: perception.comprehension.domain.type,
+        adapt: comprehensionNote(perception.comprehension),
+      });
       if (result.reply) {
         return { reply: result.reply, source: result.understood ? "understand" : "understand_clarify" };
       }

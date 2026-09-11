@@ -1913,6 +1913,7 @@ export async function understandUserWants(
   userText: string,
   _owner: number,
   context: Array<{ role: string; content: string }> = [],
+  comprehension?: { lang?: string; literacy?: string; domain?: string; adapt?: string },
 ): Promise<IntentUnderstanding> {
   const text = (userText || "").trim();
   const baseTopic = text.slice(0, 80);
@@ -1934,17 +1935,29 @@ export async function understandUserWants(
     ? `\nKenangan yang relevan:\n${mems.join("\n").slice(0, 1200)}\n`
     : "";
 
+  // m9-v11.32: ROOT comprehension — petunjuk pemahaman universal yang
+  // membekali model memahami bahasa/literasi/bidang apa pun. Aditif; bila
+  // tidak tersedia, prompt tetap berjalan seperti sebelumnya.
+  const compBlock = comprehension
+    ? `\nPemahaman input:\n- Bahasa: ${comprehension.lang ?? "belum teridentifikasi"}\n` +
+      `- Literatur: ${comprehension.literacy ?? "biasa"}\n` +
+      `- Bidang: ${comprehension.domain ?? "umum"}\n` +
+      `- Arah adaptasi: ${comprehension.adapt ?? "sesuai bahasa pemilik"}\n`
+    : "";
+
   const prompt =
     `Pemilik bertanya/meminta hal yang mungkin tidak jelas atau asing bagimu. ` +
     `Tugasmu: PAHAMI apa yang sebenarnya pemilik INGINKAN, meskipun kamu belum pernah tahu topik ini.\n\n` +
     `Pesan pemilik:\n"${text}"\n` +
+    (comprehension?.lang ? `\nBalas dalam bahasa ini: ${comprehension.lang}.\n` : "") +
     (prior ? `\nKonteks percakapan terakhir:\n${prior}\n` : "") +
     memoryBlock +
+    compBlock +
     `\nAturan:
 1. Jika kamu cukup yakin (>= 60%) apa yang dia inginkan — jawab langsung dengan jelas, ringkas, bahasa Indonesia alami, dalam kepribadian J.A.R.V.I.S. (kompeten, hangat, lugas). Tidak perlu minta izin.
 2. Jika kamu BELUM yakin — ajukan SATU pertanyaan klarifikasi yang singkat, natural, dan spesifik (bukan daftar panjang). Contoh: "Maksudmu kamu mau aku cari info brand baru itu yang mana, atau mau desain kemasannya?" JANGAN bertele-tele, JANGAN menebak dengan jawaban panjang.
 3. Jangan pernah menjawab "Ok."/"Siap."/"Sistem dijalankan." sebagai tanggapan atas permintaan yang belum dipahami.
-4. Balas dalam bahasa yang sama dengan pemilik (Indonesia/Inggris).
+4. Balas dalam bahasa yang sama dengan pemilik (apa pun bahasanya: Indonesia, Inggris, Jawa, Sunda, Spanyol, Jepang, Arab, dan lainnya).
 5. Maksimal 3 kalimat.`;
 
   const g = await llmRespond(env, prompt, {
