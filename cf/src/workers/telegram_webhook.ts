@@ -84,6 +84,22 @@ async function rateLimited(env: Env, userId: number): Promise<boolean> {
 
 const OWNER_OK = (env: Env, id: number) => String(id) === env.OWNER_TELEGRAM_ID;
 
+/** m9-v11.28: slash-command alias — the owner often omits the underscore
+ *  ("/queuestatus" for "/queue_status"). Underscores are purely cosmetic in
+ *  command names, so match on the underscore-stripped form. */
+export const cmdAlias = (trimmed: string, ...names: string[]): boolean => {
+  const bare = (s: string) => s.replace(/_/g, "");
+  const t = bare(trimmed);
+  return names.some((n) => bare(n) === t);
+};
+
+/** m9-v11.28: true for a BARE, previously-unmatched slash command ("/foobar").
+ *  These must be answered deterministically ("unknown command") instead of
+ *  falling into the LLM chat, where the model drifts off-topic (the live
+ *  "/dmsstatus" turn answered with a stray 'kerja remote' memory bleed). */
+export const isBareUnknownSlashCmd = (trimmed: string): boolean =>
+  /^\/[a-z][a-z0-9_]*(?:-[a-z0-9_]+)?$/i.test(trimmed);
+
 /** Fire-and-forget Telegram call: never throw so a downstream Telegram outage
  *  can't turn into a 5xx that makes Telegram retry the whole webhook (retry
  *  storm budget burn). Logs and continues. */
@@ -382,18 +398,18 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     await fire(sendMessage(env, r, "Health: sehat. Resp." + Math.round(Date.now() / 1000)));
     return new Response("ok", { status: 200 });
   }
-  if (trimmed === "/dms_status") {
+  if (cmdAlias(trimmed, "/dms_status")) {
     await safeDBReply(env, r, () => runDms(env, r));
     return new Response("ok", { status: 200 });
   }
-  if (trimmed === "/queue_status") {
+  if (cmdAlias(trimmed, "/queue_status")) {
     await safeDBReply(env, r, () => queueStatus(env).then((q) => JSON.stringify(q)));
     return new Response("ok", { status: 200 });
   }
   // /debug_bypass — temporarily bypass orchestrator for admin verification.
   // Sets a KV flag for 5 minutes; all subsequent messages skip the orchestrator
   // and fall through to the original act() pipeline. Admin-only.
-  if (trimmed === "/debug_bypass") {
+  if (cmdAlias(trimmed, "/debug_bypass")) {
     if (!OWNER_OK(env, r)) {
       await fire(sendMessage(env, r, "Admin only."));
       return new Response("ok", { status: 200 });
@@ -496,7 +512,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     }
     return new Response("ok", { status: 200 });
   }
-  if (trimmed === "/obedience_report") {
+  if (cmdAlias(trimmed, "/obedience_report")) {
     const paused = await isAutonomyPaused(env, r);
     await fire(sendMessage(env, r,
       `Audit kepatuhan: dictatat per perintah di obedience_audit.\n` +
@@ -519,7 +535,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // ------------------------------------------------------------------
   // Level 12 (Transcendent Steward) — covenant / identity / sunset / degradation
   // ------------------------------------------------------------------
-  if (trimmed === "/covenant_status") {
+  if (cmdAlias(trimmed, "/covenant_status")) {
     await safeDBReply(env, r, () => covenantStatusText(env));
     return new Response("ok", { status: 200 });
   }
@@ -538,17 +554,17 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     }
     return new Response("ok", { status: 200 });
   }
-  if (trimmed === "/identity_verify") {
+  if (cmdAlias(trimmed, "/identity_verify")) {
     await safeDBReply(env, r, () => identityStatusText(env));
     return new Response("ok", { status: 200 });
   }
-  if (trimmed === "/sunset_preview") {
+  if (cmdAlias(trimmed, "/sunset_preview")) {
     await fire(sendMessage(env, r,
       "🌅 *Preview Sunset* (hanya evaluasi — tak ada aksi ireversibel dipicu).\n" +
       "Modul sunset bersifat reading-only; inisiasi memerlukan formulir manual + konfirmasi ganda pemilik."));
     return new Response("ok", { status: 200 });
   }
-  if (trimmed === "/degradation_status") {
+  if (cmdAlias(trimmed, "/degradation_status")) {
     await safeDBReply(env, r, async () => {
       const status = await getDegradationStatus(env);
       return `📉 *Degradasi*\nSisa kuota: ${status.remainingPct}%\n` +
@@ -556,7 +572,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     });
     return new Response("ok", { status: 200 });
   }
-  if (trimmed === "/maestro_status") {
+  if (cmdAlias(trimmed, "/maestro_status")) {
     await safeDBReply(env, r, async () => {
       const [plans, tasks] = await Promise.all([getPlans(env, r), getScheduledTasks(env, r)]);
       const planLines = plans.length
@@ -797,6 +813,15 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // E-commerce / shop commands — explicit command BEFORE compliance pipeline.
   if (isShopCommand(trimmed, text)) {
     await handleShopCommand(env, r, text);
+    return new Response("ok", { status: 200 });
+  }
+
+  // m9-v11.28: a BARE slash command that no handler matched is answered
+  // deterministically, never sent to the LLM chat (there it drifts off-topic —
+  // live failure "/dmsstatus" was answered with a stray 'kerja remote' bleed).
+  if (isBareUnknownSlashCmd(trimmed)) {
+    await fire(sendMessage(env, r,
+      `Perintah tidak dikenal: \`${trimmed.replace(/[_\r\n]+/g, " ")}\`. Ketik /help untuk daftar perintah.`));
     return new Response("ok", { status: 200 });
   }
 
