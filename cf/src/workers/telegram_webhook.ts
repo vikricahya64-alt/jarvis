@@ -50,7 +50,7 @@ import { covenantStatusText, signClause } from "../lib/covenant_core";
 import { identityStatusText } from "../lib/identity_anchor";
 import { getPlans, getScheduledTasks } from "../lib/maestro";
 import { getDegradationStatus } from "../lib/degradation";
-import { delegateToGithub, flagAgentReport, usesDeepResearchProtocol, stripDeepResearchFlag } from "../lib/agent_executor";
+import { delegateToGithub, flagAgentReport, truncationWarning, usesDeepResearchProtocol, stripDeepResearchFlag } from "../lib/agent_executor";
 import { parseRecurSpec } from "../lib/agent_rules";
 import { readNegotiation, saveNegotiation, clearNegotiation, generateClarifyQuestions, compileFinalInstruction, type NegoSession } from "../lib/negotiation";
 import {
@@ -367,6 +367,11 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     if (sent.error) {
       await fire(sendMessage(env, from,
         `⚠️ Tugas #${id} tersimpan tapi gagal dispatch (${sent.error}). Status tetap ⏳; cek /tugas list.`));
+    } else if (sent.truncated) {
+      await fire(sendMessage(env, from,
+        `📎 Lampiran *${label.slice(0, 60)}* (${(dl.bytes.byteLength / 1024).toFixed(0)} KB) diterima.\n` +
+        `Tugas #${id}: analisis dikirim ke eksekutor cloud — hasil kubalas di sini.` +
+        truncationWarning(sent)));
     }
     return new Response("ok", { status: 200 });
   }
@@ -1459,7 +1464,7 @@ async function delegateNow(env: Env, from: number, text: string): Promise<string
   const sent = await delegateToGithub(env, id, body);
   if (sent.error) return `⚠️ Tugas #${id} tersimpan tapi gagal dispatch (${sent.error}). Status tetap ⏳ — /tugas list.`;
   await markAgentTaskRunning(env, id, sent.runId ?? "");
-  return `📦 Tugas #${id} dikirim ke eksekutor cloud — hasil kubalas di sini.`;
+  return `📦 Tugas #${id} dikirim ke eksekutor cloud — hasil kubalas di sini.${truncationWarning(sent)}`;
 }
 
 /** Main entry: photo/voice message → a reply JARVIS genuinely understands.
@@ -2047,7 +2052,8 @@ async function dispatchNegotiation(env: Env, owner: number, s: NegoSession): Pro
   }
   await markAgentTaskRunning(env, id, sent.runId ?? "");
   await fire(sendMessage(env, owner,
-    "🧠 Dikirim ke eksekutor cloud. Hasil kubalas di sini (biasanya 1–5 menit). `/tugas list` untuk status."));
+    "🧠 Dikirim ke eksekutor cloud. Hasil kubalas di sini (biasanya 1–5 menit). `/tugas list` untuk status." +
+    truncationWarning(sent)));
 }
 
 /** Answer/message the owner sends while a /tugas negotiation is parked.
@@ -2217,7 +2223,7 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
       return;
     }
     await markAgentTaskRunning(env, target.id, sent.runId ?? "");
-    await fire(sendMessage(env, from, "🧠 Berhasil — hasil kubalas di sini. `/tugas list` untuk status."));
+    await fire(sendMessage(env, from, "🧠 Berhasil — hasil kubalas di sini. `/tugas list` untuk status." + truncationWarning(sent)));
     return;
   }
 

@@ -19,7 +19,7 @@
 //=====================================================================
 
 import { Env, addAgentTask, getDueAgentRules, updateAgentRuleFired, getDmsConfig, markAgentTaskRunning } from "./db";
-import { delegateToGithub } from "./agent_executor";
+import { delegateToGithub, truncationWarning } from "./agent_executor";
 import { sendMessage } from "./telegram";
 
 const WIB_OFFSET_MIN = 7 * 60; // UTC+7
@@ -162,7 +162,7 @@ export async function fireDueAgentRules(
     } else {
       fired++;
       await sendMessage(env, rule.owner_id,
-        `🗓️ Jadwal *#${rule.id}* dijalankan — "_${rule.task.slice(0, 90)}…_" (tugas ${instanceId}). Hasil kubalas di sini.`)
+        `🗓️ Jadwal *#${rule.id}* dijalankan — "_${rule.task.slice(0, 90)}…_" (tugas ${instanceId}). Hasil kubalas di sini.${truncationWarning(sent)}`)
         .catch(() => {});
     }
   }
