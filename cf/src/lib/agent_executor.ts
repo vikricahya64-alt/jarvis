@@ -59,18 +59,22 @@ export function agentExecutorConfigured(env: Env): boolean {
  *  Connector FIRST (token lives there, not in this worker), falling back to a
  *  direct GitHub API call when the connector is unconfigured/unreachable.
  *  Returns a run id when accepted, or an error token on failure (never throws).
- *  Fail-closed chain: connector → direct GitHub → error token. */
+ *  Fail-closed chain: connector → direct GitHub → error token. `opts.riset`
+ *  force-appends the source-citation protocol (used by the negotiated add-path
+ *  where the compiled instruction no longer carries the raw `--riset` prefix). */
 export async function delegateToGithub(
   env: Env,
   taskId: number,
   task: string,
+  opts: { riset?: boolean } = {},
 ): Promise<DelegateResult> {
   const repo = env.GITHUB_REPO ?? "";
   const token = env.GITHUB_TOKEN ?? "";
   if (!repo) return { error: "executor-not-configured" };
 
   const cleanTask = stripDeepResearchFlag(task);
-  const payload = (usesDeepResearchProtocol(task) ? `${cleanTask}${DEEP_RESEARCH_PROTOCOL}` : cleanTask).slice(0, 3800);
+  const wantRiset = opts.riset === true || usesDeepResearchProtocol(task);
+  const payload = (wantRiset ? `${cleanTask}${DEEP_RESEARCH_PROTOCOL}` : cleanTask).slice(0, 3800);
   const [owner, repoName] = repo.split("/");
 
   // Path 1: Vercel Connector (repository_dispatch with token server-side).

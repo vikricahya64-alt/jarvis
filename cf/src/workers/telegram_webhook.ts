@@ -50,8 +50,9 @@ import { covenantStatusText, signClause } from "../lib/covenant_core";
 import { identityStatusText } from "../lib/identity_anchor";
 import { getPlans, getScheduledTasks } from "../lib/maestro";
 import { getDegradationStatus } from "../lib/degradation";
-import { delegateToGithub, flagAgentReport } from "../lib/agent_executor";
+import { delegateToGithub, flagAgentReport, usesDeepResearchProtocol, stripDeepResearchFlag } from "../lib/agent_executor";
 import { parseRecurSpec } from "../lib/agent_rules";
+import { readNegotiation, saveNegotiation, clearNegotiation, generateClarifyQuestions, compileFinalInstruction, type NegoSession } from "../lib/negotiation";
 import {
   listInsights, setPreference, disablePreference, getActivePreferences,
   auditPhantomRules,
@@ -282,6 +283,20 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
       await runBrain(env, from, text);
       return new Response("ok", { status: 200 });
     }
+  }
+
+  // /TUGAS NEGOTIATION RESUME (bridge, m9-v11.31). While a negotiate session
+  // is parked (nego:<owner>), the NEXT plain-text reply from the owner resumes
+  // the Q&A: an "ask" step consumes the answer to the current question, and a
+  // "confirm" step accepts GO (dispatch) or batal. This runs BEFORE the
+  // command/greeting handlers so a negotiation answer is never misrouted to
+  // the brain or to another command. Deliberately AFTER the relevance-gate
+  // resume (that parked intent outranks a stale negotiation). Fail-closed:
+  // any hiccup just leaves the reply to the normal pipeline.
+  const negoSession = await readNegotiation(env, from).catch(() => null);
+  if (negoSession && !/^\//.test(text.trim())) {
+    const consumed = await resumeNegotiation(env, from, negoSession, text);
+    if (consumed) return new Response("ok", { status: 200 });
   }
 
   // Best-effort activity touch — a transient D1 error must NEVER silently drop
@@ -2011,6 +2026,99 @@ function fmtRecurSpec(spec: string): string {
   return `setiap ${names[d >= 0 && d <= 6 ? d : 0]} ${hm}`;
 }
 
+/** Dispatch the negotiated task to the cloud executor: store row → GitHub →
+ *  mark running → clear session → acknowledge. Bounded; fail-closed. */
+async function dispatchNegotiation(env: Env, owner: number, s: NegoSession): Promise<void> {
+  // Persist the "--riset" marker in the stored task when the owner opted in,
+  // so a later "/tugas lanjut <id>" re-detects the source-citation protocol
+  // via the task text (same mechanism as the pre-negotiation add-path).
+  const finalTask = `${s.riset ? "--riset " : ""}${(s.final ?? s.task).trim()}`;
+  const id = await addAgentTask(env, owner, finalTask);
+  if (!id) {
+    await saveNegotiation(env, owner, s);
+    await fire(sendMessage(env, owner, "⚠️ Gagal menyimpan tugas (D1). Coba lagi."));
+    return;
+  }
+  await clearNegotiation(env, owner);
+  const sent = await delegateToGithub(env, id, finalTask);
+  if (sent.error) {
+    await fire(sendMessage(env, owner,
+      `⚠️ Tugas #${id} tersimpan tapi *gagal dispatch* (${sent.error}). Status tetap ⏳. Cek /tugas list.`));
+    return;
+  }
+  await markAgentTaskRunning(env, id, sent.runId ?? "");
+  await fire(sendMessage(env, owner,
+    "🧠 Dikirim ke eksekutor cloud. Hasil kubalas di sini (biasanya 1–5 menit). `/tugas list` untuk status."));
+}
+
+/** Answer/message the owner sends while a /tugas negotiation is parked.
+ *
+ *  Bridge (m9-v11.31): JARVIS does NOT dispatch to the cloud executor
+ *  immediately — it negotiates like discussing a buyer's request with the
+ *  service provider. Step "ask": the reply is the answer to the current
+ *  clarifying question (next one is asked, or we compile + show the final
+ *  instruction). Step "confirm": GO → dispatch; batal → cancel; anything
+ *  else → refine (compile again with the added note). Returns true when it
+ *  consumed the message (the caller should stop the pipeline). Fail-closed:
+ *  never throws, never dispatches on ambiguity. */
+async function resumeNegotiation(
+  env: Env,
+  owner: number,
+  s: NegoSession,
+  text: string,
+): Promise<boolean> {
+  try {
+    const answer = text.trim().replace(/\s+/g, " ").slice(0, 600);
+
+    // Step "ask": collect the answer to the current question.
+    if (s.step === "ask") {
+      s.answers.push(answer);
+      const idx = s.answers.length;
+      if (idx < s.questions.length) {
+        await saveNegotiation(env, owner, s);
+        await fire(sendMessage(env, owner,
+          `✍️ Pertanyaan ${idx + 1}/${s.questions.length}: ${s.questions[idx]}\n_\nKetik /tugas batal kapan saja untuk membatalkan._`));
+        return true;
+      }
+      // All questions answered → compile the final instruction and show it.
+      s.final = await compileFinalInstruction(env, s.task, s.questions.map((q, i) => ({
+        q, a: s.answers[i] || "",
+      })));
+      s.step = "confirm";
+      await saveNegotiation(env, owner, s);
+      await fire(sendMessage(env, owner,
+        `🧾 *Instruksi final* yang akan kukirim ke eksekutor:\n\n${s.final}\n\nBalas *GO* untuk menjalankannya, atau beri catatan tambahan.`));
+      return true;
+    }
+
+    // Step "confirm": GO / batal / refine.
+    const low = text.trim().toLowerCase();
+    if (/^(go|gas|gaske|gaskeun|jalan|jalankan|kirim|kirimkan|lanjut|lah|ok|oke|ya|y|siap|setuju|eksekusi)\b/.test(low)) {
+      await dispatchNegotiation(env, owner, s).catch(async () => {
+        await fire(sendMessage(env, owner, "⚠️ Gagal mengirim ke eksekutor. Coba lagi: `/tugas lanjut` atau ulangi dari awal."));
+      });
+      return true;
+    }
+    if (/^(batal|cancel|stop|batalkan|habiskan|tidak jadi|nggak jadi|skip)\b/.test(low)) {
+      await clearNegotiation(env, owner);
+      await fire(sendMessage(env, owner, "🗑️ Negosiasi dibatalkan. Kirim lagi kapan saja dengan `/tugas <pekerjaan>`."));
+      return true;
+    }
+    // Refinement: appends the owner's extra note, recompiles, shows again.
+    s.answers.push(`(tambahan) ${answer}`);
+    s.final = await compileFinalInstruction(env, s.task, s.answers.map((a, i) => ({
+      q: s.questions[i] || "Catatan tambahan", a,
+    })));
+    await saveNegotiation(env, owner, s);
+    await fire(sendMessage(env, owner,
+      `✏️ Catatan diterima — instruksi diperbarui:\n\n${s.final}\n\nBalas *GO* untuk menjalankannya.`));
+    return true;
+  } catch (e) {
+    console.error("[negotiation] resume failed:", (e as Error).message);
+    return false;
+  }
+}
+
 /** Execute /tugas: store task → dispatch to GitHub → acknowledge. */
 async function handleAgentCommand(env: Env, from: number, raw: string): Promise<void> {
   const trimmed = raw.trim();
@@ -2172,6 +2280,16 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
     return;
   }
 
+  // --- Batal: "/tugas batal" — cancel an ongoing negotiation session. ---
+  if (/^\/(?:tugas|delegasi)\s+(?:batal|cancel|stop)\b/i.test(trimmed)) {
+    const had = await readNegotiation(env, from).catch(() => null);
+    if (had) await clearNegotiation(env, from);
+    await fire(sendMessage(env, from, had
+      ? "🗑️ Negosiasi dibatalkan. Kirim lagi kapan saja dengan `/tugas <pekerjaan>`."
+      : "Tidak ada negosiasi yang sedang berjalan."));
+    return;
+  }
+
   // --- Add ---
   const task = trimmed
     .replace(/^\/(?:tugas|delegasi|delegate)\s*/i, "")
@@ -2184,9 +2302,14 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
       "⚙️ Eksekutor cloud belum dikonfigurasi (AGENT_TOKEN, GITHUB_TOKEN, GITHUB_REPO). Set dahulu, lalu ulangi."));
     return;
   }
+  // " --riset" flag (may appear right after the command or after "ke opencode"):
+  // keep it in the stored task so delegateToGithub re-detects it on retry, but
+  // strip it for the negotiation conversation (questions read better without).
+  const riset = usesDeepResearchProtocol(task);
+  const taskPlain = stripDeepResearchFlag(task);
 
   // Scheduled (recurring) variant: "… setiap Senin 09:05" → create a rule.
-  const parsed = parseRecurSpec(task);
+  const parsed = parseRecurSpec(taskPlain);
   if (parsed) {
     const clean = parsed.cleanTask;
     if (clean.length < 10) {
@@ -2209,33 +2332,39 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
   // word ("setiap …") that our parser couldn't turn into a rule, DON'T silently
   // create a one-shot task carrying the orphan "setiap …" text. Teach instead.
   const scheduleLike = /(?:setiap|tiap)\s+(?:hari|pagi|siang|sore|malam|minggu|jam|senin|selasa|rabu|kamis|jumat|sabtu|minggu|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
-  if (!parsed && scheduleLike.test(task)) {
+  if (!parsed && scheduleLike.test(taskPlain)) {
     await fire(sendMessage(env, from,
       "🗓️ Kayaknya kamu ingin *menjadwalkan* tugas (ada \"setiap\"), tapi formatnya belum kupahami — jadi belum kubuat tugasnya.\n\nPola yang diterima:\n• `/tugas <kerjaan> setiap <hari> <HH:MM>` — contoh: `setiap Senin 09:00`\n• `/tugas <kerjaan> setiap hari <HH:MM>` — contoh: `setiap hari 07:30`\n\nContoh utuh: `/tugas riset berita keamanan minggu ini setiap Senin 08:00`.\nKalau bukan jadwal, balik kirim tanpa kata \"setiap\"."));
     return;
   }
 
-  if (task.length < 10 || task.length > 4000) {
+  if (taskPlain.length < 10 || taskPlain.length > 4000) {
     await fire(sendMessage(env, from,
       "📦 `/tugas <pekerjaan>` (contoh: `/tugas riset kompetitor AI dan simpan laporan markdown`). Minimal 10 karakter."));
     return;
   }
-  const id = await addAgentTask(env, from, task);
-  if (!id) {
-    await fire(sendMessage(env, from, "Gagal menyimpan tugas (error D1). Coba lagi."));
-    return;
-  }
-  await fire(sendMessage(env, from,
-    `📦 Tugas #${id} diterima — dispatch ke eksekutor cloud…\n_${task.slice(0, 200)}_`));
-  const sent = await delegateToGithub(env, id, task);
-  if (sent.error) {
+
+  // NEGOTIATION BRIDGE (m9-v11.31): don't dispatch immediately. Park a
+  // negotiate session and ask 1-3 clarifying questions so the final compiled
+  // instruction (.final, set after Q&A) is what actually runs — exactly what
+  // the owner wants, translated into a precise executor instruction. If a
+  // previous session is parked, the new task REPLACES it (fail-closed).
+  const questions = await generateClarifyQuestions(env, taskPlain).catch(() => []);
+  await saveNegotiation(env, from, {
+    task: taskPlain,
+    riset,
+    questions,
+    answers: [],
+    step: "ask",
+    ts: Date.now(),
+  });
+  if (questions.length === 0) {
     await fire(sendMessage(env, from,
-      `⚠️ Tugas #${id} tersimpan tapi *gagal dispatch* (${sent.error}). Status tetap ⏳. Cek /tugas list.`));
+      `📦 Tugas diterima — setelah kupastikan detailnya, instruksinya akan kukirim ke eksekutor.\n_Task: ${taskPlain.slice(0, 200)}_\n\nFormat output / fokus / batasan? Balas keterangannya (mis. "laporan markdown, 3 halaman"), lalu *GO* untuk jalankan.`));
     return;
   }
-  await markAgentTaskRunning(env, id, sent.runId ?? "");
   await fire(sendMessage(env, from,
-    "🧠 Dikirim ke eksekutor cloud. Hasil kubalas di sini (biasanya 1–5 menit). `/tugas list` untuk status."));
+    `📦 Sebelum kukirim ke eksekutor, kupastikan dulu beberapa hal (1/${questions.length}):\n\n*${questions[0]}*\n\nBalas dengan jawabanmu. _/tugas batal untuk batalkan._`));
 }
 
 // ---------------------------------------------------------------------
