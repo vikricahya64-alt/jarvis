@@ -1617,6 +1617,9 @@ async function testRootComprehension() {
   assert.strictEqual(detectLanguageUniversal("你好，世界。").code, "zh", "han → Mandarin");
   assert.strictEqual(detectLanguageUniversal("مرحبا بالعالم").code, "ar", "arabic → Arabic");
   assert.strictEqual(detectLanguageUniversal("Привет мир").code, "ru", "cyrillic → Russian");
+  assert.strictEqual(detectLanguageUniversal("নমস্কার, আপনার কেমন আছেন?").code, "bn", "bengali script → Bengali");
+  assert.strictEqual(detectLanguageUniversal("Xin chào, bạn có khỏe không").code, "vi", "Vietnamese function words");
+  assert.strictEqual(detectLanguageUniversal("Kumusta ka na po? Ayos naman po ako").code, "tl", "Tagalog function words");
   assert.ok(
     ["id", "en"].includes(detectLanguageUniversal("saya ingin bertanya tentang itu dan ini").code),
     "Indonesian function words detected",
@@ -1640,6 +1643,9 @@ async function testRootComprehension() {
   assert.strictEqual(detectKnowledgeDomain("strategi investasi saham dan keuangan").type, "ekonomi_bisnis", "finance keywords");
   assert.strictEqual(detectKnowledgeDomain("gejala penyakit dan obat untuk jantung").type, "kesehatan", "medical keywords");
   assert.strictEqual(detectKnowledgeDomain("pasal dan undang-undang hukum").type, "hukum", "law keywords");
+  assert.strictEqual(detectKnowledgeDomain("bibit padi dan musim panen kebun").type, "agrikultur_pangan", "agriculture keywords");
+  assert.strictEqual(detectKnowledgeDomain("pemanasan global dan emisi karbon").type, "lingkungan_iklim", "climate keywords");
+  assert.strictEqual(detectKnowledgeDomain("pertandingan sepak bola dan skor liga").type, "olahraga_rekreasi", "sports keywords");
   assert.strictEqual(detectKnowledgeDomain("").type, "umum", "empty → umum");
 
   // Full profile is deterministic + note is a short natural string (no throw).

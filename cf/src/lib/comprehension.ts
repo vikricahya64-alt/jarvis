@@ -27,12 +27,13 @@
 // ============================================================================
 
 /** Aksara utama teks (UAX #24 Script). */
-export type Script = "latin" | "hans" | "kana" | "hangul" | "arabic" | "cyrillic" | "devanagari" | "thai" | "greek" | "hebrew" | "tamil" | "unknown";
+export type Script = "latin" | "hans" | "kana" | "hangul" | "arabic" | "cyrillic" | "devanagari" | "bengali" | "thai" | "greek" | "hebrew" | "tamil" | "unknown";
 
 /** Bahasa utama teks (ISO 639-1 + varian lokal). 'unknown' = tak teridentifikasi. */
 export type ComprehendLang =
   | "en" | "id" | "ms" | "jv" | "su" | "es" | "fr" | "de" | "it" | "pt" | "nl"
-  | "ja" | "zh" | "ko" | "ar" | "ru" | "hi" | "th" | "el" | "he" | "ta"
+  | "vi" | "tl" | "tr" | "pl"
+  | "ja" | "zh" | "ko" | "ar" | "ru" | "hi" | "bn" | "th" | "el" | "he" | "ta"
   | "unknown";
 
 /** Registrasi literasi teks. */
@@ -49,6 +50,7 @@ export type Literacy =
 /** Bidang ilmu pengetahuan utama teks. */
 export type KnowDomain =
   | "teknologi_ai" | "ekonomi_bisnis" | "kesehatan" | "hukum" | "sains"
+  | "agrikultur_pangan" | "lingkungan_iklim" | "olahraga_rekreasi"
   | "sosial_humaniora" | "seni_desain" | "pendidikan" | "milik" | "umum";
 
 /** Hasil pemahaman akar sebuah teks. */
@@ -76,13 +78,14 @@ export interface ComprehensionProfile {
 export const LANG_NAMES: Record<ComprehendLang, string> = {
   en: "Inggris", id: "Indonesia", ms: "Melayu", jv: "Jawa", su: "Sunda",
   es: "Spanyol", fr: "Prancis", de: "Jerman", it: "Italia", pt: "Portugis", nl: "Belanda",
+  vi: "Vietnam", tl: "Tagalog", tr: "Turki", pl: "Polandia",
   ja: "Jepang", zh: "Mandarin", ko: "Korea", ar: "Arab", ru: "Rusia",
-  hi: "Hindi", th: "Thai", el: "Yunani", he: "Ibrani", ta: "Tamil",
+  hi: "Hindi", bn: "Bengali", th: "Thai", el: "Yunani", he: "Ibrani", ta: "Tamil",
   unknown: "Tidak diketahui",
 };
 
 /** Function-word scoring per bahasa Latin (frasa umum khas bahasa). */
-const LATIN_PATTERNS: Record<Extract<ComprehendLang, "en" | "id" | "ms" | "jv" | "su" | "es" | "fr" | "de" | "it" | "pt" | "nl">, RegExp[]> = {
+const LATIN_PATTERNS: Record<Extract<ComprehendLang, "en" | "id" | "ms" | "jv" | "su" | "es" | "fr" | "de" | "it" | "pt" | "nl" | "vi" | "tl" | "tr" | "pl">, RegExp[]> = {
   en: [
     /\b(?:the|and|is|are|was|were|you|your|what|where|when|why|how|with|have|has|this|that|it's|could|would|about|for|from|of|to|in|on)\b/gi,
   ],
@@ -116,6 +119,18 @@ const LATIN_PATTERNS: Record<Extract<ComprehendLang, "en" | "id" | "ms" | "jv" |
   nl: [
     /\b(?:de|het|en|is|zijn|met|voor|je|wat|waar|hoe|heel|ook|maar|kan|niet)\b/gi,
   ],
+  vi: [
+    /\b(?:và|cho|của|là|có|không|bạn|anh|chị|em|tôi|ở|trong|với|nhưng|này|đó|được|phải|sẽ|đã)\b/gi,
+  ],
+  tl: [
+    /\b(?:ang|ng|nga|sa|si|ay|ako|ikaw|kayo|namin|ninyo|ba|po|opo|oo|hindi|kasi|para|may|mayroon|gusto)\b/gi,
+  ],
+  tr: [
+    /\b(?:bir|ve|bu|şu|o|ben|sen|siz|biz|için|ile|gibi|ama|de|da|mi|ne|nerede|nasıl|çok|var|yok|istediğim)\b/gi,
+  ],
+  pl: [
+    /\b(?:i|w|na|z|do|to|jest|są|ty|ja|my|wy|czy|co|gdzie|jak|bardzo|ale|może|nie|mam|chcę)\b/gi,
+  ],
 };
 
 /** Deteksi aksara utama (UAX #24) + bahasa non-Latin yang pasti. */
@@ -132,6 +147,8 @@ function detectScriptAndExotic(text: string): { script: Script; lang: Comprehend
   if (/[\u0400-\u04ff]/.test(text)) return { script: "cyrillic", lang: "ru", confidence: 0.85 };
   // Devanagari → Hindi.
   if (/[\u0900-\u097f]/.test(text)) return { script: "devanagari", lang: "hi", confidence: 0.95 };
+  // Bengali (Bengali block).
+  if (/[\u0980-\u09ff]/.test(text)) return { script: "bengali", lang: "bn", confidence: 0.95 };
   // Thai.
   if (/[\u0e00-\u0e7f]/.test(text)) return { script: "thai", lang: "th", confidence: 0.97 };
   // Greek.
@@ -254,6 +271,16 @@ const DOMAIN_MARKERS: Record<Exclude<KnowDomain, "umum">, RegExp[]> = {
   ],
   sains: [
     /\b(?:fisika|kimia|biologi|astronomi|matematika|rumus|atom|sel|gravitasi|kuantum|planet|bintang|galaksi|ekosistem|evolusi|teori relativitas|energi|reaksi|molekul)\b/i,
+    /\b(?:genetika|dna|rnase?|fotosintesis|termodinamika|mekanika|foton|elektron|isotop|teropong|teleskop|partikel|pembuluh|angiogenesis|ensim|enzim|protein|metabolisme)\b/i,
+  ],
+  agrikultur_pangan: [
+    /\b(?:pertanian|tanaman|panen|bibit|pupuk|lahan|irigasi|benih|sayur|sayuran|buah|padi|gandum|jagung|kebun|petani|ternak|beternak|pakan|komoditas pangan|resep|masakan|bumbu|memasak|menanak|gizi?)\b/i,
+  ],
+  lingkungan_iklim: [
+    /\b(?:lingkungan|iklim|cuaca|hujan|kemarau|pemanasan global|emisi|karbon|polusi|polutan|limbah|daur ulang|recycle|ekosistem|keberlanjutan|energi terbarukan|panel surya|walhi?|su-?hu bumi)\b/i,
+  ],
+  olahraga_rekreasi: [
+    /\b(?:sepak bola|lari|berlari|bola|badminton|bulu tangkis|renang|bersepeda|gym|fitness|latihan|kebugaran|olimpik|turnamen|pertandingan|skor|liga|tim|pemain|liga inggris|meraton|marathon)\b/i,
   ],
   sosial_humaniora: [
     /\b(?:sosial|psikologi|filsafat|sejarah|budaya|sosiologi|politik|antropologi|etika|masyarakat|komunikasi|identitas|religi|agama|norma sosial|kebenaran)\b/i,
@@ -317,10 +344,15 @@ const ADAPT: Record<ComprehendLang, AdaptHints> = {
   ar: { formality: "formal", honorifics: true, tone: "hangat-menghargai" },
   ru: { formality: "netral", honorifics: false, tone: "teknis-lugas" },
   hi: { formality: "casual", honorifics: true, tone: "hangat-menghargai" },
+  bn: { formality: "formal", honorifics: true, tone: "hangat-menghargai" },
   th: { formality: "formal", honorifics: true, tone: "hangat-menghargai" },
   el: { formality: "netral", honorifics: false, tone: "teknis-lugas" },
   he: { formality: "formal", honorifics: true, tone: "hangat-menghargai" },
   ta: { formality: "formal", honorifics: true, tone: "hangat-menghargai" },
+  vi: { formality: "formal", honorifics: true, tone: "hangat-menghargai" },
+  tl: { formality: "netral", honorifics: true, tone: "hangat-menghargai" },
+  tr: { formality: "netral", honorifics: false, tone: "teknis-lugas" },
+  pl: { formality: "netral", honorifics: false, tone: "teknis-lugas" },
   unknown: { formality: "netral", honorifics: false, tone: "santai" },
 };
 
@@ -399,7 +431,9 @@ export function comprehensionNote(profile: ComprehensionProfile): string {
   };
   const domMap: Record<KnowDomain, string> = {
     teknologi_ai: "teknologi/AI", ekonomi_bisnis: "ekonomi/bisnis", kesehatan: "kesehatan",
-    hukum: "hukum", sains: "sains", sosial_humaniora: "sosial/humaniora",
+    hukum: "hukum", sains: "sains", agrikultur_pangan: "pertanian/pangan",
+    lingkungan_iklim: "lingkungan/iklim", olahraga_rekreasi: "olahraga/rekreasi",
+    sosial_humaniora: "sosial/humaniora",
     seni_desain: "seni/desain", pendidikan: "pendidikan", milik: "diri sendiri (JARVIS/pemilik)",
     umum: "umum",
   };

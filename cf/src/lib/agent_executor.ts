@@ -21,7 +21,14 @@ import { vercelBaseUrl } from "./vercel";
 
 const GITHUB_API = "https://api.github.com/repos/";
 
-export type DelegateResult = { runId?: string; error?: string };
+export type DelegateResult = { runId?: string; error?: string; truncated?: boolean };
+
+/** Batas payload instruksi (repository_dispatch client_payload aman jauh di
+ *  bawah batas GitHub; 4000 menyisakan ruang untuk protokol). Dipangkas BUKAN
+ *  buta: bila instruksi melewati batas, warning terlihat ditambahkan di akhir
+ *  sehingga runner & owner sadar ada bagian yang terpotong (fail-visible). */
+const PAYLOAD_CAP = 4000;
+const TRUNCATION_NOTICE = "\n\n…⚠ instruksi terpotong melebihi batas kirim. Jalankan kembali sebagian lebih pendek bila perlu.";
 
 /** True when the delegated task carries the "--riset" flag. */
 export function usesDeepResearchProtocol(task: string): boolean {
@@ -55,6 +62,15 @@ export function agentExecutorConfigured(env: Env): boolean {
   return Boolean(env.AGENT_TOKEN && env.GITHUB_TOKEN && /^[^/\s]+\/[^/\s]+$/.test(repo));
 }
 
+/** Deterministic warning string when a dispatch succeeded but the instruction
+ *  was truncated to the payload cap. Callers append it to the ok-message so
+ *  the owner is never silently misled about what the runner received. */
+export function truncationWarning(sent: DelegateResult): string {
+  return sent.truncated
+    ? "\n⚠️ Instruksinya *panjang* dan terpotong saat dikirim (batas aman). Hasil mungkin tak penuh — bagi jadi beberapa tugas lebih pendek bila perlu."
+    : "";
+}
+
 /** Queue a task to the GitHub repository_dispatch webhook — via the Vercel
  *  Connector FIRST (token lives there, not in this worker), falling back to a
  *  direct GitHub API call when the connector is unconfigured/unreachable.
@@ -70,11 +86,14 @@ export async function delegateToGithub(
 ): Promise<DelegateResult> {
   const repo = env.GITHUB_REPO ?? "";
   const token = env.GITHUB_TOKEN ?? "";
-  if (!repo) return { error: "executor-not-configured" };
 
   const cleanTask = stripDeepResearchFlag(task);
   const wantRiset = opts.riset === true || usesDeepResearchProtocol(task);
-  const payload = (wantRiset ? `${cleanTask}${DEEP_RESEARCH_PROTOCOL}` : cleanTask).slice(0, 3800);
+  const base = wantRiset ? `${cleanTask}${DEEP_RESEARCH_PROTOCOL}` : cleanTask;
+  const truncated = base.length > PAYLOAD_CAP;
+  const payload = truncated ? `${base.slice(0, PAYLOAD_CAP)}${TRUNCATION_NOTICE}` : base;
+
+  if (!repo) return { error: "executor-not-configured", truncated };
   const [owner, repoName] = repo.split("/");
 
   // Path 1: Vercel Connector (repository_dispatch with token server-side).
@@ -82,13 +101,13 @@ export async function delegateToGithub(
     const dispatched = await dispatchViaConnector(env, { owner, repo: repoName, taskId, task: payload });
     if (dispatched.ok) {
       await recordDispatchAudit(env, taskId, repo, task, "connector");
-      return {};
+      return { truncated };
     }
     console.error(`[delegate] connector path failed (${dispatched.error}) — using direct GitHub`);
   }
 
   // Path 2: direct GitHub API (legacy fallback when connector is unavailable).
-  if (!token) return { error: "executor-not-configured" };
+  if (!token) return { error: "executor-not-configured", truncated };
   try {
     const res = await fetchWithTimeout(
       `${GITHUB_API}${repo}/dispatches`,
@@ -108,11 +127,11 @@ export async function delegateToGithub(
       },
       15000,
     );
-    if (!res.ok) return { error: `github_http_${res.status}` };
+    if (!res.ok) return { error: `github_http_${res.status}`, truncated };
     await recordDispatchAudit(env, taskId, repo, task, "direct");
-    return {};
+    return { truncated };
   } catch (e) {
-    return { error: `dispatch_failed:${String(e).slice(0, 80)}` };
+    return { error: `dispatch_failed:${String(e).slice(0, 80)}`, truncated };
   }
 }
 
