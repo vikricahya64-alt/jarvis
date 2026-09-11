@@ -1604,6 +1604,56 @@ async function testAdminChaff() {
   }
 }
 
+async function testRootComprehension() {
+  // m9-v11.32 ROOT COMPREHENSION: the universal text-understanding engine
+  // (all human languages, all literacy registers, all knowledge fields) must
+  // be deterministic, fail-open, and additive — it never throws on any input.
+  const { comprehend, comprehensionNote, detectLanguageUniversal, detectLiteracy, detectKnowledgeDomain } =
+    await import("../src/lib/comprehension");
+
+  // Language: scripts force and exact; Latin by function words (fail-open).
+  assert.strictEqual(detectLanguageUniversal("こんにちは、元気ですか。").code, "ja", "kana → Japanese");
+  assert.strictEqual(detectLanguageUniversal("안녕하세요, 반갑습니다.").code, "ko", "hangul → Korean");
+  assert.strictEqual(detectLanguageUniversal("你好，世界。").code, "zh", "han → Mandarin");
+  assert.strictEqual(detectLanguageUniversal("مرحبا بالعالم").code, "ar", "arabic → Arabic");
+  assert.strictEqual(detectLanguageUniversal("Привет мир").code, "ru", "cyrillic → Russian");
+  assert.ok(
+    ["id", "en"].includes(detectLanguageUniversal("saya ingin bertanya tentang itu dan ini").code),
+    "Indonesian function words detected",
+  );
+  assert.strictEqual(
+    detectLanguageUniversal("what is the weather today and how is it there").code,
+    "en",
+    "English function words detected",
+  );
+  assert.strictEqual(detectLanguageUniversal("").code, "unknown", "empty → unknown");
+
+  // Literacy register.
+  assert.strictEqual(detectLiteracy("wkwk bgt nggak tuh haha").type, "gaul", "slang markers → gaul");
+  assert.strictEqual(detectLiteracy("dengan hormat kami sampaikan bahwa").type, "formal", "formal markers");
+  assert.strictEqual(detectLiteracy("const x = await fetch('https://a.com')").type, "teknis", "code → teknis");
+  assert.strictEqual(detectLiteracy("hipotesis dan metodologi penelitian ini").type, "akademik", "academic markers");
+  assert.strictEqual(detectLiteracy("").type, "unknown", "empty → unknown");
+
+  // Knowledge domain.
+  assert.strictEqual(detectKnowledgeDomain("analisis performa model LLM dan training data").type, "teknologi_ai", "AI keywords");
+  assert.strictEqual(detectKnowledgeDomain("strategi investasi saham dan keuangan").type, "ekonomi_bisnis", "finance keywords");
+  assert.strictEqual(detectKnowledgeDomain("gejala penyakit dan obat untuk jantung").type, "kesehatan", "medical keywords");
+  assert.strictEqual(detectKnowledgeDomain("pasal dan undang-undang hukum").type, "hukum", "law keywords");
+  assert.strictEqual(detectKnowledgeDomain("").type, "umum", "empty → umum");
+
+  // Full profile is deterministic + note is a short natural string (no throw).
+  const p = comprehend("こんにちは、今日は何をしましょうか。");
+  assert.strictEqual(p.language.code, "ja", "profile language");
+  assert.strictEqual(p.adapt.honorifics, true, "japanese → honorifics");
+  const note = comprehensionNote(p);
+  assert.ok(typeof note === "string" && note.length > 0, "comprehension note is a non-empty string");
+  assert.ok(!/\{/.test(note), "note is natural language, not raw JSON");
+
+  // Fail-open: garbage never throws.
+  assert.doesNotThrow(() => comprehend("asdfzxcv qqqqq 12345 !!! 🔥🔥🔥"));
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -1639,6 +1689,7 @@ async function main() {
   await testInputDoor();
   await testFreeServiceLayers();
   await testAdminChaff();
+  await testRootComprehension();
   console.log("SAFETY TESTS PASSED");
 }
 

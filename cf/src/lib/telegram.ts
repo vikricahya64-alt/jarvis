@@ -40,6 +40,37 @@ export interface TelegramDocument {
   file_size?: number;
 }
 
+/** Audio file (not a voice note) — read by transcribing the speech into text. */
+export interface TelegramAudio {
+  file_id: string;
+  file_unique_id: string;
+  duration: number;
+  mime_type?: string;
+  file_size?: number;
+  performer?: string;
+  title?: string;
+}
+
+export interface TelegramVideo {
+  file_id: string;
+  file_unique_id: string;
+  width: number;
+  height: number;
+  duration: number;
+  mime_type?: string;
+  file_size?: number;
+  file_name?: string;
+}
+
+/** Round, short-lived circular video ("video note"). */
+export interface TelegramVideoNote {
+  file_id: string;
+  file_unique_id: string;
+  length: number;
+  duration: number;
+  file_size?: number;
+}
+
 export interface TelegramMessage {
   message_id: number;
   chat: { id: number };
@@ -48,6 +79,9 @@ export interface TelegramMessage {
   date: number;
   photo?: TelegramPhotoSize[];
   voice?: TelegramVoice;
+  audio?: TelegramAudio;
+  video?: TelegramVideo;
+  video_note?: TelegramVideoNote;
   document?: TelegramDocument;
   caption?: string;
 }

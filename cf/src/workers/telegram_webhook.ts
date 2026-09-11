@@ -380,7 +380,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // Media (foto/voice) dipahami sendiri bahkan ketika membawa caption/teks —
   // sebelumnya caption foto jatuh ke chat buta (model tak melihat gambar).
   // Pengecualian: teksnya perintah slash → biarkan command handler yang berhak.
-  const hasMedia = !!(msg.photo?.length || msg.voice);
+  const hasMedia = !!(msg.photo?.length || msg.voice || msg.audio || msg.video || msg.video_note);
   if (hasMedia && !text.trim().startsWith("/")) {
     let mediaReply: string | null = null;
     try {
@@ -395,9 +395,8 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     // M7 media-fix: the user SENT something but we couldn't understand it —
     // owning it HONESTLY beats the old misleading "Kirim teks..." greeting
     // (which pretended no input arrived at all).
-    await fire(sendMessage(env, from, msg.voice
-      ? "⚠️ Pesan suaramu belum bisa kupahami — coba ketik pesannya, atau kirim ulang."
-      : "⚠️ Foto itu belum bisa kubaca — coba kirim ulang, atau ketik deskripsinya."));
+    const mediaKind = msg.video || msg.video_note ? "Video" : msg.audio ? "File audio" : msg.photo?.length ? "Foto" : "Pesan suara";
+    await fire(sendMessage(env, from, `⚠️ ${mediaKind} itu belum bisa kupahami — coba kirim ulang, atau ketik pesannya.`));
     return new Response("ok", { status: 200 });
   }
   if (isEmptyInput(text)) {
