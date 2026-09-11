@@ -403,7 +403,10 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
   if (cmdAlias(trimmed, "/queue_status")) {
-    await safeDBReply(env, r, () => queueStatus(env).then((q) => JSON.stringify(q)));
+    await safeDBReply(env, r, async () => {
+      const q = await queueStatus(env);
+      return `📊 Prioritas antrean — tinggi: \`${q.high}\` · standar: \`${q.standard}\` · rendah: \`${q.low}\``;
+    });
     return new Response("ok", { status: 200 });
   }
   // /debug_bypass — temporarily bypass orchestrator for admin verification.
@@ -515,9 +518,9 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   if (cmdAlias(trimmed, "/obedience_report")) {
     const paused = await isAutonomyPaused(env, r);
     await fire(sendMessage(env, r,
-      `Audit kepatuhan: dictatat per perintah di obedience_audit.\n` +
+      `Audit kepatuhan: dicatat per perintah di \`obedience_audit\`.\n` +
       `Status otonomi: ${paused ? "⏸️ PAUSED" : "▶️ aktif"}\n` +
-      `Lihat /queue_status, /dms_status.`));
+      `Lihat: /queue_status · /dms_status`));
     return new Response("ok", { status: 200 });
   }
 
