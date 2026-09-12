@@ -2,12 +2,29 @@
 // comprehension.ts — ROOT comprehension engine (m9-v11.32).
 //
 // Visi pemilik (m9-v11.32): semua kemampuan JARVIS (cabang) berakar dari
-// kemampuan memahami TEXT/TULISAN (akar). Empat pilar visi:
+// kemampuan memahami TEXT/TULISAN (akar). PEMILIK MEMASUKKAN 5 KEMAMPUAN
+// FONDASI (rekonstruksi visi, m9-v11.47 — tersurat eksplisit):
 //   1. Memahami text/tulisan dalam bentuk apa pun.
 //   2. Memahami semua literasi (gaul, formal, teknis, akademik, kreatif).
 //   3. Memahami semua bahasa manusia (bukan hanya id/en/ms/jv/su).
 //   4. Memahami semua bidang ilmu pengetahuan.
-// Plus adaptasi per sesi owner (jawaban pemilik: "untuk saya sendiri").
+//   5. Adaptasi per sesi pemilik (jawaban pemilik: "untuk saya sendiri").
+//
+// KEMAMPUAN FONDASI KE-6 (m9-v11.47): mampu memahami & MENGGUNAKAN SEMUA
+// KEMAMPUAN FONDASI (1-5) DAN semua kemampuan lain secara TEPAT — berakar
+// dari fondasi 1-4 (pahami teks itulah yang dipahami), bersandar pada 5
+// (adaptif per pemilik). Konsekuensi arsitektur:
+//   - Setiap kemampuan didaftarkan sebagai KONTRAK TEKS (capability_registry):
+//     id + ringkasan + pemicu + izin + intent tertunda (parked). Menambah
+//     kemampuan = menambah satu kontrak, bukan regex liar per file.
+//   - Router membaca kontrak tersebut (resolveCommandCapability /
+//     resolveParkedResumeWords / matchWebhookPreCapability / capabilityIntent)
+//     dan sumbu-bentuk (intelligence.heavyCapabilityShape, isSourcingOrder).
+//   - Pengetahuan-diri (describeAllCapabilities / capabilityContextBlock)
+//     DIBANGKITKAN dari kontrak teks — dipakai di /kemampuan dan system prompt
+//     sehingga model memahami kemampuan nyata, bukan mengarang.
+//   - Karena akar-nya komprehensi teks, "memahami diri" ikut-ikutan paham
+//     tiap pembaruan kemampuan tanpa perlu di-rekode per kasus.
 //
 // Engine ini ADITIF — tidak menghapus cabang apa pun (jarvis_language,
 // normalize, translate, research, memory, dst). Ia hanya melengkapi

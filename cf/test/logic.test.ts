@@ -2006,9 +2006,79 @@ async function testEscalationOrdering() {
   assert.strictEqual(isCasualOnly("ambil 3 artikel"), false, "execution task NOT casual-only");
 }
 
+async function testCapabilityFoundation() {
+  // m9-v11.47 FONDASI KE-6 (rekonstruksi visi 5 kemampuan fondasi): JARVIS
+  // memahami & MENGGUNAKAN semua kemampuan secara tepat dari KONTRAK TEKS di
+  // registri (bukan regex per-kemampuan). Dipakai untuk: (1) rute perintah
+  // webhook, (2) resume intent tertunda — termasuk kasus live "Ya" → buka
+  // sandbox rencana tertunda (dulu jatuh ke memori model), (3) pengetahuan
+  // diri (/kemampuan + system prompt).
+  const {
+    resolveCommandCapability,
+    resolveParkedResumeWords,
+    describeAllCapabilities,
+    STRICT_APPROVAL_RE,
+    CAPABILITY_COMMANDS,
+  } = await import("../src/lib/capability_registry");
+  const { heavyCapabilityShape, isCodeTaskIntent } = await import("../src/lib/intelligence");
+
+  // --- (1) Router perintah dari kontrak teks ---
+  assert.strictEqual(resolveCommandCapability("/proyek cari X")?.id, "proyek", "route /proyek");
+  assert.strictEqual(resolveCommandCapability("/etask buat laporan")?.id, "etask", "route /etask");
+  assert.strictEqual(resolveCommandCapability("/tugas list")?.id, "tugas", "route /tugas");
+  assert.strictEqual(resolveCommandCapability("/pinjam cuaca jakarta")?.id, "pinjam", "route /pinjam");
+  assert.strictEqual(resolveCommandCapability("/baca https://x.com")?.id, "baca", "route /baca");
+  assert.strictEqual(resolveCommandCapability("/suara halo")?.id, "suara", "route /suara");
+  assert.strictEqual(resolveCommandCapability("/kota jakarta")?.id, "kota", "route /kota");
+  assert.strictEqual(resolveCommandCapability("/health")?.id, "sistem", "route /health");
+  assert.strictEqual(resolveCommandCapability("/kemampuan")?.id, "sistem", "route /kemampuan");
+  assert.strictEqual(resolveCommandCapability("tambah todo membeli susu")?.id, "todo", "natural todo");
+  assert.strictEqual(resolveCommandCapability("delegasikan riset kompetitor")?.id, "tugas", "natural delegasikan");
+  assert.strictEqual(resolveCommandCapability("halo apa kabar")?.id, undefined, "no fallback hijack");
+
+  // --- (2) Satu sumber kata persetujuan (fail-closed, sengaja sempit) ---
+  for (const yes of ["ya", "iya", "y", "yes", "oke", "ok", "okay", "siap", "setuju", "gas", "lanjut", "jalan", "jalankan", "eksekusi"]) {
+    assert.ok(STRICT_APPROVAL_RE.test(yes), `approval word ok: ${yes}`);
+  }
+  assert.ok(!STRICT_APPROVAL_RE.test("ya proyek"), "'ya proyek' is the explicit phrase, handled separately");
+  assert.ok(!STRICT_APPROVAL_RE.test("ya deh"), "'ya deh' too loose — must not auto-approve");
+  assert.ok(!STRICT_APPROVAL_RE.test("ya tapi nanti"), "qualified 'ya' must not auto-approve");
+  assert.ok(!STRICT_APPROVAL_RE.test("halo"), "greeting is not approval");
+
+  // --- (2b) Resume intent tertunda lewat kontrak registri ---
+  const proyekSpec = CAPABILITY_COMMANDS.find((c) => c.id === "proyek")!;
+  const tugasSpec = CAPABILITY_COMMANDS.find((c) => c.id === "tugas")!;
+  const proj = resolveParkedResumeWords(proyekSpec, "ya");
+  assert.ok(proj?.handler === "project_approval", "bare 'ya' resumes project approval contract");
+  const projPhrase = resolveParkedResumeWords(proyekSpec, "ya proyek");
+  assert.ok(projPhrase?.handler === "project_approval", "'ya proyek' resumes project approval");
+  assert.strictEqual(resolveParkedResumeWords(proyekSpec, "halo"), null, "'halo' does NOT touch parked plan");
+  const rel = resolveParkedResumeWords(tugasSpec, "1");
+  assert.ok(rel?.handler === "relevance_resume", "'1' resumes relevance gate");
+  const nego = resolveParkedResumeWords(tugasSpec, "cuaca singkat");
+  assert.ok(nego?.handler === "nego_resume", "plain text while nego session parked resumes negotiation");
+
+  // --- (2c) Kontrak menyimpan kunci KV yang benar ---
+  assert.ok(proj?.key(77).startsWith("proyek_plan:"), "project park key");
+  assert.ok(rel?.key(77).startsWith("relevance_wait:"), "relevance park key");
+  assert.ok(nego?.key(77).startsWith("nego:"), "negotiation park key");
+
+  // --- (3) Pengetahuan-diri dibangkitkan dari kontrak teks ---
+  const desc = describeAllCapabilities();
+  assert.ok(desc.includes("Otak (inti)") && desc.includes("Perintah (webhook)"), "self-knowledge covers both planes");
+  assert.ok(desc.toLowerCase().includes("kemampuan fondasi"), "self-knowledge names the vision");
+
+  // --- (4) Sumbu-bentuk (heavy capability) di-share satu sumber ---
+  assert.strictEqual(heavyCapabilityShape("ambil 3 artikel AI dari Google News lalu rangkum"), "search", "sourcing shape → search");
+  assert.strictEqual(heavyCapabilityShape("apa itu AI?"), "question", "communicate shape → question");
+  assert.strictEqual(heavyCapabilityShape("tulis skrip python untuk fetch harga BTC"), "code", "code shape → code");
+  assert.strictEqual(isCodeTaskIntent("aku suka coding"), false, "'suka coding' tidak dikira tugas kode");
+  assert.strictEqual(heavyCapabilityShape("ambil foto hasil jepretan"), null, "ambiguous → null (fail-closed)");
+  assert.strictEqual(heavyCapabilityShape("halo"), null, "greeting → null");
+}
+
 async function testProjectPlanContract() {
   // v11.45 GERBANG EKSEKUSI TUNGGAL: launchParkedProject adalah SATU-SATUNYA
-  // jalur yang boleh membuka sandbox, dipanggil hanya setelah pemilik setuju
   // ("ya proyek"). Mempertahankan kontrak v11.43 (urutan yang membetulkan
   // "sandbox id hilang di ledger") pada lapisan paling terakhir.
   const { planAndParkProject, launchParkedProject, parkProjectPlan } =
@@ -2240,6 +2310,7 @@ async function main() {
   await testProjectPlanContract();
   await testSourcingOrderIntent();
   await testRuntimeEditRails();
+  await testCapabilityFoundation();
   console.log("LOGIC TESTS PASSED");
 }
 

@@ -45,7 +45,14 @@ interface MessageContext {
   text: string;
   source: "telegram" | "api" | "webhook";
 }
-import { matchWebhookPreCapability } from "../lib/capability_registry";
+import {
+  matchWebhookPreCapability,
+  CAPABILITY_COMMANDS,
+  resolveParkedResumeWords,
+  resolveCommandCapability,
+  describeAllCapabilities,
+  STRICT_APPROVAL_RE,
+} from "../lib/capability_registry";
 import { JARVIS_IDENTITY, SELF_REF_RE } from "../lib/identity";
 import { covenantStatusText, signClause } from "../lib/covenant_core";
 import { identityStatusText } from "../lib/identity_anchor";
@@ -273,39 +280,18 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
 
-  // RELEVANCE-GATE RESUME (single brain-owned gate). When the brain parked a
-  // relevance question (relevance_wait:<owner>), the owner's plain-text
-  // confirmation ("1"/"2"/"ya"/"tidak") MUST resume the parked intent through
-  // the brain — never through a second webhook-owned research path (there is
-  // none anymore). A non-confirmation reply is processed as a fresh query; the
-  // brain discards the stale park itself (fail-closed, TTL-bounded).
-  const pendingRel = await env.CONFIG_KV.get(`relevance_wait:${from}`, "json").catch<unknown>(() => null) as
-    null | Record<string, unknown>;
-  if (pendingRel) {
-    const reply = text.trim().toLowerCase();
-    if (reply === "1" || reply === "2" || reply === "ya" || reply === "oke"
-      || reply === "ok" || reply === "tidak" || reply === "bukan") {
-      console.log(`[relevance_resume] owner=${from} reply=${reply}`);
-      await runBrain(env, from, text);
-      return new Response("ok", { status: 200 });
-    }
-  }
+  // ------------------------------------------------------------------------
+  // PARKED-INTENT RESUME (FONDASI, m9-v11.47): SATU gerbang untuk segala
+  // intent tertunda — gate relevansi, sesi negosiasi /tugas, dan persetujuan
+  // rencana proyek/etask. Kata/simbol resume & kunci KV dibaca dari registri
+  // kemampuan (bukan hardcode per-kemampuan). Fail-closed: tanpa intent
+  // tertunda, "ya"/"oke" biasa tetap ke jalur normal (obrolan/memori) —
+  // sandbox TIDAK pernah terbuka tanpa rencana yang benar-benar tertunda.
+  // ------------------------------------------------------------------------
+  const resume = await resolveParkedResume(env, from, text);
+  if (resume.consumed) return new Response("ok", { status: 200 });
 
-  // /TUGAS NEGOTIATION RESUME (bridge, m9-v11.31). While a negotiate session
-  // is parked (nego:<owner>), the NEXT plain-text reply from the owner resumes
-  // the Q&A: an "ask" step consumes the answer to the current question, and a
-  // "confirm" step accepts GO (dispatch) or batal. This runs BEFORE the
-  // command/greeting handlers so a negotiation answer is never misrouted to
-  // the brain or to another command. Deliberately AFTER the relevance-gate
-  // resume (that parked intent outranks a stale negotiation). Fail-closed:
-  // any hiccup just leaves the reply to the normal pipeline.
-  const negoSession = await readNegotiation(env, from).catch(() => null);
-  if (negoSession && !/^\//.test(text.trim())) {
-    const consumed = await resumeNegotiation(env, from, negoSession, text);
-    if (consumed) return new Response("ok", { status: 200 });
-  }
-
-  // Best-effort activity touch — a transient D1 error must NEVER silently drop
+  // Best-effort activity touch  // Best-effort activity touch — a transient D1 error must NEVER silently drop
   // the user's message. Fire-and-forget; the reply path is independent.
   touchActivity(env, from, "telegram").catch(() => {});
 
@@ -483,6 +469,10 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     }
     lines.push("Ketik pertanyaan apa saja — JARVIS akan menjawab secara natural.");
     await fire(sendMessage(env, r, lines.join("\n")));
+    return new Response("ok", { status: 200 });
+  }
+  if (trimmed === "/kemampuan") {
+    await fire(sendMessage(env, r, describeAllCapabilities()));
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/checkin" || trimmed === "/stop" || trimmed === "/kill") {
@@ -970,6 +960,46 @@ async function resolveConsent(env: Env, owner: number, corr: string, decision: s
     console.error("[consent] re-exec gagal:", (e as Error).message);
   });
   return true;
+}
+
+/** PARKED-INTENT RESUME (FONDASI, m9-v11.47): SATU gerbang untuk segala
+ *  intent tertunda JARVIS — gate relevansi, sesi negosiasi /tugas, dan
+ *  persetujuan rencana proyek/etask. Kata/simbol resume & kunci KV dibaca
+ *  dari REGISTRI kemampuan (capability_registry), bukan blok per-kemampuan
+ *  yang bisa saling melenceng. Prioritas = urutan kontrak (relevansi →
+ *  nego → proyek, sama seperti sebelumnya).
+ *
+ *  Fail-closed dengan dua lapis: (1) pesan harus cocok kata-resume kontrak,
+ *  (2) intent itu harus BENAR-BENAR tertunda (kunci KV ada). Tanpa itu,
+ *  "ya"/"oke" biasa tetap ke jalur normal (obrolan/memori) — tidak ada
+ *  sandbox yang terbuka tanpa rencana yang benar-benar menunggu. */
+export async function resolveParkedResume(
+  env: Env,
+  from: number,
+  text: string,
+): Promise<{ consumed: boolean; capability?: string }> {
+  for (const spec of CAPABILITY_COMMANDS) {
+    const parked = resolveParkedResumeWords(spec, text);
+    if (!parked) continue;
+    const waiting = await env.CONFIG_KV.get(parked.key(from)).catch(() => null);
+    if (!waiting) continue;
+    console.log(`[parked_resume] capability=${spec.id} handler=${parked.handler} owner=${from}`);
+    switch (parked.handler) {
+      case "relevance_resume":
+        await runBrain(env, from, text);
+        return { consumed: true, capability: spec.id };
+      case "nego_resume": {
+        const s = await readNegotiation(env, from).catch(() => null);
+        if (!s) continue;
+        const used = await resumeNegotiation(env, from, s, text);
+        return { consumed: used, capability: spec.id };
+      }
+      case "project_approval":
+        await handleProyekCommand(env, from, "ya proyek");
+        return { consumed: true, capability: spec.id };
+    }
+  }
+  return { consumed: false };
 }
 
 /** Single brain-owned text pipeline: research, follow-up, chat, code and
