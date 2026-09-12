@@ -54,6 +54,7 @@ import { getDegradationStatus } from "../lib/degradation";
 import { delegateToGithub, flagAgentReport, truncationWarning, usesDeepResearchProtocol, stripDeepResearchFlag } from "../lib/agent_executor";
 import { e2bRun, e2bConfigured, e2bSummary, e2bStateHint } from "../lib/e2b";
 import { delegateToE2b } from "../lib/e2b_executor";
+import { parseBorrowedTarget, borrowedExecutorTag, borrowedExecutorLabel, BORROWED_EXECUTOR_IDS } from "../lib/borrowed_executor";
 import { parseRecurSpec } from "../lib/agent_rules";
 import { readNegotiation, saveNegotiation, clearNegotiation, generateClarifyQuestions, compileFinalInstruction, type NegoSession } from "../lib/negotiation";
 import {
@@ -797,6 +798,18 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // FULL native capability. Fail-closed on every edge (no key → graceful).
   if (isE2bTaskCommand(trimmed)) {
     await handleE2bTaskCommand(env, r, text);
+    return new Response("ok", { status: 200 });
+  }
+
+  // ASYNC BORROWED-EXECUTOR DELEGATION (data/search/media) — the SAME
+  // executor system as opencode/GitHub and E2B, generalized to the remaining
+  // borrowed platforms: JARVIS (third-party orchestrator) queues the task on
+  // the agent_tasks ledger, the per-minute cron runs it against the borrowed
+  // platform (web search + LLM synthesis for riset, Context7 for docs, Figma /
+  // Notion connectors, Open-Meteo for cuaca), sanitizes + DMs the report.
+  // Fail-closed: unknown executor → usage error (never pollutes the ledger).
+  if (isPinjamCommand(trimmed)) {
+    await handlePinjamCommand(env, r, text);
     return new Response("ok", { status: 200 });
   }
 
@@ -2059,6 +2072,63 @@ async function handleE2bCommand(env: Env, from: number, raw: string): Promise<vo
 /** True when the message is an E2B delegation command (slash only). */
 function isE2bTaskCommand(trimmed: string): boolean {
   return trimmed === "/etask" || /^\/etask\b/i.test(trimmed);
+}
+
+function isPinjamCommand(trimmed: string): boolean {
+  return trimmed === "/pinjam" || /^\/pinjam\b/i.test(trimmed);
+}
+
+/** Execute borrowed-executor delegation commands (/pinjam <eksekutor> <tugas>).
+ *  Validates the executor BEFORE touching the ledger (fail-closed: unknown
+ *  targets are answered with usage, never stored), then queues the row with
+ *  executor='borrowed:<id>'. Execution itself happens in the per-minute cron
+ *  poller (pollBorrowedRuns) — no external launch here, so the webhook stays
+ *  fast and the poller owns the async result delivery, exactly like /etask. */
+async function handlePinjamCommand(env: Env, from: number, raw: string): Promise<void> {
+  const trimmed = raw.trim();
+  try {
+    if (trimmed === "/pinjam") {
+      await fire(sendMessage(env, from,
+        "🧩 *Pinjam — delegasi async ke eksekutor eksternal (data/search/media)*\n" +
+        "Sistem sama persis dengan eksekutor opencode & E2B: **JARVIS orkestrator pihak ketiga** meminjam platform eksternal untuk mengerjakan tugas; platform itu mengeksekusi dengan kemampuan penuhnya — JARVIS tidak membangun ulang kemampuan apa pun. Hasil dipoll otomatis per menit & di-DM ke kamu.\n\n" +
+        "• `/pinjam riset <topik>` — riset web + sintesis kutipan (search DDG/Bing/SearX + LLM)\n" +
+        "• `/pinjam docs <library>` — dokumentasi Context7 ter-grounding (tanpa halusinasi)\n" +
+        "• `/pinjam figma <fileKey>` — baca struktur file Figma (via connector)\n" +
+        "• `/pinjam notion <query>` — pencarian database Notion (via connector)\n" +
+        "• `/pinjam cuaca <kota>` — prakiraan Open-Meteo\n\n" +
+        "Riwayat: `/tugas list`."));
+      return;
+    }
+
+    const sub = trimmed.match(/^\/pinjam\s+(.+)$/s);
+    if (!sub) {
+      await fire(sendMessage(env, from, "Penggunaan: `/pinjam <eksekutor> <tugas>`"));
+      return;
+    }
+    const target = sub[1].trim();
+    const { executor, body } = parseBorrowedTarget(target);
+    if (!executor) {
+      const known = BORROWED_EXECUTOR_IDS.join("`, `");
+      await fire(sendMessage(env, from,
+        `⚠️ Eksekutor pinjaman tidak dikenal. Yang tersedia: \`${known}\`.\nPenggunaan: \`/pinjam riset <topik>\``));
+      return;
+    }
+    if (body.length < 3) {
+      await fire(sendMessage(env, from, "📝 Beri tugas untuk eksekutor pinjaman tersebut (minimal 3 karakter)."));
+      return;
+    }
+
+    const id = await addAgentTask(env, from, target.slice(0, 4000), borrowedExecutorTag(executor));
+    if (!id) {
+      await fire(sendMessage(env, from, "⚠️ Gagal menyimpan tugas pinjaman. Coba lagi."));
+      return;
+    }
+    await markAgentTaskRunning(env, id);
+    await fire(sendMessage(env, from,
+      `⏳ Tugas *#${id}* terdaftar — meminjam *${borrowedExecutorLabel(executor)}* untuk: \`${body.slice(0, 60)}${body.length > 60 ? "…" : ""}\`. Hasil akan di-DM (≤1 menit).`));
+  } catch (e) {
+    await fire(sendMessage(env, from, `⚠️ Perintah pinjam gagal: ${String(e).slice(0, 200)}`));
+  }
 }
 
 /** Execute E2B delegation commands: /etask <tugas> queues the task on the

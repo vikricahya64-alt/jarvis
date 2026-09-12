@@ -1154,14 +1154,17 @@ export interface AgentTaskRule {
 }
 
 /** Insert a delegation task for any borrowed executor ('github' default,
- *  'e2b' for the E2B sandbox platform). Returns its id, or 0 on failure. */
+ *  'e2b' for E2B, 'borrowed:<id>' for data/search/media). The executor tag
+ *  round-trips VERBATIM into agent_tasks.executor so pollers can pick rows
+ *  back up by pattern. Returns its id, or 0 on failure. */
 export async function addAgentTask(env: Env, owner: number, task: string, executor = "github", ruleId?: number): Promise<number> {
   try {
     const clean = task.trim();
     if (!clean || clean.length < 3 || clean.length > 4000) return 0;
+    const exec = (executor || "github").trim();
     const res = await env.DB.prepare(
       `INSERT INTO agent_tasks (owner_id, task, executor, status, created_at, rule_id) VALUES (?, ?, ?, 'pending', ?, ?)`,
-    ).bind(owner, clean, executor === "e2b" ? "e2b" : "github", Date.now(), ruleId ?? null).run();
+    ).bind(owner, clean, exec, Date.now(), ruleId ?? null).run();
     return Number(res.meta.last_row_id ?? res.meta.changes ?? 0);
   } catch {
     return 0;
@@ -1177,6 +1180,21 @@ export async function listAgentTasksByExecutor(env: Env, executor: string, limit
         WHERE executor = ? AND status IN ('running', 'pending')
         ORDER BY id ASC LIMIT ?`,
     ).bind(executor, limit).all<AgentTaskItem>();
+    return (results ?? []) as AgentTaskItem[];
+  } catch {
+    return [];
+  }
+}
+
+/** Pending/running rows across ALL data/search/media borrowed executors
+ *  (executor LIKE 'borrowed:%'). Used by the per-minute poller. */
+export async function listBorrowedAgentTasks(env: Env, limit = 6): Promise<AgentTaskItem[]> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT * FROM agent_tasks
+        WHERE executor LIKE 'borrowed:%' AND status IN ('running', 'pending')
+        ORDER BY id ASC LIMIT ?`,
+    ).bind(limit).all<AgentTaskItem>();
     return (results ?? []) as AgentTaskItem[];
   } catch {
     return [];

@@ -10,6 +10,7 @@
 
 import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders, getAgentTask, finishAgentTask, listAgentTasks, failStaleAgentTasks, pruneOldAgentTasks, rememberMemory } from "./lib/db";
 import { pollE2bAgentRuns } from "./lib/e2b_executor";
+import { pollBorrowedRuns } from "./lib/borrowed_executor";
 import { sanitizeAgentReport, flagAgentReport } from "./lib/agent_executor";
 import { fireDueAgentRules } from "./lib/agent_rules";
 import { handleUpdate, ensureWebhook } from "./workers/telegram_webhook";
@@ -168,7 +169,7 @@ export default {
         ok: true,
         ts: Date.now(),
 env: env.APP_ENV ?? "unknown",
-        version: "m9-v11.38",
+        version: "m9-v11.39",
       }));
     }
 
@@ -275,7 +276,7 @@ env: env.APP_ENV ?? "unknown",
         return respond(Response.json({
           ok: true,
 ts: Date.now(),
-          version: "m9-v11.38",
+          version: "m9-v11.39",
           systems: {
             d1: d1Ok ? "✅" : "❌",
             kv: kvOk ? "✅" : "❌",
@@ -610,6 +611,13 @@ ts: Date.now(),
         const e2bDone = await pollE2bAgentRuns(env);
         if (e2bDone > 0) {
           console.log(`[cron] e2b_executor: finalized=${e2bDone} (${Date.now() - start}ms)`);
+        }
+        // v11.39: borrowed data/search/media executors — run any queued
+        // /pinjam rows on the ledger with the borrowed platform, sanitize
+        // the report and DM it (generalization of the E2B poller).
+        const borrowedDone = await pollBorrowedRuns(env, 4);
+        if (borrowedDone > 0) {
+          console.log(`[cron] borrowed_executor: finalized=${borrowedDone} (${Date.now() - start}ms)`);
         }
       }
     } catch (e) {

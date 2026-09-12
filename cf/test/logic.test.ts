@@ -1750,6 +1750,39 @@ async function testGroqSingleShotRails() {
     "https://api.groq.com/openai/v1/chat/completions", "no gateway → direct default");
 }
 
+async function testBorrowedExecutorRails() {
+  // m9-v11.39: /etask generalization to data/search/media — same ledger +
+  // poll + DM system, tagged executor='borrowed:<id>'. Pure guards here
+  // never touch the network or the DB.
+  const {
+    parseBorrowedTarget, parseBorrowedRow, borrowedExecutorTag,
+    borrowedExecutorLabel, BORROWED_EXECUTOR_IDS, runBorrowedExecutor,
+  } = await import("../src/lib/borrowed_executor");
+
+  assert.deepStrictEqual(parseBorrowedTarget("riset kompetitor AI 2026"),
+    { executor: "riset", body: "kompetitor AI 2026" }, "parses riset target");
+  assert.deepStrictEqual(parseBorrowedTarget("FIGMA zxcv12345678"),
+    { executor: "figma", body: "zxcv12345678" }, "case-insensitive executor, body preserved");
+  assert.deepStrictEqual({ executor: parseBorrowedTarget("notion status?").executor },
+    { executor: "notion" }, "notion resolves");
+  assert.strictEqual(parseBorrowedTarget("mystery foo bar").executor, null,
+    "unknown executor fails closed (no ledger pollution)");
+  assert.deepStrictEqual(parseBorrowedTarget("riset"), { executor: "riset", body: "" },
+    "body may be empty (caller validates length)");
+
+  assert.strictEqual(borrowedExecutorTag("docs"), "borrowed:docs", "tag pattern");
+  assert.deepStrictEqual(parseBorrowedRow("figma zxcv", "borrowed:figma"),
+    { tag: "borrowed:figma", body: "zxcv" }, "row round-trips to exec + body");
+  assert.deepStrictEqual(parseBorrowedRow("riset sejarah tambang", "borrowed:riset"),
+    { tag: "borrowed:riset", body: "sejarah tambang" }, "riset body stripped correctly");
+  assert.ok(BORROWED_EXECUTOR_IDS.length >= 5, "every data/search/media id mapped");
+  assert.ok(borrowedExecutorLabel("riset").includes("DDG"), "label names real borrowed platforms");
+
+  // runBorrowedExecutor fail-closed: empty body → "", no network.
+  const empty = await runBorrowedExecutor({ APP_ENV: "test" } as any, "docs", "");
+  assert.strictEqual(empty, "", "empty body never executes");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -1809,6 +1842,7 @@ async function main() {
   await testE2bExecutorRails();
   await testBorrowedRails();
   await testGroqSingleShotRails();
+  await testBorrowedExecutorRails();
   console.log("LOGIC TESTS PASSED");
 }
 
