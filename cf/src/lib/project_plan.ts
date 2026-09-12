@@ -19,8 +19,9 @@ import { negotiateGoalTranslate, type ExecutablePlan } from "./translator";
 export const PROJECT_PLAN_TTL_S = 30 * 60;
 export const PROJECT_META_TTL_S = 7 * 24 * 60 * 60;
 
-export type ParkedProject = { goal: string; language: string; code: string; ts: number };
-export type ProjectMeta = { goal: string; language: string; code: string; ts: number };
+export type ExecLanguage = "bash" | "python";
+export type ParkedProject = { goal: string; language: ExecLanguage; code: string; ts: number };
+export type ProjectMeta = { goal: string; language: ExecLanguage; code: string; ts: number };
 
 export function projectPlanKey(owner: number): string {
   return `proyek_plan:${owner}`;
@@ -36,11 +37,12 @@ export async function readProjectPlan(env: Env, owner: number): Promise<ParkedPr
     if (!raw) return null;
     const o = JSON.parse(raw) as ParkedProject;
     if (!o?.code) return null;
-    return { goal: String(o.goal ?? ""), language: String(o.language ?? "bash"), code: String(o.code), ts: Number(o.ts ?? 0) };
+    const lang = String(o.language ?? "bash");
+    return { goal: String(o.goal ?? ""), language: lang === "python" ? "python" : "bash", code: String(o.code), ts: Number(o.ts ?? 0) };
   } catch { return null; }
 }
 
-export async function parkProjectPlan(env: Env, owner: number, goal: string, language: string, code: string): Promise<void> {
+export async function parkProjectPlan(env: Env, owner: number, goal: string, language: ExecLanguage, code: string): Promise<void> {
   await env.CONFIG_KV.put(projectPlanKey(owner), JSON.stringify({ goal, language, code, ts: Date.now() }), {
     expirationTtl: PROJECT_PLAN_TTL_S,
   }).catch(() => {});
@@ -62,13 +64,17 @@ export async function readProjectMeta(env: Env, taskId: number): Promise<Project
     if (!raw) return null;
     const o = JSON.parse(raw) as ProjectMeta;
     if (!o?.goal) return null;
-    return { goal: String(o.goal), language: String(o.language ?? "bash"), code: String(o.code ?? ""), ts: Number(o.ts ?? 0) };
+    return { goal: String(o.goal), language: String(o.language ?? "bash") === "python" ? "python" : "bash", code: String(o.code ?? ""), ts: Number(o.ts ?? 0) };
   } catch { return null; }
 }
 
 /** Injectable sandbox launcher for tests (default = real E2B delegation). */
 export type LaunchDeps = {
-  delegate?: (env: Env, task: string, opts?: { riset?: boolean }) => Promise<{ runId?: string; error?: string }>;
+  delegate?: (
+    env: Env,
+    task: string,
+    opts?: { riset?: boolean; language?: "bash" | "python" },
+  ) => Promise<{ runId?: string; error?: string }>;
 };
 
 export type LaunchOutcome =
@@ -137,8 +143,8 @@ export async function launchParkedProject(
     // re-translate without the owner re-typing the goal. Best-effort.
     await storeProjectMeta(env, id, parked.goal, parked.language, parked.code);
 
-    const delegate = deps.delegate ?? delegateToE2b;
-    const { runId, error } = await delegate(env, parked.code).catch(
+const delegate = deps.delegate ?? delegateToE2b;
+    const { runId, error } = await delegate(env, parked.code, { language: parked.language }).catch(
       () => ({ runId: "", error: "e2b-launch-failed" }),
     );
     if (error) {

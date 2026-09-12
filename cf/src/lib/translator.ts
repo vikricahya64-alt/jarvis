@@ -176,6 +176,8 @@ const TRANSLATOR_SYSTEM =
   "PILIH bash untuk otomatisasi sistem/pencarian/latensi-rendah; python untuk parsing data, " +
   "API, atau perhitungan. Tulis skrip yang TEGAS dan TIDAK interaktif (tanpa prompt), dengan " +
   "set -e untuk bash; cetak hasil akhir yang jelas (jangan hanya status sukses — tampilkan data). " +
+  "Tulis EVERYTHING yang terlihat pemilik (steps, summary) dalam BAHASA PEMILIK sesuai goal " +
+  "(mis. goal Bahasa Indonesia → steps/summary Bahasa Indonesia; kode tetap python/bash biasa). " +
   "CAKUP kapabilitas: riset web/API (pakai curl), parsing, laporan, otomasi. JANGAN meminta izin " +
   "di dalam skrip. " +
   "Jika GOAL BUKAN tugas yang jelas (kata tunggal seperti \"lanjut\", sapaan, frasa ambigu, " +
