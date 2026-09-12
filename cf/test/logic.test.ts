@@ -1823,6 +1823,44 @@ async function testExecutorSelectionRails() {
     "unambiguously ungrounded research output selects the better executor");
 }
 
+async function testTranslatorRails() {
+  // m9-v11.42: JARVIS as the THIRD-PARTY interpreter — user language →
+  // programming language for borrowed concept-system executors. The plan
+  // must be strictly validated before it can ever reach a sandbox.
+  const { parseExecutablePlan, translateTaskToExecutable, TRANSLATOR_CODE_CAP } =
+    await import("../src/lib/translator");
+
+  assert.strictEqual(parseExecutablePlan(null), null, "null plan rejected");
+  assert.strictEqual(parseExecutablePlan("garbage not json"), null, "non-JSON rejected");
+  assert.strictEqual(parseExecutablePlan('{"language":"powershell","code":"x","steps":["a"]}'), null,
+    "unsupported language rejected (fail-closed)");
+  assert.strictEqual(parseExecutablePlan('{"language":"bash","code":"","steps":["a"]}'), null,
+    "empty code rejected");
+  assert.strictEqual(parseExecutablePlan('{"language":"bash","code":"echo hi","steps":[]}'), null,
+    "empty steps rejected — a plan for discussion needs visible steps");
+  assert.strictEqual(parseExecutablePlan('{"language":"python","code":"print(1)","summary":"s"}'), null,
+    "missing steps rejected");
+
+  const ok = parseExecutablePlan(
+    '```json\n{"language":"bash","code":"curl -s https://example.com | head","steps":["ambil feed","tampilkan 10 baris"],"summary":"Ambil dan tampilkan feed."}\n```',
+  );
+  assert.ok(ok && ok.language === "bash", "fenced JSON parsed");
+  assert.deepStrictEqual(ok.steps, ["ambil feed", "tampilkan 10 baris"], "steps preserved for discussion");
+  assert.ok(ok.code.includes("curl"), "code artifact kept for the executor");
+  assert.ok(TRANSLATOR_CODE_CAP >= 2000, "code cap shared with payload contract");
+
+  const capped = parseExecutablePlan(
+    JSON.stringify({ language: "bash", code: "x".repeat(TRANSLATOR_CODE_CAP + 500), steps: ["s"], summary: "" }),
+  );
+  assert.ok(capped && capped.code.length <= TRANSLATOR_CODE_CAP, "oversized code is capped");
+
+  // Fail-closed translation: no key → null, no network, never throws.
+  const none = await translateTaskToExecutable({ APP_ENV: "test" } as any, "unduh halaman web");
+  assert.strictEqual(none, null, "no LLM key → null (no outbound)");
+  assert.strictEqual(await translateTaskToExecutable({ APP_ENV: "test" } as any, "x"), null,
+    "too-short goal → null");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -1884,6 +1922,7 @@ async function main() {
   await testGroqSingleShotRails();
   await testBorrowedExecutorRails();
   await testExecutorSelectionRails();
+  await testTranslatorRails();
   console.log("LOGIC TESTS PASSED");
 }
 
