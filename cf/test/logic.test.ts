@@ -2109,6 +2109,44 @@ async function testCapabilityFoundation() {
   assert.ok(ev1, "e2b launch script wired to JARVIS_LANG");
 }
 
+async function testFoundationAnchoring() {
+  // m9-v11.50 AUDIT: kemampuan yang sudah ada SEBELUM fondasi+cabang tidak
+  // boleh menjadi cangkang kosong berkemampuan. Setiap kontrak (otak + perintah)
+  // WAJIB punya visi (kenapa ada) + minimal satu sandaran fondasi yang valid,
+  // sehingga kemampuan fondasi benar-benar menjadi sandaran SEMUA kemampuan.
+  const {
+    CAPABILITY_CONTRACTS,
+    CAPABILITY_COMMANDS,
+    FOUNDATION_LABELS,
+  } = await import("../src/lib/capability_registry");
+  const validFoundations = new Set(Object.keys(FOUNDATION_LABELS));
+
+  const audit = (kind: string, id: string, vision: string, foundations: string[]) => {
+    assert.ok(vision && vision.trim().length >= 15, `${kind} ${id}: punya visi nyata (bukan cangkang)`);
+    assert.ok(Array.isArray(foundations) && foundations.length >= 1, `${kind} ${id}: tersandar minimal 1 fondasi`);
+    for (const f of foundations) {
+      assert.ok(validFoundations.has(f), `${kind} ${id}: sandaran '${f}' adalah fondasi yang sah`);
+    }
+  };
+
+  for (const c of CAPABILITY_CONTRACTS) audit("otak", c.id, c.vision, c.foundations);
+  for (const c of CAPABILITY_COMMANDS) audit("perintah", c.id, c.vision, c.foundations);
+
+  // Tidak ada kemampuan tanpa sandaran (fail-closed di level registri).
+  assert.ok(CAPABILITY_CONTRACTS.length >= 13, "all brain contracts audited");
+  assert.ok(CAPABILITY_COMMANDS.length >= 13, "all webhook contracts audited");
+
+  // Pengetahuan-diri akhirnya memperlihatkan fondasi sebagai sandaran semua.
+  const { describeAllCapabilities, capabilityContextBlock } = await import("../src/lib/capability_registry");
+  const desc = describeAllCapabilities();
+  assert.ok(desc.includes("Fondasi (sandaran SEMUA kemampuan)"), "/kemampuan shows the foundation section");
+  assert.ok(desc.includes("🏛 sandaran:"), "/kemampuan shows each capability's foundation anchor");
+  assert.ok(desc.includes("✨ visi:"), "/kemampuan shows each capability's vision");
+  const ctx = capabilityContextBlock();
+  assert.ok(ctx.includes("Fondasi sandaran:") && ctx.includes("f5_sesi="), "system prompt carries the foundation map");
+  assert.ok(ctx.includes("[f1_teks"), "system prompt tags capabilities with foundation ids");
+}
+
 async function testProjectPlanContract() {
   // v11.45 GERBANG EKSEKUSI TUNGGAL: launchParkedProject adalah SATU-SATUNYA
   // ("ya proyek"). Mempertahankan kontrak v11.43 (urutan yang membetulkan
@@ -2349,6 +2387,7 @@ async function main() {
   await testSourcingOrderIntent();
   await testRuntimeEditRails();
   await testCapabilityFoundation();
+  await testFoundationAnchoring();
   console.log("LOGIC TESTS PASSED");
 }
 
