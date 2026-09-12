@@ -39,12 +39,46 @@ export type CapabilityId =
   | "chat"
   | "question";
 
+// ============================================================================
+// FONDASI (SANDARAN SEMUA KEMAMPUAN) — dimasukkan pemilik (m9-v11.32:
+// komprehensi 1-5 + kemampuan cabang; m9-v11.47/49: tersurat). Setiap
+// kemampuan WAJIB menyebut sandaran fondasinya (vision + foundations) — bukan
+// cangkang kosong berkemampuan. Menambah kemampuan = mengisi fields ini juga;
+// tes memaksakannya (testFoundationAnchoring). Fail-closed: tanpa visi/sandaran
+// → tes gagal, registri tidak meloloskan entri.
+// ============================================================================
+
+export type FoundationId =
+  | "f1_teks"
+  | "f2_literasi"
+  | "f3_bahasa"
+  | "f4_bidang"
+  | "f5_sesi"
+  | "f6_pahami"
+  | "f7_cabang";
+
+/** Label visi tiap fondasi — sebaran SATU sumber untuk pengetahuan-diri. */
+export const FOUNDATION_LABELS: Record<FoundationId, string> = {
+  f1_teks: "Memahami teks/tulisan dalam bentuk apa pun",
+  f2_literasi: "Memahami semua literasi (gaul, formal, teknis, akademik, kreatif)",
+  f3_bahasa: "Memahami semua bahasa manusia",
+  f4_bidang: "Memahami semua bidang ilmu pengetahuan",
+  f5_sesi: "Adaptasi per sesi pemilik",
+  f6_pahami: "Pahami & gunakan semua kemampuan secara tepat",
+  f7_cabang: "Gunakan kemampuan sesuai output terbaik (substitusi)",
+};
+
 export interface CapabilityContract {
   id: CapabilityId;
   /** Indonesian display label (user-facing). */
   label: string;
   /** One-line description of what the capability does. */
   brief: string;
+  /** VISI (kenapa ada / cahaya yang diwujudkan) — bukan sekadar "bisa apa".
+   *  Sandaran eksplisit ke kemampuan fondasi pemilik. */
+  vision: string;
+  /** Kemampuan fondasi yang MENYANGGA kemampuan ini (sandaran). */
+  foundations: FoundationId[];
   /** The brain's IntentResult.type that this capability maps to. */
   intent: string;
   /** The brain's Strategy.approach used to execute this capability. */
@@ -73,6 +107,8 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     id: "self_referential",
     label: "Identitas Diri",
     brief: "Menjawab 'siapa kamu / apa yang bisa kamu lakukan' langsung dari sumber tunggal identitas, tanpa LLM eksternal.",
+    vision: "Membaca pertanyaan 'siapa kamu' sebagai TEKS pemilik (f1) dan menjawab dari sumber identitas tunggal — siapa aku untuk pemilik inilah (f5).",
+    foundations: ["f1_teks", "f5_sesi"],
     intent: "self_referential",
     approach: "self_referential",
     priority: 900,
@@ -86,6 +122,8 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     id: "emergency",
     label: "Darurat",
     brief: "Menghentikan/override yang dinyatakan tegas (standalone marker, bukan topik yang dideskripsikan).",
+    vision: "Menegaskan prioritas sesi pemilik (f5): memahami teks perintah dengan TEGAS (f1) — menghentikan pekerjaan sebagai kepatuhan, bukan nafsu mematikan.",
+    foundations: ["f1_teks", "f5_sesi"],
     intent: "emergency",
     approach: "simple_llm",
     priority: 890,
@@ -98,6 +136,8 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     id: "prompt_master",
     label: "Prompt-Master",
     brief: "Menyusun prompt optimal untuk tool AI target (skill prompt-master v1.8.0, sistem override).",
+    vision: "Menghargai literasi teknis (f2) dan bidang target (f4): dari teks permintaan (f1) dihasilkan prompt paling tepat bagi tool AI — memakai kemampuan lain dengan benar (f6).",
+    foundations: ["f1_teks", "f2_literasi", "f4_bidang", "f6_pahami"],
     intent: "prompt_writer",
     approach: "prompt_master",
     priority: 800,
@@ -113,6 +153,8 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     id: "context7",
     label: "Context7 Docs",
     brief: "Menyediakan dokumentasi library terbaru (context7.com) untuk grounding anti-halusinasi.",
+    vision: "Grounding anti-halusinasi lintas bidang (f4): dokumentasi teknis (f2) dibaca sebagai teks (f1) agar klaim selalu tertaut sumber nyata.",
+    foundations: ["f1_teks", "f2_literasi", "f4_bidang"],
     intent: "context7",
     approach: "context7_docs",
     priority: 790,
@@ -128,6 +170,8 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     id: "design",
     label: "Desain & Visual",
     brief: "Menghasilkan konsep desain + render gambar (flux) untuk permintaan kreatif.",
+    vision: "Menerjemahkan permintaan kreatif (f1/f2/f4) menjadi output visual — sesuatu untuk pemilik, gaya seleranya (f5).",
+    foundations: ["f1_teks", "f2_literasi", "f4_bidang", "f5_sesi"],
     intent: "design",
     approach: "orchestrate_design",
     priority: 780,
@@ -140,6 +184,8 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     id: "translate",
     label: "Terjemahan",
     brief: "Menerjemahkan teks (atau analisis terakhir bila tanpa target).",
+    vision: "Menjembatani semua bahasa manusia (f3): memahami teks sumber (f1) lintas suatu ragam literasi (f2) dan menyampaikan kembali dengan setia kepada pemilik.",
+    foundations: ["f1_teks", "f2_literasi", "f3_bahasa"],
     intent: "translation",
     approach: "translate",
     priority: 770,
@@ -155,6 +201,8 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     id: "search",
     label: "Riset & Pencarian",
     brief: "Sintesis berbasis web (single-pass) dan riset mendalam orkestrator-worker untuk topik kompleks.",
+    vision: "Mengumpulkan butir dari SEMUA bidang ilmu (f4) lewat teks sumber nyata (f1/f2), dengan verifikasi — dan bila output tak bersumber, cabang substitusi (f7/f6) mengambil alih.",
+    foundations: ["f1_teks", "f4_bidang", "f6_pahami", "f7_cabang"],
     intent: "search",
     approach: "search_synthesize",
     priority: 620,
@@ -167,6 +215,8 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     id: "followup",
     label: "Lanjutan (Follow-up)",
     brief: "Memperdalam analisis terakhir dengan anchor yang konsisten; anti-repetisi.",
+    vision: "Memperdalam garis pemikiran yang sama (f1/f4) dengan jangkar yang konsisten — adaptasi pada konteks sesi pemilik (f5), menolak mengulang (anti-repetisi).",
+    foundations: ["f1_teks", "f4_bidang", "f5_sesi"],
     intent: "search",
     approach: "search_synthesize",
     priority: 610,
@@ -179,6 +229,8 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     id: "capability_branch",
     label: "Kemampuan Cabang (Substitusi Output)",
     brief: "Memilih kapabilitas/eksekutor yang output-nya SAMA atau LEBIH BAIK (prinsip substitusi yang dimasukkan pemilik): jawaban riset yang tidak benar-benar bersumber — grounded=false ATAU butir yang diminta (artikel/daftar/berita) tak mengutip sumber nyata — ditolak negosiator, rencana di-park, eksekutor konsep-sistem (E2B) yang sebenarnya berjalan HANYA setelah persetujuan pemilik. Fail-closed: tanpa eksekutor, jawaban inline tetap dipertahankan.",
+    vision: "Menegakkan prinsip pemilik 'gunakan kemampuan sesuai output terbaik' (dirinya sendiri, f7): menilai hasil berbasis bukti dan mengganti ke eksekutor yang output-nya SAMA/LEBIH BAIK demi pemilik (f5) — bagian dari memakai semua kemampuan dengan tepat (f6).",
+    foundations: ["f5_sesi", "f6_pahami", "f7_cabang"],
     intent: "research_escalated",
     approach: "evidence_substitution",
     priority: 610,
@@ -191,6 +243,8 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     id: "understand",
     label: "Pemahaman Maksud",
     brief: "Menerka keinginan pada input ambigu, atau bertanya klarifikasi alami.",
+    vision: "INTI SANDARAN: memahami maksud pemilik PASTI lewat seluruh fondasi 1-5 — profil komprehensi (teks/literasi/bahasa/bidang/sesi) terjun menjadi persepsi, lalu menerka / bertanya sesuai f6.",
+    foundations: ["f1_teks", "f2_literasi", "f3_bahasa", "f4_bidang", "f5_sesi", "f6_pahami"],
     intent: "understand",
     approach: "understand_intent",
     priority: 500,
@@ -203,6 +257,8 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     id: "command",
     label: "Perintah",
     brief: "Perintah eksplisit (todo, reminder, pengaturan) via jalur brain.",
+    vision: "Membaca teks perintah (f1) dan menunaikannya sebagai kepatuhan pada sesi pemilik (f5) — memilih jalur yang tepat (f6).",
+    foundations: ["f1_teks", "f5_sesi", "f6_pahami"],
     intent: "command",
     approach: "simple_llm",
     priority: 400,
@@ -215,6 +271,8 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     id: "chat",
     label: "Obrolan",
     brief: "Sapaan ringan / obrolan kasual.",
+    vision: "Sapaan ringan (f1/f2) yang hangat dan adaptif pada nada pemilik (f5).",
+    foundations: ["f1_teks", "f2_literasi", "f5_sesi"],
     intent: "chat",
     approach: "simple_llm",
     priority: 300,
@@ -227,6 +285,8 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     id: "question",
     label: "Pertanyaan Umum",
     brief: "Pertanyaan umum ke jalur LLM sederhana.",
+    vision: "Menjawab pertanyaan dari semua bidang (f4) dalam bahasa dan tingkat literasi pemilik (f2/f3/f5).",
+    foundations: ["f2_literasi", "f3_bahasa", "f4_bidang", "f5_sesi"],
     intent: "question",
     approach: "simple_llm",
     priority: 200,
@@ -338,6 +398,10 @@ export interface CommandCapabilitySpec {
   label: string;
   /** satu baris kontrak teks: APA yang dilakukan. */
   brief: string;
+  /** VISI (kenapa ada) — sandaran eksplisit ke kemampuan fondasi pemilik. */
+  vision: string;
+  /** Kemampuan fondasi yang MENYANGGA kemampuan ini (sandaran). */
+  foundations: FoundationId[];
   /** pemicu deterministik untuk bentuk slash (dipakai router & /kemampuan). */
   commandPattern: RegExp;
   /** varian bahasa alami (opsional). */
@@ -356,12 +420,16 @@ export const CAPABILITY_COMMANDS: CommandCapabilitySpec[] = [
     id: "sistem",
     label: "Sistem & Diagnostik",
     brief: "Cek kesehatan, status otonomi, bantuan, daftar kemampuan, antrean, audit.",
+    vision: "Membaca status sebagai teks (f1) dan menyajikan kondisi JARVIS yang jujur kepada pemilik (f5) agar penggunaan semua kemampuan terkendali (f6).",
+    foundations: ["f1_teks", "f5_sesi", "f6_pahami"],
     commandPattern: /^\/(?:health|status|help|kemampuan|dms_status|queue_status|debug_bypass|dms|queue|obj|status_panen)\b/i,
   },
   {
     id: "todo",
     label: "Todo",
     brief: "Kelola daftar tugas ringan: tambah, hapus, tandai selesai, lihat.",
+    vision: "Menjaga eksternalisasi memori pemilik (f5): memahami teks perintah (f1) dan menjalankannya dengan tepat (f6).",
+    foundations: ["f1_teks", "f5_sesi"],
     commandPattern: /^\/todo\b/i,
     naturalPattern: /^(?:tambah|tambahkan|buat|buatkan|catat|catatkan|simpan|add)\s+(?:todo|task|tugas)\b|^(?:hapus|hapuskan|delete|remove|del)\b|^todo\b|^(?:cek|check|lihat|daftar)\s+(?:todo|task|tugas)\b|^(?:done|selesai)\s+(?:todo|task|tugas)\b/i,
   },
@@ -369,6 +437,8 @@ export const CAPABILITY_COMMANDS: CommandCapabilitySpec[] = [
     id: "reminder",
     label: "Pengingat",
     brief: "Buat pengingat sekali jalan/jadwal (menit/jam/waktu absolut), lihat, hapus.",
+    vision: "Menopang adaptasi sesi pemilik (f5): memahami kata waktu lintas ragam (f1/f2) lalu menepati janji pada pemilik.",
+    foundations: ["f1_teks", "f2_literasi", "f5_sesi"],
     commandPattern: /^\/reminder\b/i,
     naturalPattern: /^ingatkan\b/i,
   },
@@ -376,6 +446,8 @@ export const CAPABILITY_COMMANDS: CommandCapabilitySpec[] = [
     id: "etask",
     label: "Task Eksekutor (E2B)",
     brief: "Sama seperti /proyek: negosiasi + terjemahan → rencana diparkir → pemilik menyetujui. Tidak ada eksekusi tanpa persetujuan.",
+    vision: "Menjalankan pekerjaan berat pemilik dengan output yang PASTI lebih baik (f7 cabang): memahami bidang tugas (f4), keputusan & persetujuan tetap di pemilik (f5/f6).",
+    foundations: ["f4_bidang", "f5_sesi", "f7_cabang"],
     commandPattern: /^\/etask\b/i,
     permissionHint: "sandbox E2B HANYA setelah persetujuan pemilik ('ya proyek').",
     parked: [
@@ -392,12 +464,16 @@ export const CAPABILITY_COMMANDS: CommandCapabilitySpec[] = [
     id: "pinjam",
     label: "Pinjam Eksekutor",
     brief: "Delegasi async ke eksekutor eksternal (riset, docs, figma, notion, cuaca) — dieksekusi platform itu, hasil dipoll & di-DM.",
+    vision: "Meminjam platform lain menggantikan output yang tak cukup (f7): bidang bebas dipahami (f4), peminjaman semata demi pemilik (f5).",
+    foundations: ["f4_bidang", "f5_sesi", "f7_cabang"],
     commandPattern: /^\/pinjam\b/i,
   },
   {
     id: "tugas",
     label: "Tugas Cloud (opencode)",
     brief: "Delegasi kerja berat ke eksekutor cloud (GitHub Actions + opencode), jadwal berulang, lanjut/tanya/hapus riwayat.",
+    vision: "Mendelegasikan kerja berat ke eksekutor cloud (f7) dengan memahami bidang (f4); jadwal/riwayat milik pemilik (f5) dan dikelola tepat (f6).",
+    foundations: ["f4_bidang", "f5_sesi", "f7_cabang"],
     commandPattern: /^\/(?:tugas|delegasi|delegate)\b/i,
     naturalPattern: /^delegasikan\b|^(?:kerjakan|jalankan)\b.*\bopencode\b/i,
     parked: [
@@ -420,6 +496,8 @@ export const CAPABILITY_COMMANDS: CommandCapabilitySpec[] = [
     id: "proyek",
     label: "Proyek (E2B)",
     brief: "Negosiator+penerjemah menyusun rencana eksekusi, DITAMPILKAN dulu, eksekusi menunggu persetujuan pemilik.",
+    vision: "Contoh utuh fondasi 1-5 bekerja bersama: keinginan pemilik dipahami (f1/f2/f3), bidang tugas dimengerti (f4), disesuaikan sesi (f5), lalu DIJADIKAN rencana yang keputusannya di pemilik (f6).",
+    foundations: ["f1_teks", "f2_literasi", "f3_bahasa", "f4_bidang", "f5_sesi", "f6_pahami"],
     commandPattern: /^\/proyek\b|^ya proyek\b/i,
     permissionHint: "sandbox E2B HANYA setelah persetujuan pemilik ('ya proyek').",
     parked: [
@@ -436,12 +514,16 @@ export const CAPABILITY_COMMANDS: CommandCapabilitySpec[] = [
     id: "connector",
     label: "Connector (Figma/Notion)",
     brief: "Baca struktur file Figma / cari database Notion melalui Vercel Connector (secret di sana).",
+    vision: "Membaca dokumen desain/data (f1/f2/f4) atas nama pemilik (f5) tanpa pernah mengubahnya — penglihatan, bukan aksi.",
+    foundations: ["f1_teks", "f2_literasi", "f4_bidang", "f5_sesi"],
     commandPattern: /^\/(?:figma|notion|connector)\b/i,
   },
   {
     id: "e2b",
     label: "E2B Mentah",
     brief: "Jalankan skrip shell/Python mentah di sandbox Firecracker (gate oleh keputusan pemilik).",
+    vision: "Eksekusi mentah bidang bebas (f4) yang dibuka HANYA oleh keputusan pemilik (f5/f6) — eksekutor dipilih karena substitusi (f7).",
+    foundations: ["f4_bidang", "f5_sesi", "f7_cabang"],
     commandPattern: /^\/e2b\b/i,
     permissionHint: "eksekusi sandbox.",
   },
@@ -449,6 +531,8 @@ export const CAPABILITY_COMMANDS: CommandCapabilitySpec[] = [
     id: "baca",
     label: "Baca Halaman",
     brief: "Baca + ringkas sebuah URL (HTML di-fetch, hasil digest Bahasa Indonesia).",
+    vision: "Memahami teks halaman apa pun (f1/f2) dan menyampaikan sari sungguhan untuk pemilik (f5) — membaca, bukan bergosip.",
+    foundations: ["f1_teks", "f2_literasi", "f5_sesi"],
     commandPattern: /^\/(?:baca|ringkas)\b/i,
     naturalPattern: /^(?:baca|ringkas(?:kan)?|bacain|ringkaskan)\b.*https?:\/\//i,
   },
@@ -456,6 +540,8 @@ export const CAPABILITY_COMMANDS: CommandCapabilitySpec[] = [
     id: "suara",
     label: "TTS Suara",
     brief: "Ucapkan teks pendek sebagai voice note.",
+    vision: "Menyuarakan teks (f1) dalam bahasa pemilik (f3), dengan nada yang disesuaikan sesi (f5).",
+    foundations: ["f1_teks", "f3_bahasa", "f5_sesi"],
     commandPattern: /^\/(?:suara|sound|voice|ucapkan)\b/i,
     naturalPattern: /^(?:suarakan|ucapkan)\s+/i,
   },
@@ -463,12 +549,16 @@ export const CAPABILITY_COMMANDS: CommandCapabilitySpec[] = [
     id: "kota",
     label: "Kota & Cuaca",
     brief: "Simpan kota / tampilkan prakiraan cuaca.",
+    vision: "Data bidang lingkungan (f4) untuk kebutuhan LOKAL dan rutin pemilik (f5).",
+    foundations: ["f4_bidang", "f5_sesi"],
     commandPattern: /^\/(?:kota|setkota|city)\b/i,
   },
   {
     id: "shop",
     label: "E-commerce",
     brief: "Produk, stok, pesanan, pelanggan, invoice, laporan penjualan.",
+    vision: "Mengolah data dagang pemilik (f4) dari teks perintah (f1) — semua demi kelancaran usahanya (f5).",
+    foundations: ["f1_teks", "f4_bidang", "f5_sesi"],
     commandPattern: /^\/(?:shop|produk|stok|pesanan|pelanggan|invoice|laporan)\b/i,
     naturalPattern: /^(?:tambah|tambahkan|buat|buatkan|catat|simpan|add)\s+(?:produk|product|barang)\b|^(?:buat|catat|tambah)\s+(?:pesanan|order|penjualan)\b|^(?:cek|lihat|tampil)\s+(?:stok|stock)\b|^laporan\s+(?:penjualan|jual)\b|^(?:list|daftar)\s+(?:produk|product|barang|pesanan|order|pelanggan|customer)\b/i,
   },
@@ -527,32 +617,41 @@ export function describeCapabilities(): string {
 
 /** Markdown summary SEMUA kemampuan (brain + command), dibaca dari kontrak
  *  TEKS — introspeksi diri yang dibangkitkan dari registri (bukan diketik
- *  tangan), sehingga menambah kemampuan otomatis terlihat di sini. */
+ *  tangan), sehingga menambah kemampuan otomatis terlihat di sini.
+ *  m9-v11.50: setiap entri wajib mencantumkan SANDARAN-nya (fondasi mana yang
+ *  menopang) — tidak ada cangkang kosong berkemampuan. */
 export function describeAllCapabilities(): string {
-  const brain = CAPABILITY_CONTRACTS.map((c) => `• *${c.label}* — ${c.brief}`);
+  const fondasi = (Object.keys(FOUNDATION_LABELS) as FoundationId[])
+    .map((f) => `• *${f}* — ${FOUNDATION_LABELS[f]}`)
+    .join("\n");
+  const brain = CAPABILITY_CONTRACTS.map((c) => `• *${c.label}* — ${c.brief}\n  🏛 sandaran: ${c.foundations.join(" · ")}\n  ✨ visi: ${c.vision}`);
   const cmds = CAPABILITY_COMMANDS.map(
     (c) =>
-      `• *${c.label}* — ${c.brief}` +
+      `• *${c.label}* — ${c.brief}\n  🏛 sandaran: ${c.foundations.join(" · ")}\n  ✨ visi: ${c.vision}` +
       (c.parked?.length ? `\n  ⏳ menunggu: ${c.parked.map((p) => p.note).join(" · ")}` : "") +
       (c.permissionHint ? `\n  🔐 izin: *${c.permissionHint}*` : ""),
   );
   return (
-    `🧩 *Kemampuan fondasi J.A.R.V.I.S.* — setiap entri adalah kontrak teks di registri; kemampuan baru = satu entri baru, router & pengetahuan-diri ikut otomatis.\n\n` +
+    `🧩 *Kemampuan fondasi J.A.R.V.I.S.* — setiap entri adalah kontrak teks di registri; kemampuan baru = satu entri baru + visi & sandaran, router & pengetahuan-diri ikut otomatis.\n\n` +
+    `*Fondasi (sandaran SEMUA kemampuan):*\n${fondasi}\n\n` +
     `*Otak (inti):*\n${brain.join("\n")}\n\n` +
     `*Perintah (webhook):*\n${cmds.join("\n")}`
   );
 }
 
 /** Blok singkat untuk system prompt LLM (dibaca model dari teks ini) agar
- *  model mengenali kemampuan nyata JARVIS (bukan mengarang). */
+ *  model mengenali kemampuan nyata JARVIS (bukan mengarang). Setiap kemampuan
+ *  menyebut SANDARAN fondasinya — model tidak boleh menjalankan kemampuan
+ *  tanpa sadar fondasi yang menopangnya. */
 export function capabilityContextBlock(): string {
-  const brain = CAPABILITY_CONTRACTS.map((c) => `${c.id}: ${c.brief}`);
-  const cmds = CAPABILITY_COMMANDS.map((c) => `${c.id}: ${c.brief}`);
+  const brain = CAPABILITY_CONTRACTS.map((c) => `${c.id} [${c.foundations.join(",")}]: ${c.brief}`);
+  const cmds = CAPABILITY_COMMANDS.map((c) => `${c.id} [${c.foundations.join(",")}]: ${c.brief}`);
   return (
     `KEMAMPUAN DIRI (registri fondasi — jangan mengarang di luar ini):\n` +
+    `Fondasi sandaran: ${(Object.keys(FOUNDATION_LABELS) as FoundationId[]).map((f) => `${f}=${FOUNDATION_LABELS[f]}`).join(" | ")}\n` +
     `Inti: ${brain.join(" | ")}\n` +
     `Perintah: ${cmds.join(" | ")}\n` +
-    `Gunakan perintah yang paling tepat untuk pesan pemilik. Eksekusi sandbox/eksekutor HANYA setelah pemilik menyetujui.`
+    `Setiap kemampuan TERSANDAR pada minimal satu fondasi (id dalam [ ]). Gunakan kemampuan yang paling tepat untuk pesan pemilik. Eksekusi sandbox/eksekutor HANYA setelah pemilik menyetujui.`
   );
 }
 
