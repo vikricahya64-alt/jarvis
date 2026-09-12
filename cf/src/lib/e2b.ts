@@ -12,11 +12,14 @@
 //     POST /sandboxes                 create (secure:true -> envdAccessToken)
 //     DELETE /sandboxes/{id}          kill
 //   Sandbox API/envd (https://sandbox.e2b.app, headers E2b-Sandbox-Id +
-//   E2b-Sandbox-Port, Bearer envdAccessToken):
+//   E2b-Sandbox-Port, X-Access-Token <envdAccessToken>):
 //     POST /process.Process/Start    Connect-RPC server-streaming: runs a
 //                                     process and streams ProcessEvent frames
 //                                     (start / data{stdout|stderr} / end).
-//                                     Connect JSON envelope over HTTP POST.
+//                                     Body = ONE Connect envelope
+//                                     [flag(1)][len(4, BE)][JSON]; response
+//                                     streams envelopes, last one carries
+//                                     flag 0x02 (end-of-stream).
 //
 // EVERYTHING FAILS CLOSED and never throws (same contract as vercel.ts /
 // ai.ts): a missing key, network error, auth failure, or malformed frame
@@ -95,7 +98,7 @@ async function e2bCreateSandbox(
           "X-API-Key": key,
         },
         body: JSON.stringify({
-          templateID: env.E2B_TEMPLATE?.trim() || "e2b/sandbox",
+          templateID: env.E2B_TEMPLATE?.trim() || "e2b/base",
           timeout: Math.floor(E2B_RUN_CAP_MS / 1000),
           secure: true,
           allow_internet_access: true,
@@ -142,8 +145,9 @@ async function e2bKillSandbox(env: Env, sandboxId: string): Promise<void> {
 }
 
 /** Connect wire frames: [flags(1)][len(4, BE)][json payload], repeated.
- *  Bit 0x80 in the flags byte marks end-of-stream. Returns the JSON
- *  payloads decoded from a full raw frame sequence. */
+ *  Data frames carry flag 0x00; the final empty frame carries flag 0x02
+ *  (end-of-stream). Returns the JSON payloads decoded from a full raw
+ *  frame sequence. */
 export function e2bDecodeConnectFrames(raw: Uint8Array): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   let i = 0;
@@ -236,17 +240,25 @@ export async function e2bRun(
   try {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), E2B_COLLECT_MS);
+    // Connect server-streaming RPCs frame the request as a single envelope:
+    // [flag(1)=0][len(4, BE)][JSON message].
+    const enc = new TextEncoder();
+    const msg = enc.encode(payload);
+    const framed = new Uint8Array(5 + msg.length);
+    new DataView(framed.buffer).setUint32(1, msg.length, false);
+    framed.set(msg, 5);
     const res = await fetch(`${E2B_SANDBOX_HOST}/process.Process/Start`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": "application/connect+json",
+        Accept: "application/connect+json",
         "Connect-Protocol-Version": "1",
         "Connect-Timeout-Ms": String(E2B_RUN_CAP_MS),
-        Authorization: `Bearer ${created.accessToken}`,
+        "X-Access-Token": created.accessToken,
         "E2b-Sandbox-Id": created.sandboxId,
         "E2b-Sandbox-Port": String(E2B_SANDBOX_PORT),
       },
-      body: payload,
+      body: framed,
       signal: ac.signal,
     }).catch(() => null);
     clearTimeout(timer);
