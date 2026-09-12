@@ -214,21 +214,6 @@ export async function notionSearchViaVercel(
   return out;
 }
 
-// ============================================================================
-// GITHUB — Actions listing / dispatch through the connector (executor plane).
-// ============================================================================
-export async function githubViaVercel(
-  env: Env,
-  payload: Record<string, unknown>,
-): Promise<unknown | null> {
-  if (!payload || typeof payload !== "object") return null;
-  const { ok, json } = await connectorFetch(env, "/api/actions", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  return ok ? json : null;
-}
-
 /** Compact label for a connector status line (used by /connector diagnostics). */
 export function connectorsStatus(env: Env): string {
   const base = vercelBaseUrl(env);

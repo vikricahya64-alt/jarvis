@@ -35,11 +35,22 @@ migrate() {
 }
 
 secrets() {
-  echo "## Setting production secrets (wrangler secret put)."
-  local -A map=( [TELEGRAM_TOKEN]=TELEGRAM_TOKEN [TELEGRAM_SECRET]=TELEGRAM_SECRET [GROQ_API_KEY]=GROQ_API_KEY )
-  for var in "${!map[@]}"; do
-    echo "---- $var (paste when prompted, or export $var first) ----"
-    w secret put "$var" --name jarvis-sovereign
+  echo "## Setting production secrets (wrangler secret put, non-interactive)."
+  echo "## Set each value as an env var before running; empty vars are skipped."
+  local vars=(
+    TELEGRAM_TOKEN TELEGRAM_SECRET GROQ_API_KEY
+    GEMINI_API_KEY GEMINI_API_KEY_BACKUP GEMINI_API_KEY_SECONDARY
+    OPENROUTER_API_KEY NVIDIA_NIM_API_KEY CONTEXT7_API_KEY
+    AGENT_TOKEN GITHUB_TOKEN GITHUB_REPO WORKER_URL
+    VERCEL_CONNECTOR_TOKEN E2B_API_KEY
+  )
+  for var in "${vars[@]}"; do
+    if [[ -z "${!var:-}" ]]; then
+      echo "---- $var: env var kosong -> skip (export $var untuk set) ----"
+      continue
+    fi
+    printf '%s' "${!var}" | wrangler secret put "$var" --name jarvis-sovereign >/dev/null
+    echo "---- $var: diset ----"
   done
 }
 

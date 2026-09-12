@@ -69,12 +69,6 @@ PROTOKOL LAPORAN (wajib):
 4. Jangan menyebut angka tanpa sumber. Jika ragu, tandai "perlu verifikasi".
 5. Daftar sumber lengkap di bagian akhir.`;
 
-/** True when the cloud executor is fully configured. */
-export function agentExecutorConfigured(env: Env): boolean {
-  const repo = env.GITHUB_REPO ?? "";
-  return Boolean(env.AGENT_TOKEN && env.GITHUB_TOKEN && /^[^/\s]+\/[^/\s]+$/.test(repo));
-}
-
 /** Deterministic warning string when a dispatch succeeded but the instruction
  *  was truncated to the payload cap. Callers append it to the ok-message so
  *  the owner is never silently misled about what the runner received. */

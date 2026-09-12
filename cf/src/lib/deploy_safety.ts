@@ -78,31 +78,6 @@ const AUTO_REVERT_THRESHOLDS = {
 // Version Tracking
 // ---------------------------------------------------------------------
 
-/** Record a new deployment. */
-export async function recordDeploy(
-  env: Env,
-  version: string,
-  opts: { deployedBy?: string; notes?: string } = {},
-): Promise<void> {
-  try {
-    // Deactivate previous active version
-    await env.DB.prepare(
-      `UPDATE deploy_versions SET status = 'rolled_back' WHERE status = 'active'`,
-    ).run();
-
-    // Insert new version
-    await env.DB.prepare(
-      `INSERT INTO deploy_versions (version, deployed_at, deployed_by, error_rate, status, notes)
-       VALUES (?, ?, ?, 0, 'active', ?)`,
-    ).bind(
-      version,
-      Date.now(),
-      opts.deployedBy ?? "manual",
-      opts.notes ?? "",
-    ).run();
-  } catch { /* availability */ }
-}
-
 /** Get current active version. */
 export async function getActiveVersion(env: Env): Promise<DeployVersion | null> {
   try {
@@ -113,22 +88,6 @@ export async function getActiveVersion(env: Env): Promise<DeployVersion | null> 
     return row ?? null;
   } catch {
     return null;
-  }
-}
-
-/** Get version history. */
-export async function getVersionHistory(
-  env: Env,
-  limit = 10,
-): Promise<DeployVersion[]> {
-  try {
-    const { results } = await env.DB.prepare(
-      `SELECT version, deployed_at, deployed_by, error_rate, status, notes
-       FROM deploy_versions ORDER BY deployed_at DESC LIMIT ?`,
-    ).bind(limit).all<DeployVersion>();
-    return (results ?? []) as DeployVersion[];
-  } catch {
-    return [];
   }
 }
 
@@ -400,81 +359,6 @@ function generateFixSuggestion(
     fix: `Unknown pattern in ${category}. Manual investigation needed.`,
     autoFixable: false,
   };
-}
-
-// ---------------------------------------------------------------------
-// Recovery Actions
-// ---------------------------------------------------------------------
-
-/** Get recent recovery actions. */
-export async function getRecoveryHistory(
-  env: Env,
-  limit = 10,
-): Promise<RecoveryAction[]> {
-  try {
-    const { results } = await env.DB.prepare(
-      `SELECT id, timestamp, type, from_version, to_version, reason, success
-       FROM recovery_actions ORDER BY timestamp DESC LIMIT ?`,
-    ).bind(limit).all<RecoveryAction>();
-    return (results ?? []) as unknown as RecoveryAction[];
-  } catch {
-    return [];
-  }
-}
-
-/** Format deploy status for Telegram. */
-export async function formatDeployStatus(env: Env): Promise<string> {
-  const lines = ["🔄 *Deploy Safety Status*", ""];
-
-  const health = await getVersionHealth(env);
-  const active = await getActiveVersion(env);
-
-  if (active) {
-    const age = Math.round((Date.now() - active.deployedAt) / 60_000);
-    lines.push(`*Version aktif:* \`${active.version}\``);
-    lines.push(`*Deployed:* ${age}m lalu oleh ${active.deployedBy}`);
-  } else {
-    lines.push("*Version aktif:* Tidak diketahui");
-  }
-
-  lines.push("");
-  lines.push("*Health (30 menit terakhir):*");
-  lines.push(`  Error rate: ${(health.errorRate * 100).toFixed(1)}%`);
-  lines.push(`  Requests: ${health.requestCount}`);
-  lines.push(`  Health score: ${health.healthScore}/100`);
-
-  if (health.healthScore >= 80) {
-    lines.push("  Status: ✅ Sehat");
-  } else if (health.healthScore >= 50) {
-    lines.push("  Status: ⚠️ Degraded");
-  } else {
-    lines.push("  Status: 🔴 Critical");
-  }
-
-  // Recent recovery actions
-  const recoveries = await getRecoveryHistory(env, 3);
-  if (recoveries.length > 0) {
-    lines.push("");
-    lines.push("*Recovery terbaru:*");
-    for (const r of recoveries) {
-      const age = Math.round((Date.now() - r.timestamp) / 60_000);
-      const emoji = r.success ? "✅" : "❌";
-      lines.push(`  ${emoji} ${r.type}: ${r.fromVersion.slice(0, 8)} → ${r.toVersion.slice(0, 8)} (${age}m lalu)`);
-    }
-  }
-
-  // Error patterns
-  const patterns = await detectErrorPatterns(env);
-  if (patterns.length > 0) {
-    lines.push("");
-    lines.push("*Error patterns terdeteksi:*");
-    for (const p of patterns.slice(0, 3)) {
-      const autoTag = p.autoFixable ? "🔧" : "👨‍💻";
-      lines.push(`  ${autoTag} ${p.category}: ${p.occurrences}x (${p.suggestedFix.slice(0, 60)}...)`);
-    }
-  }
-
-  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------

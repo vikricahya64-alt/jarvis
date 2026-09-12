@@ -106,17 +106,3 @@ async function calculateUsagePercent(env: Env): Promise<number> {
 
   return pct;
 }
-
-/** Helper: dapatkan status degradasi saat ini (untuk debugging/monitoring) */
-export async function getDegradationDebug(env: Env, _owner: number): Promise<any> {
-  const status = await getDegradationStatus(env);
-  return {
-    quota: status,
-    features: FEATURE_PRIORITY.map((f) => ({
-      name: f.name,
-      essential: f.essential,
-      minQuota: f.minQuota,
-      disabled: status.disabledFeatures.includes(f.name),
-    })),
-  };
-}

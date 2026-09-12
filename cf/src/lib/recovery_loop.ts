@@ -10,26 +10,7 @@
 //=====================================================================
 
 import { Env } from "./db";
-import { detectErrorPatterns, type ErrorPattern } from "./deploy_safety";
-
-/** Generate recovery report for owner. */
-export function formatRecoveryReport(patterns: ErrorPattern[]): string {
-  const lines = ["🔧 *Recovery Report*", ""];
-
-  // Patterns detected
-  if (patterns.length === 0) {
-    lines.push("✅ Tidak ada error pattern terdeteksi.");
-    return lines.join("\n");
-  }
-
-  lines.push(`*Pattern terdeteksi:* ${patterns.length} (perlu review manual)`);
-  for (const p of patterns.slice(0, 5)) {
-    lines.push(`  👨‍💻 ${p.category}: ${p.occurrences}x`);
-    lines.push(`     ${p.suggestedFix.slice(0, 80)}...`);
-  }
-
-  return lines.join("\n");
-}
+import { detectErrorPatterns } from "./deploy_safety";
 
 /** Main recovery loop. Called by loop_scheduler. */
 export async function runRecoveryLoop(env: Env): Promise<{

@@ -59,23 +59,6 @@ export const STATUS = {
   commandList: "Perintah: /health · /dms_status · /queue_status · /pause · /resume · /obedience_report",
 };
 
-/** Error messages — never robotic, always honest. */
-export const ERRORS = {
-  internal: "Maaf, ada kesalahan internal. Saya sudah catet, akan saya perbaiki.",
-  blocked: (reason: string) =>
-    `Aksi ini tidak bisa saya jalankan — ${reason}. Kalau ada yang salah, kasih tahu saya.`,
-  deferred: "Aksi ini saya tunda dulu. Kalau perlu sekarang, coba perjelas permintaannya.",
-  clarify: (confidence: number) =>
-    confidence < 0.5
-      ? "Saya kurang yakin dengan permintaan ini. Bisa jelaskan lebih detail?"
-      : "Permintaan ini agak ambigu. Bisa diperjelas?",
-  consentNeeded: (action: string) =>
-    `Ini butuh persetujuan Anda dulu. Konfirmasi aksi: ${action}`,
-  notAllowed: "Perintah ini tidak diizinkan.",
-  rateLimited: "Terlalu banyak permintaan. Tunggu sebentar, ya.",
-  offline: "Saya sedang tidak bisa menghubungi layanan luar. Coba lagi sebentar.",
-};
-
 /** Search/research responses. */
 export const SEARCH = {
   searching: (topic: string) => `Mencari tentang *${topic}*...`,
@@ -87,30 +70,12 @@ export const SEARCH = {
     `Ini rangkuman tentang *${topic}*:`,
 };
 
-/** Suggestion messages (daily digest). */
-export const SUGGESTIONS = {
-  header: "💡 Saran J.A.R.V.I.S. — cuma tawaran, tidak ada yang jalan otomatis.",
-  empty: "Tidak ada saran baru untuk saat ini.",
-  accept: (id: number) =>
-    `Saran #${id} diterima. Saya catet — tapi tidak saya jalankan otomatis. Ketik kebutuhanmu untuk meneruskan.`,
-  dismiss: (id: number) =>
-    `Saran #${id} ditutup. Saya tidak akan menawarkannya lagi.`,
-  notFound: (id: number) =>
-    `Tidak ada saran #${id}. Mungkin sudah diproses.`,
-};
-
 /** Reflection/learning messages. */
 export const REFLECTION = {
   insightExtracted: (rule: string) =>
     `Saya baru pelajari sesuatu: "${rule.slice(0, 100)}". Akan saya ingat untuk ke depan.`,
   morningBriefing: "🌅 *Pagi, Pemilik.* Ringkasan singkat J.A.R.V.I.S.:",
   noNewInsights: "Tidak ada insight baru semalam.",
-};
-
-/** Translation responses. */
-export const TRANSLATION = {
-  processing: "Menerjemahkan...",
-  failed: "Gagal menerjemahkan. Coba lagi, ya.",
 };
 
 /** Consent flow messages. */
@@ -120,30 +85,6 @@ export const CONSENT = {
   approved: "Disetujui. Menjalankan...",
   rejected: "Ditolak. Aksi dibatalkan.",
   timeout: "Waktu habis. Aksi dibatalkan.",
-};
-
-/** Privacy mode messages. */
-export const PRIVACY = {
-  enabled: "Mode privasi aktif. Data sensitif tidak akan ditampilkan.",
-  disabled: "Mode privasi nonaktif.",
-};
-
-/** Mark/stop/never messages. */
-export const MARK = {
-  stopAdded: (phrase: string) =>
-    `"${phrase.slice(0, 50)}" ditambahkan ke daftar "jangan pernah". Saya tidak akan lakukan ini.`,
-  stopRemoved: (phrase: string) =>
-    `"${phrase.slice(0, 50)} dihapus dari daftar "jangan pernah".`,
-  neverAdded: (phrase: string) =>
-    `Perintah "jangan: ${phrase.slice(0, 50)}" tercatat.`,
-};
-
-/** Schedule messages. */
-export const SCHEDULE = {
-  created: (desc: string) =>
-    `Tugas terjadwal: "${desc.slice(0, 60)}". Saya ingatkan saat waktunya.`,
-  cancelled: (id: number) =>
-    `Tugas #${id} dibatalkan.`,
 };
 
 /** Help text. */

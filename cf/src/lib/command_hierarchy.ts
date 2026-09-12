@@ -26,7 +26,7 @@ export const TIERS = {
   INFO: 30, // informational /help /obedience_report
 } as const;
 
-export type TierKey = keyof typeof TIERS;
+type TierKey = keyof typeof TIERS;
 
 export interface ClassifiedIntent {
   priority: number;

@@ -35,8 +35,8 @@ import {
   e2bKillSandbox,
   e2bStartProcessCollect,
 } from "./e2b";
-import { listAgentTasksByExecutor, finishAgentTask, rememberMemory } from "./db";
-import { sendMessage } from "./telegram";
+import { listAgentTasksByExecutor, finishAgentTask } from "./db";
+import { finalizeAgentTask } from "./agent_results";
 
 /** Sandbox TTL cap, mirroring the GitHub runner's 15-minute window. The
  *  sandbox self-destructs at this limit even if the poller missed it. */
@@ -159,10 +159,15 @@ export async function pollE2bAgentRuns(env: Env): Promise<number> {
   const runs = await listAgentTasksByExecutor(env, "e2b", E2B_PROBES_PER_TICK);
   let finished = 0;
   for (const t of runs) {
+    const base = {
+      env, id: t.id, owner: t.owner_id, task: t.task,
+      outcomeLabel: "eksekutor E2B", memoryLabel: "E2B",
+    };
     const sid = t.run_id ?? "";
     if (!sid) {
-      await finishAgentTask(env, t.id, "failed", "", "sandbox id hilang di ledger");
-      await deliverE2bResult(env, t.id, t.owner_id, "failed", "", "sandbox id hilang di ledger", false);
+      const err = "sandbox id hilang di ledger";
+      await finishAgentTask(env, t.id, "failed", "", err);
+      await finalizeAgentTask({ ...base, st: "failed", result: "", error: err, flagged: false });
       finished++;
       continue;
     }
@@ -172,7 +177,7 @@ export async function pollE2bAgentRuns(env: Env): Promise<number> {
     if (probe.status === "gone") {
       const err = probe.error ?? "sandbox tidak lagi ada; hasil tidak diterima (mungkin timeout sandbox)";
       await finishAgentTask(env, t.id, "failed", "", err);
-      await deliverE2bResult(env, t.id, t.owner_id, "failed", "", err, false);
+      await finalizeAgentTask({ ...base, st: "failed", result: "", error: err, flagged: false });
       finished++;
       continue;
     }
@@ -181,41 +186,13 @@ export async function pollE2bAgentRuns(env: Env): Promise<number> {
     const rc = e2bParseExitCode(raw);
     const clean = e2bStripMarker(raw);
     if (rc === 0) {
-      await finishAgentTask(env, t.id, "done", clean.slice(0, 60000), "", "");
-      const headline = (clean || t.task).replace(/\s+/g, " ").trim().slice(0, 140);
-      await rememberMemory(env, `Eksekusi E2B #${t.id} berhasil: ${headline}`, {
-        type: "fact", tags: ["agent_task", "executor", "e2b"], importance: 3, source: "agent_task",
-      }).catch(() => {});
-      await deliverE2bResult(env, t.id, t.owner_id, "done", clean, "", flagged);
+      await finalizeAgentTask({ ...base, st: "done", result: clean, error: "", flagged });
     } else {
-      await finishAgentTask(env, t.id, "failed", clean, `proses keluar kode ${rc ?? "?"}`, "");
-      await deliverE2bResult(env, t.id, t.owner_id, "failed", clean, `proses keluar kode ${rc ?? "?"}`, flagged);
+      await finalizeAgentTask({ ...base, st: "failed", result: clean, error: `proses keluar kode ${rc ?? "?"}`, flagged });
     }
     finished++;
   }
   return finished;
-}
-
-/** DM the owner a finished E2B run (format mirrors the /agent/done reply). */
-async function deliverE2bResult(
-  env: Env,
-  id: number,
-  owner: number,
-  st: "done" | "failed",
-  result: string,
-  error: string,
-  flagged: boolean,
-): Promise<void> {
-  const prefix = st === "done" ? `✅ Tugas *#${id}* selesai (eksekutor E2B)` : `❌ Tugas *#${id}* gagal di eksekutor E2B`;
-  const cleanSnippet = (result ?? "").replace(/\s+/g, " ").trim();
-  const detail = st === "done"
-    ? (result || "(tanpa output)").slice(0, 2800)
-    : (error || "-") +
-      (cleanSnippet ? `\n\n*Output terakhir:*\n${cleanSnippet.slice(0, 700)}` : "");
-  const warnLine = flagged
-    ? "\n⚠️ *Catatan JARVIS:* laporan mengandung pola manipulatif (injeksi perintah). Diabaikan sebagai perintah — hasil disimpan apa adanya saja."
-    : "";
-  await sendMessage(env, owner, `${prefix}:\n\n${detail}${warnLine}\n(_riwayat: /tugas list_)`).catch(() => {});
 }
 
 // Re-export for callers that only need the shared payload pieces.

@@ -26,6 +26,7 @@ import {
 } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus, recordTaskCounters, recentContext, auditIntegrity } from "../lib/db";
+import { comprehend, comprehensionNote } from "../lib/comprehension";
 import { probeProviders } from "../lib/providers";
 import { probeBorrowedPlatforms, borrowedStatusLine } from "../lib/borrowed";
 import { extractTopic, parseTranslate, translateText, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, storeResearchAnchor, groqChatCompletionsUrl } from "../lib/ai";
@@ -416,7 +417,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   if (cmdAlias(trimmed, "/queue_status")) {
     await safeDBReply(env, r, async () => {
       const q = await queueStatus(env);
-      return `📊 Prioritas antrean — tinggi: \`${q.high}\` · standar: \`${q.standard}\` · rendah: \`${q.low}\``;
+      return `📊 Riwayat antrean (kumulatif, bukan antrean tersisa) — tinggi: \`${q.high}\` · standar: \`${q.standard}\` · rendah: \`${q.low}\``;
     });
     return new Response("ok", { status: 200 });
   }
@@ -472,7 +473,20 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/kemampuan") {
-    await fire(sendMessage(env, r, describeAllCapabilities()));
+    // M9-v11.52: append the comprehension profile of the last real user
+    // message so the owner SEES how their latest question was understood
+    // (language/literacy/domain/adaptation rail) — universal-text vision.
+    let profile = "";
+    try {
+      const ctx = await recentContext(env, r, 6);
+      const lastUser = [...(ctx ?? [])].reverse().find(
+        (c) => c.role === "user" && (c.content || "").trim().length > 0 && !/^\//.test(c.content.trim()),
+      );
+      if (lastUser?.content) {
+        profile = `\n\n📡 Profil pemahaman pesan terakhir:\n${comprehensionNote(comprehend(lastUser.content))}`;
+      }
+    } catch { /* profile optional */ }
+    await fire(sendMessage(env, r, describeAllCapabilities() + profile));
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/checkin" || trimmed === "/stop" || trimmed === "/kill") {
@@ -3191,5 +3205,3 @@ async function handleShopCommand(env: Env, owner: number, raw: string): Promise<
     "  tambah pelanggan <nama> | [telepon]\n" +
     "  daftar pelanggan"));
 }
-
-export { act, OWNER_OK, RATE_LIMIT_MS };

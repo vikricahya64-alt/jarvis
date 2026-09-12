@@ -185,7 +185,11 @@ export async function releaseCronLock(env: Env, lockName: string): Promise<void>
   }
 }
 
-/** Append an observability row to request_log (provider, step, status, latency). */
+/** Append an observability row to request_log (provider, step, status, latency).
+ *  Cheap-mode sampling: failures (the expensive-to-miss signal) are ALWAYS
+ *  persisted; successes are written 1-in-EVERY_N so the table stays small and
+ *  the daily write budget doesn't grow linearly with every LLM call. */
+const REQUEST_LOG_SAMPLE_RATE = 10; // 1-in-N successes
 export async function logRequest(
   env: Env,
   provider: string,
@@ -195,6 +199,7 @@ export async function logRequest(
   note = "",
 ): Promise<void> {
   try {
+    if (status !== "fail" && Math.floor(Math.random() * REQUEST_LOG_SAMPLE_RATE) !== 0) return;
     await env.DB.prepare(
       `INSERT INTO request_log (ts, provider, status, latency_ms, step, note)
        VALUES (?, ?, ?, ?, ?, ?)`,
