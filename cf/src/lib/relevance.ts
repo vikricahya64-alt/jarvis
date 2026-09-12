@@ -1,25 +1,23 @@
 //=====================================================================
-// relevance.ts — RELEVANCE GATE (m9-v9): never execute an ambitious
-// intent on a topic whose meaning we can't verify.
+// relevance.ts — RELEVANCE GATES. Dua peran:
 //
-// Principle (owner-stated): JARVIS may know a lot, but relevance comes
-// first — "understand → confirm → execute". When a search/design/code
-// request carries a confusable topic word, executing OUR OWN reading of
-// it can answer the wrong question entirely (the "bias corrected" /
-// "bias correction" misfire precedent). So we ask ONE short confirmation
-// ("apakah topik ini yang kamu cari?") and PARK the intended action in
-// CONFIG_KV with a TTL. The owner's next "1"/"2"/"ya" resumes it;
-// anything else discards it and is processed as a fresh query.
+// (A) RELEVANCE GATE (m9-v9): never execute an ambitious intent on a topic
+//     whose meaning we can't verify. Owner principle: understand → confirm
+//     → execute. Confusable/ambiguous topics are parked in CONFIG_KV and
+//     resumed by "1"/"2"/"ya"; anything else is a fresh query.
 //
-// This mirrors the webhook typo_wait pattern (M8-v25/v27) at the BRAIN
-// layer: the webhook path already gates confusables before runResearch,
-// but processIntelligence/act() executed search/design/code without any
-// relevance check. Fail-closed: never guess-execute, never block a
-// clear request, never throw.
+// (B) EXTERNAL-EXECUTOR GATE (v11.45): JARVIS sebagai NEGOSIATOR pemilik
+//     menilai apakah sebuah tugas PANUT dibawa ke platform pinjaman
+//     (eksekutor eksternal). Platform pinjaman punya LINGKUNGAN + KEMAMPUAN
+//     — bukan keputusan. Sapaan, kata tunggal ambigu, dan obrolan ringan
+//     TIDAK layak sandbox: itu milik jalur chat. Predikat murni &
+//     deterministik (tanpa LLM/network). Fail-closed ke false utk kosong.
 //=====================================================================
 
 import { Env } from "./db";
 import { detectConfusableTopic } from "./ai";
+
+// ====(A) m9-v9 relevance gate ==============================================
 
 const PENDING_PREFIX = "relevance_wait:";
 const PENDING_TTL = 600; // 10 minutes — matches typo_wait freshness
@@ -82,10 +80,9 @@ function isThinTopic(input: string): boolean {
  *  Deterministic + fail-closed:
  *  1) Confusable topic word with a neutral/corrected-reading bias (webhook
  *     typo_wait precedent) → ask with both options.
- *  2) GENERAL AMBIGUITY (owner principle — "relevance first, never guess"):
- *     an ambitious intent whose topic is too thin or dominated by referential
- *     markers ("itu", "yang tadi") would make us execute OUR OWN guess of the
- *     topic. Ask one short confirmation instead of burning budget on it.
+ *  2) GENERAL AMBIGUITY: an ambitious intent whose topic is too thin or
+ *     dominated by referential markers ("itu", "yang tadi") would make us
+ *     execute OUR OWN guess. Ask one short confirmation instead of guessing.
  *  Clear, concrete requests always flow straight through. */
 export function detectRelevanceAmbiguity(
   topic: string | null,
@@ -205,4 +202,44 @@ export function resolveRelevanceConfirmation(
     return { confirmed: true, applyCorrection: false };
   }
   return { confirmed: false, applyCorrection: false };
+}
+
+// ====(B) v11.45 external-executor gate =====================================
+
+/** Pola sapaan / obrolan tanpa substansi (ditolak untuk eksekutor eksternal). */
+const EXEC_CASUAL_RE =
+  /^(?:halo|hai|hi|hello|hey|pagi|siang|sore|malam|selamat|thanks|terima kasih|makasih|ok|oke|ya|test|coba)\b/i;
+
+/** Kata tunggal ambigu yang bukan tugas eksekusi (negosiasi dulu, bukan eksekusi). */
+const EXEC_VAGUE_RE =
+  /^(?:lanjut|iya|tidak|bukan|itu|ini|dia|kamu|siapa|apa|kenapa|kapan|dimana|gimana|lanjutkan|detail|info)\b/i;
+
+/** Kata kunci yang MENYATAKAN pekerjaan eksekusi konkret (mengerjakan/menyusun). */
+const EXEC_VERB_RE =
+  /(ambil|ambilkan|buat|bikin|tulis|tuliskan|buatkan|generate|proses|parse|unduh|download|curl|scrape|fet[h]?|rangkum|ringkas|analisis|cari|riset|lapor|hitung|cek|periksa|jalankan|run|instal|setup|deploy|kemas|kirim|data|file|gambar|render|otomasi|script|skrip|regex|json|csv|api|endpoint)/i;
+
+/** PURE: apakah tujuan layak dibawa ke eksekutor eksternal (lingkungan +
+ *  kemampuan)? Sapaan/obrolan/kata ambigu → false. Tugas konkret → true.
+ *  Konservatif: tugas yang tidak jelas dikirim ke NEGOSIASI (bukan eksekusi),
+ *  jadi kriteria ini TIDAK boleh menolak tujuan yang bertele-tele panjang berisi
+ *  kata kerja eksekusi. Fail-closed ke FALSE untuk input kosong. */
+export function isRelevantExecutorTask(goal: string | null | undefined): boolean {
+  const g = (goal ?? "").trim();
+  if (g.length < 4) return false;
+  if (EXEC_VAGUE_RE.test(g)) {
+    // Kata ambigu tapi dengan isi eksekusi di belakangnya (mis. "lanjutkan riset AI")
+    // → tetap layak; hanya kata ambigu TANPA isi yang ditolak.
+    if (!EXEC_VERB_RE.test(g)) return false;
+  }
+  if (EXEC_CASUAL_RE.test(g) && !EXEC_VERB_RE.test(g)) return false;
+  return true;
+}
+
+/** PURE: pesan bernuansa eksekusi langsung yang TIDAK pantas masuk jalur
+ *  sandbox karena hanya menyapa/mengangguk. Untuk respon ramah pengalihan. */
+export function isCasualOnly(goal: string | null | undefined): boolean {
+  const g = (goal ?? "").trim();
+  if (g.length < 4) return true;
+  if (EXEC_VAGUE_RE.test(g) && !EXEC_VERB_RE.test(g)) return true;
+  return EXEC_CASUAL_RE.test(g) && !EXEC_VERB_RE.test(g);
 }
