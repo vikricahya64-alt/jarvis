@@ -23,7 +23,13 @@
 // secara TEPAT — berakar
 // dari fondasi 1-4 (pahami teks itulah yang dipahami), bersandar pada 5
 // (adaptif per pemilik) dan pada kemampuan cabang (pilih output TERBAIK,
-// bukan output yang paling nyaman dihasilkan inline). Konsekuensi arsitektur:
+// bukan output yang paling nyaman dihasilkan inline).
+//
+// PRINSIP SANDARAN SEMUA (m9-v11.51) — pemilik: jangan terpaku pada satu visi
+// per kemampuan. SEMUA kemampuan fondasi (1-7) menjadi SANDARAN SEMUA
+// kemampuan: tak ada kemampuan yang bertumpu hanya pada satu fondasi; seluruh
+// fondasi menyangga setiap kemampuan sekaligus (registri: foundations =
+// ALL_FOUNDATIONS, dipaksa testFoundationAnchoring). Konsekuensi arsitektur:
 //   - Setiap kemampuan didaftarkan sebagai KONTRAK TEKS (capability_registry):
 //     id + ringkasan + pemicu + izin + intent tertunda (parked). Menambah
 //     kemampuan = menambah satu kontrak, bukan regex liar per file.

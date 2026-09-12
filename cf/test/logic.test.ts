@@ -2110,41 +2110,47 @@ async function testCapabilityFoundation() {
 }
 
 async function testFoundationAnchoring() {
-  // m9-v11.50 AUDIT: kemampuan yang sudah ada SEBELUM fondasi+cabang tidak
-  // boleh menjadi cangkang kosong berkemampuan. Setiap kontrak (otak + perintah)
-  // WAJIB punya visi (kenapa ada) + minimal satu sandaran fondasi yang valid,
-  // sehingga kemampuan fondasi benar-benar menjadi sandaran SEMUA kemampuan.
+  // m9-v11.51 PRINSIP PEMILIK: SEMUA kemampuan fondasi menjadi SANDARAN SEMUA
+  // kemampuan — jangan terpaku pada satu visi per kemampuan. Tidak ada
+  // kemampuan yang bertumpu hanya pada satu fondasi: setiap kontrak (otak +
+  // perintah) WAJIB punya visi (kenapa ada) + tersandar pada SELURUH kemampuan
+  // fondasi (ALL_FOUNDATIONS), dipaksa tes (fail-closed).
   const {
     CAPABILITY_CONTRACTS,
     CAPABILITY_COMMANDS,
-    FOUNDATION_LABELS,
+    ALL_FOUNDATIONS,
   } = await import("../src/lib/capability_registry");
-  const validFoundations = new Set(Object.keys(FOUNDATION_LABELS));
 
   const audit = (kind: string, id: string, vision: string, foundations: string[]) => {
     assert.ok(vision && vision.trim().length >= 15, `${kind} ${id}: punya visi nyata (bukan cangkang)`);
-    assert.ok(Array.isArray(foundations) && foundations.length >= 1, `${kind} ${id}: tersandar minimal 1 fondasi`);
-    for (const f of foundations) {
-      assert.ok(validFoundations.has(f), `${kind} ${id}: sandaran '${f}' adalah fondasi yang sah`);
+    assert.ok(
+      Array.isArray(foundations) && foundations.length === ALL_FOUNDATIONS.length,
+      `${kind} ${id}: tersandar pada SELURUH kemampuan fondasi (${ALL_FOUNDATIONS.length}, bukan subset)`,
+    );
+    for (const f of ALL_FOUNDATIONS) {
+      assert.ok(foundations.includes(f), `${kind} ${id}: sandaran tidak lengkap — kehilangan '${f}'`);
     }
   };
 
   for (const c of CAPABILITY_CONTRACTS) audit("otak", c.id, c.vision, c.foundations);
   for (const c of CAPABILITY_COMMANDS) audit("perintah", c.id, c.vision, c.foundations);
 
-  // Tidak ada kemampuan tanpa sandaran (fail-closed di level registri).
+  // Tidak ada kemampuan tanpa sandaran penuh (fail-closed di level registri).
   assert.ok(CAPABILITY_CONTRACTS.length >= 13, "all brain contracts audited");
   assert.ok(CAPABILITY_COMMANDS.length >= 13, "all webhook contracts audited");
 
-  // Pengetahuan-diri akhirnya memperlihatkan fondasi sebagai sandaran semua.
+  // Pengetahuan-diri akhirnya memperlihatkan fondasi sebagai sandaran SEMUA.
   const { describeAllCapabilities, capabilityContextBlock } = await import("../src/lib/capability_registry");
   const desc = describeAllCapabilities();
-  assert.ok(desc.includes("Fondasi (sandaran SEMUA kemampuan)"), "/kemampuan shows the foundation section");
-  assert.ok(desc.includes("🏛 sandaran:"), "/kemampuan shows each capability's foundation anchor");
+  assert.ok(desc.includes("Fondasi — SANDARAN SEMUA KEMAMPUAN"), "/kemampuan shows the ALL-foundations section");
+  assert.ok(
+    /SEMUA kemampuan fondasi \(f1·f2·f3·f4·f5·f6·f7\)/.test(desc),
+    "/kemampuan shows every capability supported by ALL foundations",
+  );
   assert.ok(desc.includes("✨ visi:"), "/kemampuan shows each capability's vision");
   const ctx = capabilityContextBlock();
-  assert.ok(ctx.includes("Fondasi sandaran:") && ctx.includes("f5_sesi="), "system prompt carries the foundation map");
-  assert.ok(ctx.includes("[f1_teks"), "system prompt tags capabilities with foundation ids");
+  assert.ok(ctx.includes("Fondasi sandaran SEMUA kemampuan:") && ctx.includes("f5_sesi="), "system prompt carries the foundation map");
+  assert.ok(ctx.includes("TERSANDAR pada SEMUA kemampuan fondasi"), "system prompt states the all-foundation principle");
 }
 
 async function testProjectPlanContract() {
