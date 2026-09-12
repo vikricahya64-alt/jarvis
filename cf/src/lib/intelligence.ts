@@ -306,8 +306,36 @@ function heavyCapVerdict(type: "search" | "design" | "code", text: string): "exe
  *
  *  This classifier is GLOBAL — works across ALL topic contexts, not tuned to
  *  one topic. It is the most fundamental axis before any capability routing. */
+/** Deterministis: apakah kalimat adalah TUGAS KODE (kosa-kode + kata kerja
+ *  tindakan, atau blok ``` eksplisit). Di-share classifyIntent (jalur 'code')
+ *  dan fondasi bentuk (heavyCapabilityShape) — satu sumber, tanpa duplikasi. */
+export function isCodeTaskIntent(text: string | null): boolean {
+  const low = (text ?? "").trim().toLowerCase();
+  return /```/.test(low) ||
+    (/\b(?:kode|code|coding|pemrograman|programming|script|skrip|syntax|sintaks|algoritm[ae]|debug)\b/i.test(low) &&
+     /\b(?:tulis|buat|bikin|jelaskan|perbaiki|debug|analisis|analisa|baca|review|cara|bagaimana|apa|kenapa|mengapa)\b/i.test(low));
+}
+
+/** SUMBU BENTUK (fondasi, m9-v11.47): klasifikasi bentuk pesan menjadi
+ *  kemampuan berat terkecil — search (ambil-butir) | code | question —
+ *  dipakai lapisan rute untuk mempresisikan arah sebelum ke brain. Tidak
+ *  menggantikan classifyIntent; membaca AXIS yang sama (isSourcingOrder,
+ *  isCodeTaskIntent, messageMode, QUESTION_SHAPED_RE) dari SATU sumber.
+ *  Fail-closed: tidak tegas → null (biarkan brain/command yang memutuskan). */
+export function heavyCapabilityShape(text: string | null): "search" | "code" | "question" | null {
+  const t = (text ?? "").trim();
+  if (t.length < 4) return null;
+  if (messageMode(t) === "communicate") return "question";
+  if (isSourcingOrder(t)) return "search";
+  if (isCodeTaskIntent(t)) return "code";
+  if (QUESTION_SHAPED_RE.test(t)) return "question";
+  return null;
+}
+
+/** Ask vs EXECUTE mode — the most fundamental axis (ilmu komunikasi vs
+ *  eksekusi). Exported sebagai sumber tunggal untuk lapisan fondasi. */
 type MessageMode = "communicate" | "execute" | "ambiguous";
-function messageMode(text: string): MessageMode {
+export function messageMode(text: string): MessageMode {
   const low = text.toLowerCase();
   // COMMUNICATE signals: question words, clarifications, negation,
   // comparative phrasing, "aku mau tahu", "bisa tidak", "mau tanya"
@@ -435,7 +463,7 @@ export function classifyIntent(text: string, _topic: string | null): IntentResul
 
   // Programming language / code task (conservative: code vocabulary + an action
   // verb, or an explicit ``` block — "aku suka coding" stays casual chat).
-  if (/```/.test(low) || (/\b(?:kode|code|coding|pemrograman|programming|script|skrip|syntax|sintaks|algoritm[ae]|debug)\b/i.test(low) && /\b(?:tulis|buat|bikin|jelaskan|perbaiki|debug|analisis|analisa|baca|review|cara|bagaimana|apa|kenapa|mengapa)\b/i.test(low))) {
+  if (isCodeTaskIntent(low)) {
     if (heavyCapVerdict("code", text) === "verify") {
       return { type: "question", urgency: "low", formality: "neutral", confidence: 0.7, entities: { heavyVerify: "code" } };
     }

@@ -22,6 +22,7 @@
 import { isPromptMasterRequest } from "./prompt_master";
 import { isContext7Request } from "./context7";
 import { SELF_REF_RE } from "./identity";
+import { projectPlanKey } from "./project_plan";
 
 export type CapabilityId =
   | "self_referential"
@@ -288,7 +289,216 @@ export function approachForIntent(intent: string): string | null {
   return null;
 }
 
-/** Markdown capability summary for introspection / diagnostics (read-only). */
+/** ONE source of truth for affirmative approval words (owner decision).
+ *  Used by the proyek/etask parked-approval gate AND future parked intents so
+ *  no capability invents its own approval vocabulary. Fail-closed: the WHOLE
+ *  message must be a single approval word + optional punctuation — "ya deh",
+ *  "ya tapi nanti", "ya proyek" (multi-token phrase is handled explicitly by
+ *  the proyek parked contract) never auto-approve. */
+export const STRICT_APPROVAL_RE =
+  /^\s*(?:ya|iya|y|yes|yoi|sip|oke|ok|okay|siap|setuju|go|gas|gaskeun|lanjut|jalan|jalankan|eksekusi)\s*[.!?…]*\s*$/i;
+
+// ============================================================================
+// WEBHOOK-BOUND CAPABILITY CONTRACTS (command plane)
+// ============================================================================
+// Daftar kemampuan yang dieksekusi oleh webhook (bukan brain) — bersama
+// kontrak brain di atas, ini SATU REGISTRI SEMUA kemampuan JARVIS:
+// ide tambah kapabilitas = tambah satu entri di sini/atas, bukan regex liar
+// di webhook. `parked` = intent tertunda yang menunggu balasan pemilik.
+
+export interface ParkedContract {
+  /** Kunci KV yang menandai intent tertunda (nilai truthy = sedang menunggu). */
+  key: (owner: number) => string;
+  /** "simple": pesan harus cocok salah satu resumeWords (tegas).
+   *  "always": pesan teks apa pun (non-slash) resume sesi itu (mis. Q&A nego). */
+  kind: "simple" | "always";
+  /** Kata/simbol pemilik yang me-resume intent (kind "simple" hanya). */
+  resumeWords?: RegExp[];
+  /** Handler yang harus dipanggil webhook saat resume (polimorfisme handler). */
+  handler: "relevance_resume" | "nego_resume" | "project_approval";
+  /** Deskripsi kontrak (untuk dokumentasi-diri /kemampuan). */
+  note: string;
+}
+
+export interface CommandCapabilitySpec {
+  id: string;
+  label: string;
+  /** satu baris kontrak teks: APA yang dilakukan. */
+  brief: string;
+  /** pemicu deterministik untuk bentuk slash (dipakai router & /kemampuan). */
+  commandPattern: RegExp;
+  /** varian bahasa alami (opsional). */
+  naturalPattern?: RegExp;
+  /** izin sensitif, teks (satu-satunya sumber dokumentasi izin). */
+  permissionHint?: string;
+  /** intent tertunda yang dimiliki kemampuan ini (urutan = prioritas resume). */
+  parked?: ParkedContract[];
+}
+
+/** Registri kemampuan webhook, URUTAN = urutan dispatch webhook (perintah
+ *  eksplisit lebih dulu daripada kemampuan berat). `parked` diurutkan
+ *  per-kemampuan sesuai prioritas resume. */
+export const CAPABILITY_COMMANDS: CommandCapabilitySpec[] = [
+  {
+    id: "sistem",
+    label: "Sistem & Diagnostik",
+    brief: "Cek kesehatan, status otonomi, bantuan, daftar kemampuan, antrean, audit.",
+    commandPattern: /^\/(?:health|status|help|kemampuan|dms_status|queue_status|debug_bypass|dms|queue|obj|status_panen)\b/i,
+  },
+  {
+    id: "todo",
+    label: "Todo",
+    brief: "Kelola daftar tugas ringan: tambah, hapus, tandai selesai, lihat.",
+    commandPattern: /^\/todo\b/i,
+    naturalPattern: /^(?:tambah|tambahkan|buat|buatkan|catat|catatkan|simpan|add)\s+(?:todo|task|tugas)\b|^(?:hapus|hapuskan|delete|remove|del)\b|^todo\b|^(?:cek|check|lihat|daftar)\s+(?:todo|task|tugas)\b|^(?:done|selesai)\s+(?:todo|task|tugas)\b/i,
+  },
+  {
+    id: "reminder",
+    label: "Pengingat",
+    brief: "Buat pengingat sekali jalan/jadwal (menit/jam/waktu absolut), lihat, hapus.",
+    commandPattern: /^\/reminder\b/i,
+    naturalPattern: /^ingatkan\b/i,
+  },
+  {
+    id: "etask",
+    label: "Task Eksekutor (E2B)",
+    brief: "Sama seperti /proyek: negosiasi + terjemahan → rencana diparkir → pemilik menyetujui. Tidak ada eksekusi tanpa persetujuan.",
+    commandPattern: /^\/etask\b/i,
+    permissionHint: "sandbox E2B HANYA setelah persetujuan pemilik ('ya proyek').",
+    parked: [
+      {
+        key: (o) => projectPlanKey(o),
+        kind: "simple",
+        resumeWords: [/^ya proyek\b/i, STRICT_APPROVAL_RE],
+        handler: "project_approval",
+        note: "Persetujuan rencana → sandbox E2B dibuka (SATU-SATUNYA gerbang eksekusi).",
+      },
+    ],
+  },
+  {
+    id: "pinjam",
+    label: "Pinjam Eksekutor",
+    brief: "Delegasi async ke eksekutor eksternal (riset, docs, figma, notion, cuaca) — dieksekusi platform itu, hasil dipoll & di-DM.",
+    commandPattern: /^\/pinjam\b/i,
+  },
+  {
+    id: "tugas",
+    label: "Tugas Cloud (opencode)",
+    brief: "Delegasi kerja berat ke eksekutor cloud (GitHub Actions + opencode), jadwal berulang, lanjut/tanya/hapus riwayat.",
+    commandPattern: /^\/(?:tugas|delegasi|delegate)\b/i,
+    naturalPattern: /^delegasikan\b|^(?:kerjakan|jalankan)\b.*\bopencode\b/i,
+    parked: [
+      {
+        key: (o) => `relevance_wait:${o}`,
+        kind: "simple",
+        resumeWords: [/^(?:1|2|ya|oke|ok|tidak|bukan)$/i],
+        handler: "relevance_resume",
+        note: "Gate relevansi meminta konfirmasi topik sebelum eskalasi.",
+      },
+      {
+        key: (o) => `nego:${o}`,
+        kind: "always",
+        handler: "nego_resume",
+        note: "Sesi negosiasi /tugas (jawab pertanyaan / konfirmasi GO-batal).",
+      },
+    ],
+  },
+  {
+    id: "proyek",
+    label: "Proyek (E2B)",
+    brief: "Negosiator+penerjemah menyusun rencana eksekusi, DITAMPILKAN dulu, eksekusi menunggu persetujuan pemilik.",
+    commandPattern: /^\/proyek\b|^ya proyek\b/i,
+    permissionHint: "sandbox E2B HANYA setelah persetujuan pemilik ('ya proyek').",
+    parked: [
+      {
+        key: (o) => projectPlanKey(o),
+        kind: "simple",
+        resumeWords: [/^ya proyek\b/i, STRICT_APPROVAL_RE],
+        handler: "project_approval",
+        note: "AKSES CEPAT: \"ya\"/\"oke\"/\"setuju\"/\"siap\" juga = persetujuan pemilik saat rencana tertunda (bukan cuma 'ya proyek'). Tanpa rencana tertunda, 'ya' tetap obrolan biasa.",
+      },
+    ],
+  },
+  {
+    id: "connector",
+    label: "Connector (Figma/Notion)",
+    brief: "Baca struktur file Figma / cari database Notion melalui Vercel Connector (secret di sana).",
+    commandPattern: /^\/(?:figma|notion|connector)\b/i,
+  },
+  {
+    id: "e2b",
+    label: "E2B Mentah",
+    brief: "Jalankan skrip shell/Python mentah di sandbox Firecracker (gate oleh keputusan pemilik).",
+    commandPattern: /^\/e2b\b/i,
+    permissionHint: "eksekusi sandbox.",
+  },
+  {
+    id: "baca",
+    label: "Baca Halaman",
+    brief: "Baca + ringkas sebuah URL (HTML di-fetch, hasil digest Bahasa Indonesia).",
+    commandPattern: /^\/(?:baca|ringkas)\b/i,
+    naturalPattern: /^(?:baca|ringkas(?:kan)?|bacain|ringkaskan)\b.*https?:\/\//i,
+  },
+  {
+    id: "suara",
+    label: "TTS Suara",
+    brief: "Ucapkan teks pendek sebagai voice note.",
+    commandPattern: /^\/(?:suara|sound|voice|ucapkan)\b/i,
+    naturalPattern: /^(?:suarakan|ucapkan)\s+/i,
+  },
+  {
+    id: "kota",
+    label: "Kota & Cuaca",
+    brief: "Simpan kota / tampilkan prakiraan cuaca.",
+    commandPattern: /^\/(?:kota|setkota|city)\b/i,
+  },
+  {
+    id: "shop",
+    label: "E-commerce",
+    brief: "Produk, stok, pesanan, pelanggan, invoice, laporan penjualan.",
+    commandPattern: /^\/(?:shop|produk|stok|pesanan|pelanggan|invoice|laporan)\b/i,
+    naturalPattern: /^(?:tambah|tambahkan|buat|buatkan|catat|simpan|add)\s+(?:produk|product|barang)\b|^(?:buat|catat|tambah)\s+(?:pesanan|order|penjualan)\b|^(?:cek|lihat|tampil)\s+(?:stok|stock)\b|^laporan\s+(?:penjualan|jual)\b|^(?:list|daftar)\s+(?:produk|product|barang|pesanan|order|pelanggan|customer)\b/i,
+  },
+];
+
+/** Resolve kemampuan webhook untuk teks (slash ATAU bahasa alami), dalam
+ *  urutan kontrak. Fail-closed: tidak cocok → null → pipeline normal
+ *  (intelligence/brain); jangan pernah salah-eksekusi. */
+export function resolveCommandCapability(text: string, raw = ""): CommandCapabilitySpec | null {
+  const t = (text ?? "").trim();
+  if (!t) return null;
+  for (const c of CAPABILITY_COMMANDS) {
+    try {
+      if (c.commandPattern.test(t)) return c;
+      if (c.naturalPattern) {
+        const r = raw && raw !== t ? raw : t;
+        if (c.naturalPattern.test(r)) return c;
+      }
+    } catch { /* predicate tidak boleh merusak routing */ }
+  }
+  return null;
+}
+
+/** Apakah pesan cocok kata-resume sebuah kontrak parked (tanpa cek KV).
+ *  Dipakai webhook untuk mengumpulkan kandidat; kehadiran KV diverifikasi
+ *  terpisah (resolveParkedResume). */
+export function resolveParkedResumeWords(
+  spec: CommandCapabilitySpec,
+  text: string,
+): ParkedContract | null {
+  const t = (text ?? "").trim();
+  for (const p of spec.parked ?? []) {
+    if (p.kind === "always") {
+      if (!/^\//.test(t)) return p;
+      continue;
+    }
+    if ((p.resumeWords ?? []).some((r) => r.test(t))) return p;
+  }
+  return null;
+}
+
+/** Markdown summary CAPABILITY BRAIN (inti), for introspection (legacy name
+ *  kept — old tests + /help UX contract). */
 export function describeCapabilities(): string {
   const rows = [...CAPABILITY_CONTRACTS]
     .sort((a, b) => a.priority - b.priority)
@@ -300,6 +510,37 @@ export function describeCapabilities(): string {
         `\n  Fallback: ${c.fallbackId} | Error: ${c.errorCodes.join(", ") || "—"}`,
     );
   return `🧩 *Capabilities J.A.R.V.I.S. (${rows.length})*\n\n` + rows.join("\n\n");
+}
+
+/** Markdown summary SEMUA kemampuan (brain + command), dibaca dari kontrak
+ *  TEKS — introspeksi diri yang dibangkitkan dari registri (bukan diketik
+ *  tangan), sehingga menambah kemampuan otomatis terlihat di sini. */
+export function describeAllCapabilities(): string {
+  const brain = CAPABILITY_CONTRACTS.map((c) => `• *${c.label}* — ${c.brief}`);
+  const cmds = CAPABILITY_COMMANDS.map(
+    (c) =>
+      `• *${c.label}* — ${c.brief}` +
+      (c.parked?.length ? `\n  ⏳ menunggu: ${c.parked.map((p) => p.note).join(" · ")}` : "") +
+      (c.permissionHint ? `\n  🔐 izin: *${c.permissionHint}*` : ""),
+  );
+  return (
+    `🧩 *Kemampuan fondasi J.A.R.V.I.S.* — setiap entri adalah kontrak teks di registri; kemampuan baru = satu entri baru, router & pengetahuan-diri ikut otomatis.\n\n` +
+    `*Otak (inti):*\n${brain.join("\n")}\n\n` +
+    `*Perintah (webhook):*\n${cmds.join("\n")}`
+  );
+}
+
+/** Blok singkat untuk system prompt LLM (dibaca model dari teks ini) agar
+ *  model mengenali kemampuan nyata JARVIS (bukan mengarang). */
+export function capabilityContextBlock(): string {
+  const brain = CAPABILITY_CONTRACTS.map((c) => `${c.id}: ${c.brief}`);
+  const cmds = CAPABILITY_COMMANDS.map((c) => `${c.id}: ${c.brief}`);
+  return (
+    `KEMAMPUAN DIRI (registri fondasi — jangan mengarang di luar ini):\n` +
+    `Inti: ${brain.join(" | ")}\n` +
+    `Perintah: ${cmds.join(" | ")}\n` +
+    `Gunakan perintah yang paling tepat untuk pesan pemilik. Eksekusi sandbox/eksekutor HANYA setelah pemilik menyetujui.`
+  );
 }
 
 /** Human hint of the trigger pattern for a predicated capability. */

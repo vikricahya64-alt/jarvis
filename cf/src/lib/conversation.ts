@@ -33,6 +33,7 @@ import {
 } from "./context_manager";
 import { detectLanguage, type Language } from "./jarvis_language";
 import { JARVIS_IDENTITY } from "./identity";
+import { capabilityContextBlock } from "./capability_registry";
 
 /** J.A.R.V.I.S. core personality dimensions.
  *  These are the DEFAULT values; they adapt based on context + mood. */
@@ -302,6 +303,13 @@ export function buildSystemPrompt(opts: {
   // must know JARVIS's actual features, not hallucinate generic answers.
   // Uses the SINGLE SOURCE OF TRUTH from identity.ts (imported constant).
   parts.push(JARVIS_IDENTITY.systemPromptBlock(lang?.code));
+
+  // Capability foundation (m9-v11.47) — the LLM reads JARVIS's ACTUAL
+  // capability registry as text (the root text-understanding vision: the
+  // model understands & uses capabilities precisely because it reads their
+  // contracts, not because someone hardcoded phrases). Single source of truth:
+  // capability_registry.ts.
+  parts.push(capabilityContextBlock());
 
   // Chain-of-thought distillation (Anthropic 2024):
   // "Think step by step internally, output only the natural answer."
