@@ -10,7 +10,7 @@
 //=====================================================================
 
 import { Env, touchActivity, logConsent, getConsentRequestTs } from "../lib/db";
-import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById, addAgentTask, listAgentTasks, markAgentTaskRunning, restartAgentTask, getAgentTask, deleteAgentTask, addAgentRule, listAgentRules, deleteAgentRule, setAgentRuleActive } from "../lib/db";
+import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById, addAgentTask, listAgentTasks, markAgentTaskRunning, finishAgentTask, restartAgentTask, getAgentTask, deleteAgentTask, addAgentRule, listAgentRules, deleteAgentRule, setAgentRuleActive } from "../lib/db";
 import {
   addProduct, listProducts, updateProduct, lowStockProducts,
   addCustomer, listCustomers,
@@ -52,6 +52,7 @@ import { getPlans, getScheduledTasks } from "../lib/maestro";
 import { getDegradationStatus } from "../lib/degradation";
 import { delegateToGithub, flagAgentReport, truncationWarning, usesDeepResearchProtocol, stripDeepResearchFlag } from "../lib/agent_executor";
 import { e2bRun, e2bConfigured, e2bSummary, e2bStateHint } from "../lib/e2b";
+import { delegateToE2b } from "../lib/e2b_executor";
 import { parseRecurSpec } from "../lib/agent_rules";
 import { readNegotiation, saveNegotiation, clearNegotiation, generateClarifyQuestions, compileFinalInstruction, type NegoSession } from "../lib/negotiation";
 import {
@@ -784,6 +785,17 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // unconfigured and no sandbox is ever billed.
   if (isE2bCommand(trimmed)) {
     await handleE2bCommand(env, r, text);
+    return new Response("ok", { status: 200 });
+  }
+
+  // E2B DELEGATION (async /etask) — same executor platform as /e2b above but
+  // with the SAME system as the opencode/GitHub executor: task queued on the
+  // agent_tasks ledger, sandbox launched detached, result polled back by the
+  // per-minute cron, sanitized + resummarized into a DM (mirrors /agent/done).
+  // JARVIS orchestrates as a third party; E2B does the real work with its
+  // FULL native capability. Fail-closed on every edge (no key → graceful).
+  if (isE2bTaskCommand(trimmed)) {
+    await handleE2bTaskCommand(env, r, text);
     return new Response("ok", { status: 200 });
   }
 
@@ -2032,6 +2044,69 @@ async function handleE2bCommand(env: Env, from: number, raw: string): Promise<vo
     await fire(sendMessage(env, from, e2bSummary(res, task)));
   } catch (e) {
     await fire(sendMessage(env, from, `⚠️ Perintah E2B gagal: ${String(e).slice(0, 200)}`));
+  }
+}
+
+/** True when the message is an E2B delegation command (slash only). */
+function isE2bTaskCommand(trimmed: string): boolean {
+  return trimmed === "/etask" || /^\/etask\b/i.test(trimmed);
+}
+
+/** Execute E2B delegation commands: /etask <tugas> queues the task on the
+ *  agent_tasks ledger (executor='e2b'), creates the sandbox NOW and launches
+ *  the detached runner; completion is polled back by the per-minute cron and
+ *  DMed to the owner exactly like /agent/done. Fail-closed throughout. */
+async function handleE2bTaskCommand(env: Env, from: number, raw: string): Promise<void> {
+  const trimmed = raw.trim();
+  try {
+    if (trimmed === "/etask") {
+      await fire(sendMessage(env, from,
+        "🧠 *E2B — delegasi async (vektor full platform E2B)*\n" +
+        "Sistem sama persis dengan executor opencode: **JARVIS orkestrator pihak ketiga** meminjam platform eksekusi E2B (sandbox Firecracker penuh: shell, Python, internet, git, paket apa pun) — tanpa membangun ulang kemampuan apa pun; E2B mengerjakan dengan kemampuan penuhnya.\n\n" +
+        "• `/etask <tugas>` — simpan di ledger + jalankan di sandbox sekarang\n" +
+        "• hasil dipoll otomatis per menit & di-DM ke kamu (mirip `/agent/done`)\n" +
+        "• `--riset` → protokol riset dengan kutipan sumber (link harus selengkapnya)\n\n" +
+        "Riwayat: `/tugas list` · batas sandbox ±15 menit."));
+      return;
+    }
+
+    const sub = trimmed.match(/^\/etask\s+(.+)$/s);
+    if (!sub) {
+      await fire(sendMessage(env, from, "Penggunaan: `/etask <tugas>`"));
+      return;
+    }
+    const task = sub[1].trim();
+    if (!e2bConfigured(env)) {
+      await fire(sendMessage(env, from,
+        `⚠️ Eksekutor E2B belum aktif${e2bStateHint("e2b-not-configured")}`));
+      return;
+    }
+    if (task.length < 3) {
+      await fire(sendMessage(env, from, "📝 Beri tugas yang mau dikerjakan (minimal 3 karakter)."));
+      return;
+    }
+
+    const id = await addAgentTask(env, from, task, "e2b");
+    if (!id) {
+      await fire(sendMessage(env, from, "⚠️ Gagal menyimpan tugas E2B. Coba lagi."));
+      return;
+    }
+    await fire(sendMessage(env, from,
+      `⏳ Tugas *#${id}* terdaftar (eksekutor E2B). Membuka sandbox: \`${task.slice(0, 70)}${task.length > 70 ? "…" : ""}\` …`));
+
+    const { runId, error, truncated } = await delegateToE2b(env, task);
+    if (error) {
+      await markAgentTaskRunning(env, id);
+      await finishAgentTask(env, id, "failed", "", error);
+      await fire(sendMessage(env, from,
+        `⚠️ Tugas #${id} tersimpan tapi *gagal membuka sandbox* (${error}). Status → gagal. Cek /tugas list.`));
+      return;
+    }
+    await markAgentTaskRunning(env, id, runId ?? "");
+    await fire(sendMessage(env, from,
+      `🚀 Tugas *#${id}* sedang berjalan di sandbox E2B${truncated ? " (dipangkas 4000 karakter)" : ""}. Hasil akan di-DM.`));
+  } catch (e) {
+    await fire(sendMessage(env, from, `⚠️ Perintah E2B delegasi gagal: ${String(e).slice(0, 200)}`));
   }
 }
 

@@ -9,6 +9,7 @@
 //=====================================================================
 
 import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders, getAgentTask, finishAgentTask, listAgentTasks, failStaleAgentTasks, pruneOldAgentTasks, rememberMemory } from "./lib/db";
+import { pollE2bAgentRuns } from "./lib/e2b_executor";
 import { sanitizeAgentReport, flagAgentReport } from "./lib/agent_executor";
 import { fireDueAgentRules } from "./lib/agent_rules";
 import { handleUpdate, ensureWebhook } from "./workers/telegram_webhook";
@@ -167,7 +168,7 @@ export default {
         ok: true,
         ts: Date.now(),
 env: env.APP_ENV ?? "unknown",
-        version: "m9-v11.36",
+        version: "m9-v11.37",
       }));
     }
 
@@ -274,7 +275,7 @@ env: env.APP_ENV ?? "unknown",
         return respond(Response.json({
           ok: true,
 ts: Date.now(),
-          version: "m9-v11.36",
+          version: "m9-v11.37",
           systems: {
             d1: d1Ok ? "✅" : "❌",
             kv: kvOk ? "✅" : "❌",
@@ -604,6 +605,12 @@ ts: Date.now(),
         // M8-v25: self-heal the Telegram webhook config (explicitly include
         // callback_query in allowed_updates) and drain any straggling cron work.
         await ensureWebhook(env);
+        // v11.37: E2B delegated-async executor — complete finished sandbox
+        // runs (probe marker + output), kill the sandbox, DM the report.
+        const e2bDone = await pollE2bAgentRuns(env);
+        if (e2bDone > 0) {
+          console.log(`[cron] e2b_executor: finalized=${e2bDone} (${Date.now() - start}ms)`);
+        }
       }
     } catch (e) {
       console.error(`[cron:${cron}] failed`, (e as Error).message);
