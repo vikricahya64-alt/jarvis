@@ -16,7 +16,7 @@
 //=====================================================================
 
 import { Env, getActivity, getDmsState } from "../lib/db";
-import { sendMessage } from "../lib/telegram";
+import { emitText as sendMessage } from "../lib/telegram_gate";
 
 export type Stage = "idle" | "verify" | "stage2" | "executed";
 

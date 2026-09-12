@@ -8,7 +8,7 @@
 //=====================================================================
 
 import { Env, finishAgentTask, rememberMemory } from "./db";
-import { sendMessage } from "./telegram";
+import { emitText as sendMessage } from "./telegram_gate";
 
 const MAX_DM_DETAIL = 2800;
 const MAX_LAST_OUTPUT = 700;

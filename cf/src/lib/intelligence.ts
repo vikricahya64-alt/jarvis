@@ -40,6 +40,7 @@ import {
   detectGarbledInput,
   unknownEntitySignal,
   isVagueNoSubject,
+  CLARIFY_EMPTY_SUBJECT,
 } from "./ai";
 import {
   isResearchClass, orchestrateResearch,
@@ -1436,7 +1437,7 @@ export async function processIntelligence(
     /^(emergency|self_referential|translation|command|prompt_writer|context7)$/.test(perception.intent.type);
   if (!skipEmptySubject && !perception.isContinuation && isVagueNoSubject(effectiveText)) {
     return {
-      text: "Hmm, aku belum menangkap konteksnya. Soal apa nih — boleh jelaskan sedikit?",
+      text: CLARIFY_EMPTY_SUBJECT,
       perception,
       strategy,
       source: "understand_clarify",

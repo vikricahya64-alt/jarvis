@@ -17,7 +17,7 @@ import {
   createOrder, listOrders, getOrder, updateOrderStatus, salesReport,
   type Order, type OrderInput,
 } from "../lib/db";
-import { sendMessage, sendPhoto, sendVoice, editMessageReplyMarkup, answerCallbackQuery, getWebhookInfo, setWebhook, TelegramUpdate, TelegramMessage, downloadTelegramFile, deliverSmartReply } from "../lib/telegram";
+import { emitText as sendMessage, emitSmartReply as deliverSmartReply, emitPhoto as sendPhoto, emitVoice as sendVoice, emitAnswer as answerCallbackQuery, emitEditMarkup as editMessageReplyMarkup, getWebhookInfo, setWebhook, TelegramUpdate, TelegramMessage, downloadTelegramFile } from "../lib/telegram_gate";
 import { withResilience, fetchWithTimeout } from "../lib/resilience";
 import { synthesizeSpeech } from "../lib/tts";
 import {
@@ -1176,7 +1176,9 @@ async function act(env: Env, owner: number, text: string): Promise<void> {
       // shortcut anymore — the brain owns the relevance gate, memory,
       // fail-closed URL strip and narrative prose rails, so a topic like
       // "riset itu" gets a confirmation FIRST instead of a guessed search.
-      await fire(sendMessage(env, owner, await applyDefault(env, owner, res, text)));
+      // Delivered through the BRAIN door (emitSmartReply) so the exit rail
+      // (empty-subject re-gate + memory-citation scrub) still applies.
+      await fire(deliverSmartReply(env, owner, await applyDefault(env, owner, res, text)));
       break;
     case "CLARIFY":
       // Offer structured options (L11 python send_clarification parity) instead
