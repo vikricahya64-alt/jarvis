@@ -81,15 +81,20 @@ async function testE2bExecutorRails() {
   // m9-v11.37: /etask — the E2B platform as a DELEGATED async executor with
   // the same system as the opencode/GitHub executor. Pure parse/guards here
   // run with NO network; the wire calls themselves live in the poller path.
-  const { e2bParseExitCode, e2bStripMarker, e2bExecutorConfigured } =
+  const { e2bParseExitCode, e2bStripMarker, e2bExecutorConfigured, e2bOutcome } =
     await import("../src/lib/e2b_executor");
 
   assert.strictEqual(e2bExecutorConfigured({ E2B_API_KEY: "" }), false, "no key → executor unconfigured");
   assert.strictEqual(e2bExecutorConfigured({ E2B_API_KEY: "e2b_x" }), true, "key → executor configured");
 
-  const out = "Bagus, kerjaku selesai\nJARVIS_RC=0\n";
-  assert.strictEqual(e2bParseExitCode(out), 0, "success exit code parsed");
-  assert.strictEqual(e2bStripMarker(out), "Bagus, kerjaku selesai", "marker stripped from report");
+  // Probe shape: runner output + JARVIS_RC + probe's trailing JARVIS_DONE.
+  const probeOut = "Bagus, kerjaku selesai\nJARVIS_RC=0\nJARVIS_DONE";
+  const oc = e2bOutcome(probeOut);
+  assert.strictEqual(oc.status, "done", "done detected");
+  assert.strictEqual(oc.output, "Bagus, kerjaku selesai\nJARVIS_RC=0", "trailing marker removed, content kept");
+  assert.strictEqual(e2bOutcome("masih jalan").status, "running", "no marker → running");
+  assert.strictEqual(e2bParseExitCode(oc.output), 0, "success exit code parsed");
+  assert.strictEqual(e2bStripMarker(oc.output), "Bagus, kerjaku selesai", "marker stripped from report");
   assert.strictEqual(e2bParseExitCode("python kode\nJARVIS_RC=127\n"), 127, "failure exit code parsed");
   assert.strictEqual(e2bParseExitCode("jalan\nbelum selesai"), null, "no marker → null (poll again / not final)");
   assert.strictEqual(e2bStripMarker("JARVIS_RC=7\n"), "", "marker-only run empties out");
