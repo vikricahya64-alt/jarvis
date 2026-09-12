@@ -2210,17 +2210,19 @@ async function handleProyekCommand(env: Env, from: number, raw: string): Promise
         await fire(sendMessage(env, from, "⚠️ Gagal menyimpan rencana. Coba lagi."));
         return;
       }
-      await markAgentTaskRunning(env, id);
       const { runId, error } = await delegateToE2b(env, parked.code).catch(
         () => ({ runId: "", error: "e2b-launch-failed" }),
       );
       if (error) {
+        await markAgentTaskRunning(env, id); // pending→running so finish's guard passes
         await finishAgentTask(env, id, "failed", "", error);
         await clearProjectPlan(env, from);
         await fire(sendMessage(env, from,
           `⚠️ Sandbox E2B gagal dibuka (${error}). Rencana disetel gagal — cek /tugas list. Jalankan /proyek <tujuan> lagi bila perlu.`));
         return;
       }
+      // SINGLE pending→running transition WITH the sandbox id (v11.43: marking
+      // twice = the run_id update becomes a no-op and never lands on the ledger).
       await markAgentTaskRunning(env, id, runId ?? "");
       await clearProjectPlan(env, from);
       await fire(sendMessage(env, from,

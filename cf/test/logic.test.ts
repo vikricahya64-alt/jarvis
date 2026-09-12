@@ -1861,6 +1861,146 @@ async function testTranslatorRails() {
     "too-short goal → null");
 }
 
+async function testEscalationOrdering() {
+  // v11.43 REGRESSION: "... Tugas #32 gagal di eksekutor E2B: sandbox id hilang
+  // di ledger". Root cause: markAgentTaskRunning was called TWICE — it only
+  // transitions pending→running (WHERE status='pending'), so the SECOND call
+  // (carrying the sandbox id) became a no-op and run_id never landed on the
+  // ledger; the poller then had nothing to poll and failed the task.
+  // Contract: launch the sandbox FIRST, then transition the row ONCE *with*
+  // its run id; on a launch error mark running then finish failed (finish only
+  // passes its guard when status='running'). Runs fully offline via injected
+  // translate/delegate deps + a stub ledger.
+  const { maybeEscalateToE2b } = await import("../src/lib/executor_selection");
+
+  const events: { sql: string; params: unknown[] }[] = [];
+  const stubDB = {
+    prepare(sql: string) {
+      return {
+        bind(...params: unknown[]) {
+          const row = { sql, params };
+          return {
+            async run() {
+              events.push(row);
+              return { meta: { last_row_id: 1, changes: 1 } };
+            },
+            async all() {
+              events.push(row);
+              return { results: [] };
+            },
+          };
+        },
+      };
+    },
+  };
+  const baseEnv = {
+    APP_ENV: "test",
+    E2B_API_KEY: "e2b_x",
+    E2B_API_URL: "",
+    E2B_TEMPLATE: "",
+    DB: stubDB,
+  } as any;
+  const ungrounded = { reply: "x", source: "groq+ddg", grounded: false };
+  const plan = {
+    language: "bash" as const,
+    code: "curl -s 'https://news.google.com/rss/search?q=AI' | head -n 30",
+    steps: ["ambil feed", "tampilkan 30 baris"],
+    summary: "Ambil feed Google News AI.",
+  };
+
+  // Success path: translator used, ledger carries the sandbox id, exactly ONE
+  // running-transition, and it happens AFTER the sandbox launch.
+  const ack = await maybeEscalateToE2b(
+    baseEnv, 99, "ambil 3 artikel teratas tentang AI dari Google News lalu rangkum", ungrounded,
+    {
+      translate: async () => plan,
+      delegate: async (_e, task) => {
+        events.push({ sql: "::delegate::", params: [String(task)] });
+        return { runId: "sandbox-abc-123" };
+      },
+    },
+  );
+  assert.ok(ack && ack.includes("menjadi skrip"), "ack announces the translator hop");
+  assert.ok(ack.includes("sandbox E2B"), "ack keeps the borrowed-executor framing");
+  const delegations = events.filter((e) => e.sql === "::delegate::");
+  assert.strictEqual(delegations.length, 1, "sandbox launched once");
+  assert.strictEqual(delegations[0].params[0], plan.code,
+    "delegated body is the TRANSLATED code, never the raw natural-language goal");
+  assert.ok(events[0].sql.includes("INSERT INTO agent_tasks"), "task queued on the ledger first");
+  const running = events.filter((e) => e.sql.includes("SET status = 'running'"));
+  assert.strictEqual(running.length, 1, "exactly ONE running transition (the bug made two)");
+  assert.strictEqual(running[0].params[0], "sandbox-abc-123",
+    "the single transition carried the sandbox id as run_id");
+  const delegateIdx = events.indexOf(delegations[0]);
+  const runIdx = events.indexOf(running[0]);
+  assert.ok(delegateIdx >= 0 && delegateIdx < runIdx,
+    "sandbox launched BEFORE the transition — run_id is never a second no-op");
+  assert.ok(!events.some((e) => e.sql.includes("status = 'failed'")), "success path never fails the row");
+
+  // Failure path: row marked running THEN finished failed (finish's guard is
+  // WHERE status='running'; finishing a 'pending' row would silently no-op and
+  // leave it wedged).
+  const failEvents: { sql: string; params: unknown[] }[] = [];
+  const failDB = {
+    prepare(sql: string) {
+      return {
+        bind(...params: unknown[]) {
+          const row = { sql, params };
+          return {
+            async run() {
+              failEvents.push(row);
+              return { meta: { last_row_id: 1, changes: 1 } };
+            },
+            async all() {
+              failEvents.push(row);
+              return { results: [] };
+            },
+          };
+        },
+      };
+    },
+  };
+  const refused = await maybeEscalateToE2b(
+    { ...baseEnv, DB: failDB }, 99, "ambil 3 artikel teratas tentang AI", ungrounded,
+    {
+      translate: async () => plan,
+      delegate: async () => {
+        failEvents.push({ sql: "::delegate::", params: [] });
+        return { error: "sandbox create refused" };
+      },
+    },
+  );
+  assert.strictEqual(refused, null, "launch failure → no ack to the owner");
+  const failRun = failEvents.filter((e) => e.sql.includes("SET status = 'running'"));
+  const failFinish = failEvents.filter((e) => e.sql.includes("status = ?") && e.params[0] === "failed");
+  assert.strictEqual(failRun.length, 1, "failure path still transitions running once");
+  assert.strictEqual(failFinish.length, 1, "failure path finalizes as failed");
+  assert.ok(failEvents.indexOf(failRun[0]) < failEvents.indexOf(failFinish[0]),
+    "mark running BEFORE finish so finish's status='running' guard passes");
+
+  // Gating: grounded output never reaches a sandbox.
+  const idle = await maybeEscalateToE2b(baseEnv, 99, "ambil 3 artikel",
+    { reply: "x", source: "groq+ddg", grounded: true },
+    { translate: async () => plan, delegate: async () => ({ runId: "nope" }) });
+  assert.strictEqual(idle, null, "grounded result stays on the cheap path (no escalation)");
+
+  // Gating: no E2B key → nothing queued or launched.
+  const idle2 = await maybeEscalateToE2b(
+    { ...baseEnv, E2B_API_KEY: "" }, 99, "ambil 3 artikel", ungrounded,
+    { translate: async () => plan, delegate: async () => ({ runId: "nope" }) });
+  assert.strictEqual(idle2, null, "no key → fail-closed (no escalation)");
+
+  // Translation failure falls back to the raw goal (older etask semantics).
+  const fallbackSpy: string[] = [];
+  const fb = await maybeEscalateToE2b(baseEnv, 99, "curl -s example.com | head -n 3", ungrounded, {
+    translate: async () => null,
+    delegate: async (_e, task) => { fallbackSpy.push(String(task)); return { runId: "fb-1" }; },
+  });
+  assert.ok(fb && fb.includes("E2B"), "translation failure still escalates (fallback)");
+  assert.strictEqual(fallbackSpy[0], "curl -s example.com | head -n 3",
+    "fallback delegates the raw goal text");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -1923,6 +2063,7 @@ async function main() {
   await testBorrowedExecutorRails();
   await testExecutorSelectionRails();
   await testTranslatorRails();
+  await testEscalationOrdering();
   console.log("LOGIC TESTS PASSED");
 }
 
