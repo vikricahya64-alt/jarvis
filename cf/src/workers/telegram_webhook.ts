@@ -55,6 +55,7 @@ import { delegateToGithub, flagAgentReport, truncationWarning, usesDeepResearchP
 import { e2bRun, e2bConfigured, e2bSummary, e2bStateHint } from "../lib/e2b";
 import { delegateToE2b } from "../lib/e2b_executor";
 import { parseBorrowedTarget, borrowedExecutorTag, borrowedExecutorLabel, BORROWED_EXECUTOR_IDS } from "../lib/borrowed_executor";
+import { translateTaskToExecutable } from "../lib/translator";
 import { parseRecurSpec } from "../lib/agent_rules";
 import { readNegotiation, saveNegotiation, clearNegotiation, generateClarifyQuestions, compileFinalInstruction, type NegoSession } from "../lib/negotiation";
 import {
@@ -810,6 +811,17 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // Fail-closed: unknown executor → usage error (never pollutes the ledger).
   if (isPinjamCommand(trimmed)) {
     await handlePinjamCommand(env, r, text);
+    return new Response("ok", { status: 200 });
+  }
+
+  // PROYEK — diskuis/dose-eksekusi loop di eksekutor konsep-sistem (E2B).
+  // JARVIS = penerjemah pihak ketiga (bahasa user → bahasa pemrograman):
+  //   /proyek <tujuan>  → rencana (langkah + kode) dipertunjukkan DULU
+  //                        (diskusi sebelum eksekusi), lalu "ya proyek"
+  //                        membuka sandbox dan menjalankan kode terjemahan.
+  // Fail-closed di semua jalur; sandbox terbuka HANYA setelah persetujuan.
+  if (isProjectCommand(trimmed)) {
+    await handleProyekCommand(env, r, text);
     return new Response("ok", { status: 200 });
   }
 
@@ -2128,6 +2140,135 @@ async function handlePinjamCommand(env: Env, from: number, raw: string): Promise
       `⏳ Tugas *#${id}* terdaftar — meminjam *${borrowedExecutorLabel(executor)}* untuk: \`${body.slice(0, 60)}${body.length > 60 ? "…" : ""}\`. Hasil akan di-DM (≤1 menit).`));
   } catch (e) {
     await fire(sendMessage(env, from, `⚠️ Perintah pinjam gagal: ${String(e).slice(0, 200)}`));
+  }
+}
+
+// --------------------------------------------------------------------------
+// PROYEK — diskusi-sebelum-eksekusi + penerjemah pihak ketiga, di eksekutor
+// konsep-sistem (E2B). Contoh sistem konsep: bahasa user → bahasa pemrograman
+// oleh JARVIS, rencana disetujui pemilik dulu, baru sandbox dibuka.
+// --------------------------------------------------------------------------
+
+function isProjectCommand(trimmed: string): boolean {
+  return trimmed === "/proyek" || /^\/proyek\b/i.test(trimmed) || /^ya proyek\b/i.test(trimmed);
+}
+
+const PROJECT_PLAN_TTL_S = 30 * 60;
+
+type ParkedProject = { goal: string; language: string; code: string; ts: number };
+
+function projectPlanKey(owner: number): string {
+  return `proyek_plan:${owner}`;
+}
+
+async function readProjectPlan(env: Env, owner: number): Promise<ParkedProject | null> {
+  try {
+    const raw = await env.CONFIG_KV.get(projectPlanKey(owner));
+    if (!raw) return null;
+    const o = JSON.parse(raw) as ParkedProject;
+    if (!o?.code) return null;
+    return { goal: String(o.goal ?? ""), language: String(o.language ?? "bash"), code: String(o.code), ts: Number(o.ts ?? 0) };
+  } catch { return null; }
+}
+
+async function parkProjectPlan(env: Env, owner: number, goal: string, language: string, code: string): Promise<void> {
+  await env.CONFIG_KV.put(projectPlanKey(owner), JSON.stringify({ goal, language, code, ts: Date.now() }), {
+    expirationTtl: PROJECT_PLAN_TTL_S,
+  }).catch(() => {});
+}
+
+async function clearProjectPlan(env: Env, owner: number): Promise<void> {
+  await env.CONFIG_KV.delete(projectPlanKey(owner)).catch(() => {});
+}
+
+/** Execute the /proyek loop:
+ *    /proyek            → help
+ *    /proyek <tujuan>   → JARVIS (pihak ketiga) menerjemahkan tujuan pemilik
+ *                         menjadi SKRIP bash/python + daftar langkah, lalu
+ *                         mempertunjukkan rencana UNTUK DISKUSI (no sandbox yet).
+ *    ya proyek          → persetujuan pemilik → sandbox E2B dibuka dan kode
+ *                         terjemahan dijalankan; hasil di-DM oleh poller.
+ *  Fail-closed: tanpa key E2B / terjemahan gagal / tanpa rencana tertunda →
+ *  pesan ramah, tidak pernah membuka sandbox tanpa persetujuan. */
+async function handleProyekCommand(env: Env, from: number, raw: string): Promise<void> {
+  const trimmed = raw.trim();
+  try {
+    // --- Confirmation: "ya proyek" launches the parked plan on a NEW sandbox.
+    if (/^ya proyek\b/i.test(trimmed)) {
+      const parked = await readProjectPlan(env, from);
+      if (!parked) {
+        await fire(sendMessage(env, from, "Tidak ada rencana proyek tertunda. Mulai dengan: `/proyek <tujuan>`."));
+        return;
+      }
+      if (!e2bConfigured(env)) {
+        await fire(sendMessage(env, from,
+          `⚠️ Eksekutor E2B belum aktif${e2bStateHint("e2b-not-configured")} — rencana tetap tersimpan (30 menit). /etask atau /e2b juga butuh kunci ini.`));
+        return;
+      }
+      const id = await addAgentTask(env, from, parked.code.slice(0, 4000), "e2b");
+      if (!id) {
+        await fire(sendMessage(env, from, "⚠️ Gagal menyimpan rencana. Coba lagi."));
+        return;
+      }
+      await markAgentTaskRunning(env, id);
+      const { runId, error } = await delegateToE2b(env, parked.code).catch(
+        () => ({ runId: "", error: "e2b-launch-failed" }),
+      );
+      if (error) {
+        await finishAgentTask(env, id, "failed", "", error);
+        await clearProjectPlan(env, from);
+        await fire(sendMessage(env, from,
+          `⚠️ Sandbox E2B gagal dibuka (${error}). Rencana disetel gagal — cek /tugas list. Jalankan /proyek <tujuan> lagi bila perlu.`));
+        return;
+      }
+      await markAgentTaskRunning(env, id, runId ?? "");
+      await clearProjectPlan(env, from);
+      await fire(sendMessage(env, from,
+        `🚀 *Diskusi selesai — eksekusi berjalan.* Kode terjemahan (${parked.language}) dijalankan di sandbox E2B sebagai tugas *#${id}*. Hasil akan di-DM (biasanya ≤1 menit).`));
+      return;
+    }
+
+    if (trimmed === "/proyek") {
+      await fire(sendMessage(env, from,
+        "🗂️ *Proyek — diskusi dulu, eksekusi setelah setuju*\n" +
+        "JARVIS = *penerjemah pihak ketiga* antara bahasamu dan bahasa pemrograman (konsep-sistem seperti E2B: platform pinjaman mengeksekusi dengan kemampuan penuh).\n\n" +
+        "• `/proyek <tujuan>` — JARVIS menerjemahkan tujuanmu menjadi *skrip bash/python* + daftar langkah, lalu menampilkan rencana (tidak langsung jalan)\n" +
+        "• balas *ya proyek* — sandbox E2B dibuka, kode terjemahan dijalankan, hasil di-DM\n" +
+        "• metode ini selalu *diskusi sebelum eksekusi* (output terbaik, tanpa kejutan)"));
+      return;
+    }
+
+    const sub = trimmed.match(/^\/proyek\s+(.+)$/s);
+    if (!sub) {
+      await fire(sendMessage(env, from, "Penggunaan: `/proyek <tujuan>` — lalu balas *ya proyek* untuk menjalankan."));
+      return;
+    }
+    const goal = sub[1].trim();
+    if (goal.length < 4) {
+      await fire(sendMessage(env, from, "📝 Jelaskan tujuan proyeknya (minimal 4 karakter), mis. \"/proyek ambil 3 artikel teratas tentang AI dari Google News dan rangkum\"."));
+      return;
+    }
+    if (!e2bConfigured(env)) {
+      await fire(sendMessage(env, from,
+        `⚠️ Eksekutor E2B belum aktif${e2bStateHint("e2b-not-configured")} — terjemahan berjalan, tapi sandbox tidak bisa dibuka.`));
+    }
+
+    const plan = await translateTaskToExecutable(env, goal);
+    if (!plan) {
+      await fire(sendMessage(env, from, "🌐 Penerjemah tidak menghasilkan skrip yang valid saat ini. Coba lagi sebentar."));
+      return;
+    }
+    await parkProjectPlan(env, from, goal, plan.language, plan.code);
+    const stepsLines = plan.steps.map((s, i) => `  ${i + 1}. ${s}`).join("\n");
+    await fire(sendMessage(env, from,
+      `🗂️ *Rencana eksekusi* — diskusi sebelum eksekusi (arahan: output terbaik = setujui dulu, tak ada kejutan).\n\n` +
+      `JARVIS bertindak sebagai *penerjemah pihak ketiga*: bahasa pemrogramanmu → skrip yang dijalankan platform pinjaman (sistem konsep E2B, kemampuan penuh).\n\n` +
+      `*Tujuan:* ${goal.slice(0, 220)}\n\n` +
+      `*Langkah yang akan dikerjakan:*\n${stepsLines}\n\n` +
+      `*Kode terjemahan* (\`${plan.language}\`):\n\`\`\`${plan.language}\n${plan.code.slice(0, 2000)}${plan.code.length > 2000 ? "\n…(dipotong untuk tampilan; skrip utuh tersimpan)" : ""}\n\`\`\`\n\n` +
+      `Setuju? balas *ya proyek* untuk membuka sandbox dan menjalankan. Mau mengubah arah, tulis ulang tujuanmu (rencana baru akan menggantikan yang ini).`));
+  } catch (e) {
+    await fire(sendMessage(env, from, `⚠️ Perintah proyek gagal: ${String(e).slice(0, 200)}`));
   }
 }
 
