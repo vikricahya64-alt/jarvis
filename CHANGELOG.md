@@ -20,8 +20,9 @@ Bahasa: Bahasa Indonesia.
   untuk sisi Python; `vercel.json`, `Dockerfile`, `requirements.txt`,
   `.env.example` (placeholder) & `.vercelignore` disertakan.
 - **Keamanan**: scrubbing history via `git-filter-repo` (token bot yang
-  pernah terlanjur tercatat di `SUMMARY.md` dihapus total — grep `AAHKS`/
-  `8762708956` = 0), `SECURITY.md`, PR template, catatan keamanan di README.
+  pernah terlanjur tercatat di `SUMMARY.md` dihapus total — grep pola token
+  prefix `8762…`/`AAHK…` = 0), `SECURITY.md`, PR template, catatan keamanan
+  di README.
 - **Legal & dok**: `LICENSE` (MIT 2026), `CHANGELOG.md` (file ini).
 
 ### Changed
