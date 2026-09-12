@@ -93,3 +93,33 @@ jarvis/
   dan `utils/`; arsitektur sebelumnya terbagi ke dalam fork identitas yang
   sekarang tidak dipakai — cabang `origin/main` adalah otoritatif.
 - Jika menemukan secret bocor, lihat `SECURITY.md`.
+
+## 🗺️ Roadmap
+
+- **STT (voice → teks)**: pesan audio/voice dari Telegram diproses via
+  `AI.run("whisper-large-v3-turbo")` (berbasis Cloudflare Workers AI
+  keyless, ≤20MB), owner-gated — jadi `message_type: audio/voice`.
+- **Auto-alarm kuota**: workflow autonomy memantau health CPU + kuota
+  (≥80% ambang) dan mengirim notifikasi Telegram via secret
+  `TELEGRAM_TOKEN`/`OWNER_CHAT_ID` saat kritis.
+- **Menu perintah lengkap**: `setMyCommands` otomatis saat `/start`,
+  `/setwebhook`, dan refresh berkala (`/menu_refresh`) — daftar perintah
+  lengkap (helper, manajemen, helper-diagnostic, DMS, tugas).
+
+## 🧑‍💻 Local dev
+
+```sh
+cd cf
+npm ci
+npm run dev        # wrangler dev — jalankan worker lokal
+npm run typecheck
+npm run test:safety
+npm run test:logic
+```
+
+Sisi Python (Vercel) dapat dijalankan lokal dengan:
+```sh
+cp .env.example .env.local   # isi placeholder — jangan commit
+python -m api.webhook        # atau sesuaikan modul yang mau dites
+```
+Lihat `cf/docs/SETUP.md` untuk provisioning & deploy.
