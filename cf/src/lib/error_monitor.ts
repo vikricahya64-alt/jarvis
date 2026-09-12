@@ -16,6 +16,7 @@
 
 import { Env } from "./db";
 import { getActiveVersion } from "./deploy_safety";
+import { groqSingleShot } from "./ai";
 
 /** Stored error record in D1 system_errors table. */
 export interface SystemError {
@@ -170,23 +171,14 @@ async function diagnoseWithGroq(
     "Jawab dalam Bahasa Indonesia. Jangan mengarang informasi yang tidak ada di error message.";
 
   try {
-    const resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${env.GROQ_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "openai/gpt-oss-120b",
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 300,
-        temperature: 0.3,
-      }),
+    const raw = await groqSingleShot(env, {
+      label: "groq:diag",
+      user: prompt,
+      temperature: 0.3,
+      maxTokens: 300,
     });
-
-    if (!resp.ok) return "Groq API tidak tersedia untuk diagnosis.";
-    const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }> };
-    return data.choices?.[0]?.message?.content?.slice(0, 500) ?? "Tidak ada diagnosis.";
+    if (raw === null) return "Groq API tidak tersedia untuk diagnosis.";
+    return raw.slice(0, 500);
   } catch {
     return "Gagal menghubungi Groq API untuk diagnosis.";
   }

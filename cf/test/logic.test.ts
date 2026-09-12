@@ -1688,6 +1688,68 @@ function testProseRails() {
   assert.ok(/fleksibilitas waktu/.test(flatOrd) && /biaya lebih hemat/.test(flatOrd), "list content survives as prose");
 }
 
+async function testBorrowedRails() {
+  // m9-v11.38: E2B concept generalized — every borrowed platform must be
+  // DETECTED (registry + configured/live + hint + surfaced). Pure guards
+  // here run with NO network; probes are stubbed outside production.
+  const {
+    BORROWED_PLATFORMS, borrowedConfigured, borrowedStateHint,
+    borrowedStatusLine, describeBorrowedPlatforms, probeBorrowedPlatforms,
+  } = await import("../src/lib/borrowed");
+
+  assert.ok(BORROWED_PLATFORMS.length >= 14, "inventory is comprehensive");
+  const ids = BORROWED_PLATFORMS.map((p) => p.id);
+  assert.strictEqual(new Set(ids).size, ids.length, "platform ids unique");
+  for (const p of BORROWED_PLATFORMS) {
+    assert.ok(p.label && p.endpoint && p.capability, `platform ${p.id} complete`);
+    assert.ok(p.kind.startsWith("eksekutor_"), `kategori ${p.id} = eksekutor eksternal`);
+  }
+
+  const bare = { APP_ENV: "production", E2B_API_KEY: "", GITHUB_TOKEN: "", GITHUB_REPO: "", GROQ_API_KEY: "" };
+  assert.strictEqual(borrowedConfigured(bare, "e2b"), false, "e2b needs key");
+  assert.strictEqual(borrowedConfigured({ ...bare, E2B_API_KEY: "e2b_x" }, "e2b"), true, "e2b key → configured");
+  assert.strictEqual(borrowedConfigured(bare, "weather"), true, "weather is no-key SaaS → configured");
+  assert.strictEqual(borrowedConfigured(bare, "tts"), true, "tts is no-key SaaS → configured");
+  assert.strictEqual(borrowedConfigured(bare, "github"), false, "github needs token+repo");
+
+  assert.ok(borrowedStateHint("e2b-not-configured").includes("kunci"), "unconfigured hint readable");
+  assert.ok(borrowedStateHint("e2b-run-network").includes("jaringan"), "network hint readable");
+  assert.ok(borrowedStateHint("x-http_429").includes("rate"), "429 hint readable");
+
+  const describe = describeBorrowedPlatforms();
+  assert.ok(describe.includes("Eksekutor eksternal yang dipinjam"), "describe frames borrowed as EXTERNAL EXECUTORS");
+  assert.ok(describe.includes("Eksekutor — platform"), "describe groups platform executors");
+  assert.ok(describe.includes("`e2b`"), "describe surfaces the E2B borrow (id)");
+  assert.ok(describe.includes("`search_ddg`"), "describe surfaces hidden search borrow (id)");
+  assert.ok(!describe.includes("Kategori:"), "no generic category framing");
+
+  // Probes stay inside production (no outbound from tests) and return the
+  // configured shape with zero side effects.
+  const stub = await probeBorrowedPlatforms({ APP_ENV: "test", GROQ_API_KEY: "k" });
+  assert.ok(stub.length === BORROWED_PLATFORMS.length, "stub covers the whole inventory");
+  assert.ok(stub.every((r) => r.detail === "test-env (no outbound)"), "stub never probes");
+  const line = borrowedStatusLine({ ...stub[0], id: "e2b", configured: true, live: true, ms: 42, detail: "HTTP 200" });
+  assert.ok(line.includes("🟢"), "live row renders green");
+}
+
+async function testGroqSingleShotRails() {
+  // m9-v11.38: system-module borrows now go through ONE gateway-routed,
+  // token-tallied owner. Fail-closed: missing key / empty input → null, and
+  // no outbound call must happen without a key.
+  const { groqSingleShot } = await import("../src/lib/ai");
+
+  const noKey = await groqSingleShot({ APP_ENV: "test" }, { label: "groq:test", user: "x" });
+  assert.strictEqual(noKey, null, "missing key → null (no network)");
+  const noUser = await groqSingleShot({ APP_ENV: "test", GROQ_API_KEY: "k" }, { label: "groq:test", user: "  " });
+  assert.strictEqual(noUser, null, "empty user → null");
+
+  const cfg = { APP_ENV: "test", GROQ_API_KEY: "k", AI_GATEWAY_URL: "https://g.example" };
+  const g = await import("../src/lib/ai");
+  assert.strictEqual((g as any).groqChatCompletionsUrl(cfg), "https://g.example/groq/v1/chat/completions", "helper routes egress via gateway");
+  assert.strictEqual((g as any).groqChatCompletionsUrl({ APP_ENV: "test", GROQ_API_KEY: "k" }),
+    "https://api.groq.com/openai/v1/chat/completions", "no gateway → direct default");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -1745,6 +1807,8 @@ async function main() {
   await testAgentExecutorRails();
   await testE2bRails();
   await testE2bExecutorRails();
+  await testBorrowedRails();
+  await testGroqSingleShotRails();
   console.log("LOGIC TESTS PASSED");
 }
 

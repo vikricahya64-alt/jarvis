@@ -16,6 +16,7 @@
 
 import { Env, getDmsConfig, logObedience } from "./db";
 import { validateActionAgainstCovenant } from "./covenant_core";
+import { groqSingleShot } from "./ai";
 
 export interface PlanStep {
   id: string;
@@ -57,43 +58,36 @@ export async function decomposeGoal(
   owner: number,
   goal: string,
 ): Promise<{ planId: string; steps: PlanStep[] }> {
-  const key = env.GROQ_API_KEY;
-  if (!key) throw new Error("GROQ_API_KEY not configured");
+  if (!env.GROQ_API_KEY) throw new Error("GROQ_API_KEY not configured");
 
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model: "openai/gpt-oss-120b",
-      temperature: 0.2,
-      max_tokens: 1000,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Kamu Maestro J.A.R.V.I.S. — tujuanmu adalah menguraikan perintah pengguna " +
-            "menjadi rencana langkah bernomor yang konkret, terstruktur, dan executable. " +
-            "Setiap langkah harus:",
-        },
-        {
-          role: "system",
-          content:
-            "1) Numeric step indices (1,2,3...) " +
-            "2) 'goal' ringkas (singkat, actionable) " +
-            "3) 'description' detail instruksi " +
-            "4) 'outcome' manfaat " +
-            "5) numeric 'priority' 1-10 (1=low risk, 10=catastrophic) " +
-            "Balas hanya dengan JSON array objek PlanStep, jangan ada tambahan teks.",
-        },
-        { role: "user", content: goal },
-      ],
-    }),
+  const raw = await groqSingleShot(env, {
+    label: "groq:maestro",
+    user: goal,
+    temperature: 0.2,
+    maxTokens: 1000,
+    messages: [
+      {
+        role: "system",
+
+        content:
+          "Kamu Maestro J.A.R.V.I.S. — tujuanmu adalah menguraikan perintah pengguna " +
+          "menjadi rencana langkah bernomor yang konkret, terstruktur, dan executable. " +
+          "Setiap langkah harus:",
+      },
+      {
+        role: "system",
+        content:
+          "1) Numeric step indices (1,2,3...) " +
+          "2) 'goal' ringkas (singkat, actionable) " +
+          "3) 'description' detail instruksi " +
+          "4) 'outcome' manfaat " +
+          "5) numeric 'priority' 1-10 (1=low risk, 10=catastrophic) " +
+          "Balas hanya dengan JSON array objek PlanStep, jangan ada tambahan teks.",
+      },
+      { role: "user", content: goal },
+    ],
   });
-
-  if (!res.ok) throw new Error(`Groq decompose failed: HTTP ${res.status}`);
-
-  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  const raw = data.choices?.[0]?.message?.content?.trim() ?? "[]";
+  if (raw === null) throw new Error("Groq decompose failed");
 
   let steps: PlanStep[];
   try {

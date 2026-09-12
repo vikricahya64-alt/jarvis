@@ -11,6 +11,7 @@
    ====================================================================== */
 
 import { Env, logViolation, getDmsConfig } from "./db";
+import { groqSingleShot } from "./ai";
 
 // ============ ORIGINAL INTERFACES (unchanged - backward compat) ============
 
@@ -125,28 +126,17 @@ export async function validateActionAgainstCovenant(
     };
   }
   try {
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({
-        model: "openai/gpt-oss-120b",
-        temperature: 0,
-        messages: [
-          {
-            role: "system",
-            content:
-              "Kamu penjaga Perjanjian (Covenant) J.A.R.V.I.S. Ada daftar klausa aktif:\n" +
-              clauseText +
-              '\nApakah aksi di bawah MELANGGAR klausa apa pun? Balas HANYA JSON: ' +
-              '{"allowed":bool,"reason":"penjelasan singkat"}. Jika ragu, allowed=false.',
-          },
-          { role: "user", content: actionText },
-        ],
-      }),
+    const raw = await groqSingleShot(env, {
+      label: "groq:covenant",
+      user: actionText,
+      temperature: 0,
+      system:
+        "Kamu penjaga Perjanjian (Covenant) J.A.R.V.I.S. Ada daftar klausa aktif:\n" +
+        clauseText +
+        '\nApakah aksi di bawah MELANGGAR klausa apa pun? Balas HANYA JSON: ' +
+        '{"allowed":bool,"reason":"penjelasan singkat"}. Jika ragu, allowed=false.',
     });
-    if (!res.ok) return { allowed: false, violatedClauseId: "covenant_unverifiable", reasoning: "Validator gagal.", source: "fail_closed" };
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const raw = data.choices?.[0]?.message?.content ?? "";
+    if (raw === null) return { allowed: false, violatedClauseId: "covenant_unverifiable", reasoning: "Validator gagal.", source: "fail_closed" };
     const m = raw.match(/\{[\s\S]*\}/);
     if (!m) return { allowed: false, violatedClauseId: "covenant_unverifiable", reasoning: "Respons validator tidak valid.", source: "fail_closed" };
     const parsed = JSON.parse(m[0]) as { allowed?: boolean; reason?: string };
