@@ -30,6 +30,19 @@ export type DelegateResult = { runId?: string; error?: string; truncated?: boole
 const PAYLOAD_CAP = 4000;
 const TRUNCATION_NOTICE = "\n\n…⚠ instruksi terpotong melebihi batas kirim. Jalankan kembali sebagian lebih pendek bila perlu.";
 
+/** Shared across executors: compose the payload sent/written to a borrowed
+ *  executor — optional deep-research protocol first, then hard truncation
+ *  with a visible notice. Pure and deterministic; used by both the GitHub
+ *  executor and the E2B sandbox executor so every borrower obeys the SAME
+ *  payload contract. */
+export function buildExecutorPayload(task: string, opts: { riset: boolean }): { payload: string; truncated: boolean } {
+  const cleanTask = stripDeepResearchFlag(task);
+  const base = opts.riset ? `${cleanTask}${DEEP_RESEARCH_PROTOCOL}` : cleanTask;
+  const truncated = base.length > PAYLOAD_CAP;
+  const payload = truncated ? `${base.slice(0, PAYLOAD_CAP)}${TRUNCATION_NOTICE}` : base;
+  return { payload, truncated };
+}
+
 /** True when the delegated task carries the "--riset" flag. */
 export function usesDeepResearchProtocol(task: string): boolean {
   return /^--riset\b/i.test((task ?? "").trimStart());
@@ -47,7 +60,7 @@ export function stripDeepResearchFlag(task: string): string {
  *  verifiable facts from judgments and give a live source URL per claim.
  *  Default delegation forwards the task VERBATIM (pure bridge) so the report
  *  faithfully answers the literal request without extra scaffolding. */
-const DEEP_RESEARCH_PROTOCOL = `
+export const DEEP_RESEARCH_PROTOCOL = `
 
 PROTOKOL LAPORAN (wajib):
 1. Pisahkan FAKTA vs ANALISIS dalam laporan akhir.
@@ -87,11 +100,8 @@ export async function delegateToGithub(
   const repo = env.GITHUB_REPO ?? "";
   const token = env.GITHUB_TOKEN ?? "";
 
-  const cleanTask = stripDeepResearchFlag(task);
   const wantRiset = opts.riset === true || usesDeepResearchProtocol(task);
-  const base = wantRiset ? `${cleanTask}${DEEP_RESEARCH_PROTOCOL}` : cleanTask;
-  const truncated = base.length > PAYLOAD_CAP;
-  const payload = truncated ? `${base.slice(0, PAYLOAD_CAP)}${TRUNCATION_NOTICE}` : base;
+  const { payload, truncated } = buildExecutorPayload(task, { riset: wantRiset });
 
   if (!repo) return { error: "executor-not-configured", truncated };
   const [owner, repoName] = repo.split("/");

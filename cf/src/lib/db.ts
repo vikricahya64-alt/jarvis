@@ -1153,17 +1153,33 @@ export interface AgentTaskRule {
   created_at: number;
 }
 
-/** Insert a delegation task. Returns its id, or 0 on failure/invalid input. */
-export async function addAgentTask(env: Env, owner: number, task: string, ruleId?: number): Promise<number> {
+/** Insert a delegation task for any borrowed executor ('github' default,
+ *  'e2b' for the E2B sandbox platform). Returns its id, or 0 on failure. */
+export async function addAgentTask(env: Env, owner: number, task: string, executor = "github", ruleId?: number): Promise<number> {
   try {
     const clean = task.trim();
     if (!clean || clean.length < 3 || clean.length > 4000) return 0;
     const res = await env.DB.prepare(
-      `INSERT INTO agent_tasks (owner_id, task, executor, status, created_at, rule_id) VALUES (?, ?, 'github', 'pending', ?, ?)`,
-    ).bind(owner, clean, Date.now(), ruleId ?? null).run();
+      `INSERT INTO agent_tasks (owner_id, task, executor, status, created_at, rule_id) VALUES (?, ?, ?, 'pending', ?, ?)`,
+    ).bind(owner, clean, executor === "e2b" ? "e2b" : "github", Date.now(), ruleId ?? null).run();
     return Number(res.meta.last_row_id ?? res.meta.changes ?? 0);
   } catch {
     return 0;
+  }
+}
+
+/** Latest task rows for a specific borrowed executor (used by pollers and
+ *  /tugas-like status commands). Fail-closed: errors return an empty list. */
+export async function listAgentTasksByExecutor(env: Env, executor: string, limit = 10): Promise<AgentTaskItem[]> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT * FROM agent_tasks
+        WHERE executor = ? AND status IN ('running', 'pending')
+        ORDER BY id ASC LIMIT ?`,
+    ).bind(executor, limit).all<AgentTaskItem>();
+    return (results ?? []) as AgentTaskItem[];
+  } catch {
+    return [];
   }
 }
 

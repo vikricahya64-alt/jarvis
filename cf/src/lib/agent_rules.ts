@@ -141,7 +141,7 @@ export async function fireDueAgentRules(
     // once advanced, the SELECT no longer matches the rule. M6 audit fix.
     const claimed = await updateAgentRuleFired(env, rule.id, now, next);
     if (!claimed) continue; // another tick already claimed it
-    const instanceId = await addAgentTask(env, rule.owner_id, rule.task, rule.id);
+    const instanceId = await addAgentTask(env, rule.owner_id, rule.task, "github", rule.id);
     if (!instanceId) {
       console.error(`[agent_rules] instans #rule ${rule.id} gagal (advance tetap dipertahankan)`);
       failed++;

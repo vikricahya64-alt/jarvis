@@ -77,6 +77,28 @@ async function testE2bRails() {
   assert.ok(((sum.match(/```/g) ?? []).length % 2) === 0, "summary keeps code fences balanced");
 }
 
+async function testE2bExecutorRails() {
+  // m9-v11.37: /etask — the E2B platform as a DELEGATED async executor with
+  // the same system as the opencode/GitHub executor. Pure parse/guards here
+  // run with NO network; the wire calls themselves live in the poller path.
+  const { e2bParseExitCode, e2bStripMarker, e2bExecutorConfigured } =
+    await import("../src/lib/e2b_executor");
+
+  assert.strictEqual(e2bExecutorConfigured({ E2B_API_KEY: "" }), false, "no key → executor unconfigured");
+  assert.strictEqual(e2bExecutorConfigured({ E2B_API_KEY: "e2b_x" }), true, "key → executor configured");
+
+  const out = "Bagus, kerjaku selesai\nJARVIS_RC=0\n";
+  assert.strictEqual(e2bParseExitCode(out), 0, "success exit code parsed");
+  assert.strictEqual(e2bStripMarker(out), "Bagus, kerjaku selesai", "marker stripped from report");
+  assert.strictEqual(e2bParseExitCode("python kode\nJARVIS_RC=127\n"), 127, "failure exit code parsed");
+  assert.strictEqual(e2bParseExitCode("jalan\nbelum selesai"), null, "no marker → null (poll again / not final)");
+  assert.strictEqual(e2bStripMarker("JARVIS_RC=7\n"), "", "marker-only run empties out");
+
+  const multi = "baris luar\nJARVIS_RC=1\nJARVIS_RC=2\n";
+  assert.strictEqual(e2bParseExitCode(multi), 1, "first marker wins (oldest run)");
+  assert.strictEqual(e2bStripMarker("a\nJARVIS_RC=1\nJARVIS_RC=2\n"), "a\nJARVIS_RC=1", "strips only the trailing marker line");
+}
+
 async function testAgentExecutorRails() {
   // m9-v11.33 PINJAMAN optimization: dispatch must be fail-visible. A task
   // that exceeds the payload cap is NEVER silently cut — it returns a
@@ -1717,6 +1739,7 @@ async function main() {
   await testRelevancePersistence();
   await testAgentExecutorRails();
   await testE2bRails();
+  await testE2bExecutorRails();
   console.log("LOGIC TESTS PASSED");
 }
 

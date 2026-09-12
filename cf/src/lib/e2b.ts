@@ -79,11 +79,13 @@ export function e2bStateHint(error: string | undefined): string {
   }
 }
 
-/** Create a sandbox via the platform API. Fail-closed. */
-async function e2bCreateSandbox(
+/** Create a sandbox via the platform API. Fail-closed. Exposed so the
+ *  delegated async executor (e2b_executor.ts) creates its own sandboxes. */
+export async function e2bCreateSandbox(
   env: Env,
   task: string,
   owner: number,
+  opts: { template?: string; timeoutMs?: number; envVars?: Record<string, string> } = {},
 ): Promise<{ ok: true; sandboxId: string; accessToken: string } | { ok: false; error: string }> {
   const key = env.E2B_API_KEY?.trim();
   if (!key) return { ok: false, error: "e2b-not-configured" };
@@ -91,6 +93,8 @@ async function e2bCreateSandbox(
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), E2B_REQUEST_TIMEOUT_MS);
     try {
+      const timeoutMs = opts.timeoutMs ?? E2B_RUN_CAP_MS;
+      const envVars = { JARVIS_TASK: task, JARVIS_TS: String(Date.now()), ...opts.envVars };
       const res = await fetch(`${e2bBaseUrl(env)}/sandboxes`, {
         method: "POST",
         headers: {
@@ -98,12 +102,12 @@ async function e2bCreateSandbox(
           "X-API-Key": key,
         },
         body: JSON.stringify({
-          templateID: env.E2B_TEMPLATE?.trim() || "e2b/base",
-          timeout: Math.floor(E2B_RUN_CAP_MS / 1000),
+          templateID: opts.template?.trim() || env.E2B_TEMPLATE?.trim() || "e2b/base",
+          timeout: Math.floor(timeoutMs / 1000),
           secure: true,
           allow_internet_access: true,
           metadata: { app: "jarvis", owner: String(owner) },
-          envVars: { JARVIS_TASK: task, JARVIS_TS: String(Date.now()) },
+          envVars,
         }),
         signal: ac.signal,
       });
@@ -125,8 +129,9 @@ async function e2bCreateSandbox(
   }
 }
 
-/** Kill (delete) a sandbox to stop billing immediately. Best-effort, never throws. */
-async function e2bKillSandbox(env: Env, sandboxId: string): Promise<void> {
+/** Kill (delete) a sandbox to stop billing immediately. Best-effort, never throws.
+ *  Exposed so the delegated executor (and the poller) can free sandboxes. */
+export async function e2bKillSandbox(env: Env, sandboxId: string): Promise<void> {
   const key = env.E2B_API_KEY?.trim();
   if (!key) return;
   try {
@@ -142,6 +147,37 @@ async function e2bKillSandbox(env: Env, sandboxId: string): Promise<void> {
       clearTimeout(timer);
     }
   } catch { /* kill is best-effort; the sandbox timeout also cleans up */ }
+}
+
+/** Recover the envd access token of a running/paused sandbox (the poller
+ *  authenticates envd calls later without having stored the secret). */
+export async function e2bGetSandboxToken(
+  env: Env,
+  sandboxId: string,
+): Promise<{ ok: true; accessToken: string } | { ok: false; error: string }> {
+  const key = env.E2B_API_KEY?.trim();
+  if (!key) return { ok: false, error: "e2b-not-configured" };
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), E2B_REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${e2bBaseUrl(env)}/sandboxes/${encodeURIComponent(sandboxId)}`, {
+        headers: { "X-API-Key": key },
+        signal: ac.signal,
+      });
+      if (!res.ok) {
+        const tag = res.status === 401 ? 401 : res.status === 429 ? 429 : res.status >= 500 ? 5 : res.status;
+        return { ok: false, error: `e2b_auth_http_${tag}` };
+      }
+      const data = (await res.json()) as { envdAccessToken?: string | null } | null;
+      if (!data?.envdAccessToken) return { ok: false, error: "e2b-no-access-token" };
+      return { ok: true, accessToken: data.envdAccessToken };
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return { ok: false, error: "e2b-run-network" };
+  }
 }
 
 /** Connect wire frames: [flags(1)][len(4, BE)][json payload], repeated.
@@ -225,23 +261,52 @@ export async function e2bRun(
   const created = await e2bCreateSandbox(env, t, owner);
   if (!created.ok) return { ok: false, error: created.error };
 
+  const started = await e2bStartProcessCollect(env, created.sandboxId, created.accessToken, t, E2B_COLLECT_MS);
+  await e2bKillSandbox(env, created.sandboxId);
+  if (!started.ok) {
+    return { ok: false, sandboxId: created.sandboxId, error: started.error };
+  }
+  if (!started.ended && started.stdout + started.stderr !== "") {
+    return {
+      ok: false, sandboxId: created.sandboxId,
+      stdout: started.stdout, stderr: started.stderr,
+      error: "e2b-run_timeout",
+    };
+  }
+  return {
+    ok: true,
+    sandboxId: created.sandboxId,
+    stdout: started.stdout,
+    stderr: started.stderr,
+    exitCode: started.exitCode,
+  };
+}
+
+/** Start ONE bash -lc process in a running sandbox over envd and collect its
+ *  stream. THE single wire-contract owner for the Connect envelope (verified
+ *  live against api.e2b.app): [flag(1)=0][len(4, BE)][JSON]. Fail-closed. */
+export async function e2bStartProcessCollect(
+  env: Env,
+  sandboxId: string,
+  accessToken: string,
+  script: string,
+  timeoutMs: number,
+): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode?: number; ended: boolean; error?: string }> {
   const payload = JSON.stringify({
     process: {
       cmd: "bash",
-      args: ["-lc", t],
-      envs: { JARVIS_TASK: t },
+      args: ["-lc", script],
+      envs: { JARVIS_TASK: script },
       cwd: "/home/user",
     },
     pty: null,
     tag: null,
     stdin: false,
   });
-
   try {
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), E2B_COLLECT_MS);
-    // Connect server-streaming RPCs frame the request as a single envelope:
-    // [flag(1)=0][len(4, BE)][JSON message].
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    // Connect server-streaming RPCs frame the request as a single envelope.
     const enc = new TextEncoder();
     const msg = enc.encode(payload);
     const framed = new Uint8Array(5 + msg.length);
@@ -253,45 +318,32 @@ export async function e2bRun(
         "Content-Type": "application/connect+json",
         Accept: "application/connect+json",
         "Connect-Protocol-Version": "1",
-        "Connect-Timeout-Ms": String(E2B_RUN_CAP_MS),
-        "X-Access-Token": created.accessToken,
-        "E2b-Sandbox-Id": created.sandboxId,
+        "Connect-Timeout-Ms": String(timeoutMs),
+        "X-Access-Token": accessToken,
+        "E2b-Sandbox-Id": sandboxId,
         "E2b-Sandbox-Port": String(E2B_SANDBOX_PORT),
       },
       body: framed,
       signal: ac.signal,
     }).catch(() => null);
     clearTimeout(timer);
-    if (!res) {
-      await e2bKillSandbox(env, created.sandboxId);
-      return { ok: false, sandboxId: created.sandboxId, error: "e2b-run-network" };
-    }
+    if (!res) return { ok: false, stdout: "", stderr: "", ended: false, error: "e2b-run-network" };
     if (!res.ok) {
-      await e2bKillSandbox(env, created.sandboxId);
       const tag = res.status === 401 ? 401 : res.status === 429 ? 429 : res.status >= 500 ? 5 : res.status;
-      return { ok: false, sandboxId: created.sandboxId, error: `e2b_auth_http_${tag}` };
+      return { ok: false, stdout: "", stderr: "", ended: false, error: `e2b_auth_http_${tag}` };
     }
     const raw = await res.arrayBuffer();
     const frames = e2bDecodeConnectFrames(new Uint8Array(raw));
     const text = e2bFramesToText(frames);
-    await e2bKillSandbox(env, created.sandboxId);
-    if (!text.ended && frames.length > 0) {
-      return {
-        ok: false, sandboxId: created.sandboxId,
-        stdout: text.stdout, stderr: text.stderr,
-        error: "e2b-run_timeout",
-      };
-    }
     return {
       ok: true,
-      sandboxId: created.sandboxId,
       stdout: text.stdout,
       stderr: text.stderr,
       exitCode: text.exitCode,
+      ended: text.ended,
     };
   } catch {
-    await e2bKillSandbox(env, created.sandboxId);
-    return { ok: false, sandboxId: created.sandboxId, error: "e2b-run-network" };
+    return { ok: false, stdout: "", stderr: "", ended: false, error: "e2b-run-network" };
   }
 }
 
