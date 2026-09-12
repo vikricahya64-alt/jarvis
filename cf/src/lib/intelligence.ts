@@ -218,6 +218,46 @@ export async function perceive(
   };
 }
 
+/** SATU SUMBER KEBENARAN untuk bentuk bertanya (ask-shaped) di SELURUH
+ *  kapabilitas berat (design/search/code/ambil-butir). Dipakai heavyCapVerdict
+ *  dan isSourcingOrder sekaligus — fondasi tidak boleh punya daftar terpisah
+ *  yang bisa saling melenceng (prinsip: fondasi terhubung ke semua kemampuan). */
+export const QUESTION_SHAPED_RE =
+  /\b(?:apa|siapa|berapa|kapan|kenapa|mengapa|apakah|bagaimana|cara|perbedaan|banding|vs|versus|lebih\s+(?:baik|bagus)|mana\s+yang|rekomendasi|referensi|mirip|maksud|itu)\b/i;
+
+/** Kata kerja PERINTAH ambil/kumpulkan butir dari luar (collect). */
+const SOURCE_COLLECT_VERB_RE =
+  /\b(?:ambil|ambilkan|ambilin|cari|carikan|sediakan|siapkan|kumpulkan|susun|sajikan|sebutkan|tunjukkan|tulis|tuliskan|dapatkan)\b/i;
+
+/** Kata benda TARGET-butir yang menuntut keberadaan sumber/kutipan. Sengaja
+ *  SEMPIT (artikel/berita/laporan/dll.) — kata umum seperti "hasil/info/data"
+ *  terlalu mudah lolos ("ambil foto hasil jepretan") dan merusak fondasi;
+ *  permintaan data/angka masih dilayani jalur kata kunci riset + heavyCapVerdict. */
+const SOURCE_TARGET_NOUN_RE =
+  /\b(?:artikel|berita|laporan|item|tautan|link|cuitan|postingan|tweet|daftar|list|tren|sumber|kutipan|statistik|putaran|segmen|episode)\b/i;
+
+/** Kata kerja HASIL setelah mengambil butir (rangkum/lapor/sajikan). */
+const RESULT_REPORT_VERB_RE =
+  /\b(?:rangkum|ringkas|rangkumkan|ringkaskan|tulis|tuliskan|lapor|laporan|sajikan|simpulkan|resume)\b/i;
+
+/** PURE, deterministik: apakah kalimat adalah PERINTAH ambil-butir-bersumber
+ *  ("ambil 3 artikel teratas AI dari Google News lalu rangkum"), dinilai dari
+ *  BENTUK bukan dari daftar kata kerja yang disusun per kasus:
+ *    A) verba ambil/kumpulkan (+ target-butir)        → ambil 3 artikel ...
+ *    B) target-butir (+ verba hasil rangkum/lapor)     → 3 artikel ... lalu rangkum
+ *  Pertanyaan (cara/apa/perbedaan/...) selalu false — itu bukan perintah.
+ *  Fail-closed: kalimat pendek/kosong → false. Satu predikat ini dipakai
+ *  fondasi pengertian dan menyambung ke semua jalur eksekusi. */
+export function isSourcingOrder(text: string | null): boolean {
+  const low = (text ?? "").trim().toLowerCase();
+  if (low.length < 6) return false;
+  if (QUESTION_SHAPED_RE.test(low)) return false;
+  const collect = SOURCE_COLLECT_VERB_RE.test(low);
+  const target = SOURCE_TARGET_NOUN_RE.test(low);
+  const report = RESULT_REPORT_VERB_RE.test(low);
+  return (collect && target) || (target && report);
+}
+
 /** Ask-vs-EXECUTE verdict for HEAVY capabilities (design/search/code — the
  *  intents whose act is expensive: flux render, multi-step research, deep
  *  writer). A message that merely MENTIONS a heavy capability may be ASKING
@@ -235,12 +275,17 @@ function heavyCapVerdict(type: "search" | "design" | "code", text: string): "exe
   // design orders need explicit creation verbs; code orders use build/fix verbs.
   const orderVerb =
     type === "search"
-      ? /\b(?:cari|search|riset|research|analisis|analisa|review|bandingkan|ringkas|pelajari|mempelajari|telusuri|tentang|info|studi|study|kajian|laporan)\b/.test(low)
+      // v11.45.1: kata kerja "ambil/ambilkan/rangkum/sebutkan" = perintah AMBIL
+      // butir bersumber (artikel/berita teratas) — tanpa ini "ambil 3 artikel
+      // teratas AI dari Google News lalu rangkum" jadi verdict 'verify' →
+      // jatuh ke jalur model-memory (jawaban mengarang, tanpa kutipan). Bare
+      // "ambil"/"rangkum" hanya efektif saat cabang kata-kunci riset di
+      // classifyIntent sudah match, jadi aman dari ambil-foto/casual.
+      ? /\b(?:cari|search|riset|research|analisis|analisa|review|bandingkan|ringkas|rangkum|pelajari|mempelajari|telusuri|tentang|info|studi|study|kajian|laporan|ambil|ambilkan|ambilin|kumpulkan|sebutkan|tunjukkan)\b/.test(low)
       : type === "code"
         ? /\b(?:tulis|tuliskan|buat|bikin|bkin|buatin|perbaiki|debug|analisis|analisa|review|baca|fix|koding|jelaskan|menjelaskan|tunjukkan)\b/.test(low)
         : /\b(?:buat|bikin|bkin|buatin|desain|rancang|gambarkan|membuat|menghasilkan|generate|tolong|minta|mohon|coba)\b/.test(low);
-  const questionWord =
-    /\b(?:apa|siapa|berapa|kapan|kenapa|mengapa|apakah|bagaimana|cara|perbedaan|banding|vs|versus|lebih\s+(?:baik|bagus)|mana\s+yang|rekomendasi|referensi|mirip|maksud|itu)\b/.test(low);
+  const questionWord = QUESTION_SHAPED_RE.test(low);
   if (orderVerb && !questionWord) return "execute";
   if (questionWord && !orderVerb) return "answer";
   return "verify";
@@ -280,7 +325,7 @@ function messageMode(text: string): MessageMode {
  * Unified intent classifier — combines signals from multiple sources.
  * Priority: self-referential > emergency > design > translate > search > command > chat > question > understand
  */
-function classifyIntent(text: string, _topic: string | null): IntentResult {
+export function classifyIntent(text: string, _topic: string | null): IntentResult {
   const low = text.toLowerCase();
 
   // Self-referential (highest priority — JARVIS talking about itself)
@@ -372,8 +417,16 @@ function classifyIntent(text: string, _topic: string | null): IntentResult {
   // respond then verify, not every turn — text-clear turns skip verification).
   // v11.45: "ambil/rangkum/ambilkan" = perintah ambil butir bersumber; tanpa
   // ini "ambil 3 artikel teratas AI dari Google News lalu rangkum" lolos ke
-  // chat model-memory (dulu bergantung kata "tentang"). Mulai: kata kunci.
-  if (/\b(?:cari|search|riset|reseach|research|studi|study|pelajari|mempelajari|meneliti|info|tentang|analisis|review|bandingkan|ringkas|rangkum|ambilkan|ambilin|laporan|kajian)\b/i.test(low)) {
+  // chat model-memory (dulu bergantung kata "tentang").
+  // v11.46: FONDASI terpadu — isSourcingOrder menilai BENTUK (verba ambil +
+  // target-butir ATAU target-butir + verba hasil), bukan daftar kata yang
+  // disusun per kasus; jadi "ambil/sebutkan/sediakan N artikel ... lalu
+  // rangkum/lapor" apa pun pitanya langsung dieksekusi sebagai search, dan
+  // pertanyaan ("cara ambil N ... ?") tetap ke jalur jawab-verifikasi.
+  if (/\b(?:cari|search|riset|reseach|research|studi|study|pelajari|mempelajari|meneliti|info|tentang|analisis|review|bandingkan|ringkas|rangkum|ambilkan|ambilin|laporan|kajian)\b/i.test(low) || isSourcingOrder(text)) {
+    if (isSourcingOrder(text)) {
+      return { type: "search", urgency: "medium", formality: "neutral", confidence: 0.85, entities: { topic: text.slice(0, 100) } };
+    }
     if (heavyCapVerdict("search", text) === "verify") {
       return { type: "question", urgency: "low", formality: "neutral", confidence: 0.7, entities: { heavyVerify: "search", topic: text.slice(0, 100) } };
     }
