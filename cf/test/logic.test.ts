@@ -29,39 +29,6 @@ import {
   detectRelevanceAmbiguity, resolveRelevanceConfirmation,
   parkPendingRelevance, readPendingRelevance, clearPendingRelevance,
 } from "../src/lib/relevance";
-import {
-  simulateOdyssey, odysseyJobStatus, odysseyRecording, odysseyStateLabel,
-  odysseyConfigured,
-} from "../src/lib/odyssey";
-
-async function testOdysseyRails() {
-  // m9-v11.34 PINJAMAN: second borrowed external executor (WORLD SIMULATION
-  // via Odyssey's Simulate API). Fail-closed: no key / empty inputs must
-  // return safe shapes BEFORE any network is attempted, never throw.
-  const bare = { ODYSSEY_API_KEY: "", ODYSSEY_API_URL: "", CONFIG_KV: null };
-
-  assert.strictEqual(odysseyConfigured(bare), false, "no key → unconfigured");
-  assert.strictEqual(odysseyConfigured({ ...bare, ODYSSEY_API_KEY: "ody_x" }), true, "key → configured");
-
-  const noKey = await simulateOdyssey(bare, "astronot berjalan di permukaan bulan");
-  assert.strictEqual(noKey.ok, false, "no key → fail-closed (no network)");
-  assert.strictEqual(noKey.error, "odyssey-not-configured", "no key → precise error token");
-
-  const noPrompt = await simulateOdyssey({ ...bare, ODYSSEY_API_KEY: "ody_x" }, "   ");
-  assert.strictEqual(noPrompt.error, "odyssey-empty-prompt", "empty prompt → empty-prompt token");
-
-  const badId = await odysseyJobStatus(bare, "");
-  assert.strictEqual(badId.ok, false, "empty jobId → fail-closed");
-  assert.ok((badId.error ?? "").includes("job"), "empty jobId → job-related token");
-
-  const badRec = await odysseyRecording(bare, " ");
-  assert.strictEqual(badRec.ok, false, "empty stream id → fail-closed");
-  assert.ok((badRec.error ?? "").includes("stream"), "empty stream id → stream token");
-
-  assert.strictEqual(odysseyStateLabel("processing"), "sedang membuat simulasi", "state label maps");
-  assert.strictEqual(odysseyStateLabel("completed"), "selesai ✓", "completed label maps");
-  assert.strictEqual(odysseyStateLabel("unknown-state"), "diproses", "unknown state falls open");
-}
 
 async function testAgentExecutorRails() {
   // m9-v11.33 PINJAMAN optimization: dispatch must be fail-visible. A task
@@ -1684,7 +1651,6 @@ async function main() {
   testRelevanceGate();
   await testRelevancePersistence();
   await testAgentExecutorRails();
-  await testOdysseyRails();
   console.log("LOGIC TESTS PASSED");
 }
 

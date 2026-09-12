@@ -97,11 +97,6 @@ WORKER_URL = "https://jarvis-sovereign.vikricahya64.workers.dev"
 # gen needs no key at all. OPTIONAL: set VERCEL_CONNECTOR_TOKEN via
 # `wrangler secret put VERCEL_CONNECTOR_TOKEN` if the connector gates routes.
 VERCEL_CONNECTOR_URL = "https://jarvis-connector.vercel.app"
-# Odyssey (odyssey.ml) world-model executor — second borrowed external
-# executor (WORLD SIMULATION, not code). ODYSSEY_API_KEY is a SECRET via
-# `wrangler secret put ODYSSEY_API_KEY` (free key form: developer.odyssey.ml).
-# ODYSSEY_API_URL optional; defaults to https://api.odyssey.ml in code.
-ODYSSEY_API_URL = "https://api.odyssey.ml"
 
 #------------------------------------------------------------------------------
 # Cron Triggers (≤5 allowed on free; request-driven daemons, not resident)
