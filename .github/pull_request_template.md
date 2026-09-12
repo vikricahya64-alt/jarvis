@@ -7,7 +7,7 @@ Jelaskan apa yang diubah dan kenapa. Sebutkan task/ticket terkait bila ada.
 - [ ] `npm run typecheck` LULUS (di `cf/`)
 - [ ] `npm run test:safety` LULUS
 - [ ] `npm run test:logic` LULUS
-- [ ] `git grep -nE 'AAHKS|8762708956'` hasil kosong (0 match)
+- [ ] `git grep` pola token bot lama (prefix `8762…` / `AAHK…`) hasil kosong
 - [ ] Tidak ada nilai secret/token nyata yang ditambahkan (cek diff!)
 
 ## Perubahan kontrak
