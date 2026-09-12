@@ -53,10 +53,20 @@ const E2B_PROBES_PER_TICK = 6;
  *  runs the queued task with the sandbox's full environment, redirecting
  *  output to /tmp/jarvis_out.txt, then drops the /tmp/jarvis_done marker.
  *  The outer process returns immediately ("LAUNCHED") so the webhook can
- *  answer fast; the poller later reads the marker + output. */
-const E2B_LAUNCH_SCRIPT =
+ *  answer fast; the poller later reads the marker + output.
+ *
+ *  v11.48 FIX LIVE (RC=2): the translator legitimately emits python plans,
+ *  but this script used to pipe EVERYTHING through bash — python dict/f-string
+ *  braces became bash syntax errors (RC=2, empty report). Dispatch now on the
+ *  JARVIS_LANG env var carried from the translation contract: python → python3
+ *  (fallback python), bash → bash. Fail-closed default stays bash. */
+export const E2B_LAUNCH_SCRIPT =
   "cd /tmp; printf %s \"$JARVIS_RUN\" > /tmp/jarvis_script.sh; " +
-  "{ bash /tmp/jarvis_script.sh > /tmp/jarvis_out.txt 2>&1; " +
+  "{ if [ \"$JARVIS_LANG\" = \"python\" ] && command -v python3 >/dev/null 2>&1; then " +
+  "python3 /tmp/jarvis_script.sh > /tmp/jarvis_out.txt 2>&1; " +
+  "elif [ \"$JARVIS_LANG\" = \"python\" ] && command -v python >/dev/null 2>&1; then " +
+  "python /tmp/jarvis_script.sh > /tmp/jarvis_out.txt 2>&1; " +
+  "else bash /tmp/jarvis_script.sh > /tmp/jarvis_out.txt 2>&1; fi; " +
   "echo JARVIS_RC=$? >> /tmp/jarvis_out.txt; touch /tmp/jarvis_done; } > /dev/null 2>&1 & " +
   "echo LAUNCHED";
 
@@ -66,6 +76,8 @@ const E2B_PROBE_SCRIPT =
   "else echo JARVIS_RUNNING; fi";
 
 export type E2bDelegateResult = { runId?: string; error?: string; truncated?: boolean };
+
+export type E2bDelegateOpts = { riset?: boolean; language?: "bash" | "python" };
 
 /** True when the E2B executor platform has an API key wired in. */
 export function e2bExecutorConfigured(env: Env): boolean {
@@ -77,16 +89,17 @@ export function e2bExecutorConfigured(env: Env): boolean {
 export async function delegateToE2b(
   env: Env,
   task: string,
-  opts: { riset?: boolean } = {},
+  opts: E2bDelegateOpts = {},
 ): Promise<E2bDelegateResult> {
   if (!e2bConfigured(env)) return { error: "executor-not-configured", truncated: false };
   const wantRiset = opts.riset === true || usesDeepResearchProtocol(task);
   const { payload, truncated } = buildExecutorPayload(task, { riset: wantRiset });
   if (!payload.trim()) return { error: "e2b-empty-task", truncated };
 
+  const lang = opts.language === "python" ? "python" : "bash";
   const created = await e2bCreateSandbox(env, payload, 0, {
     timeoutMs: E2B_EXEC_TIMEOUT_MS,
-    envVars: { JARVIS_RUN: payload },
+    envVars: { JARVIS_RUN: payload, JARVIS_LANG: lang },
   });
   if (!created.ok) return { error: created.error, truncated };
 
@@ -194,9 +207,11 @@ async function deliverE2bResult(
   flagged: boolean,
 ): Promise<void> {
   const prefix = st === "done" ? `✅ Tugas *#${id}* selesai (eksekutor E2B)` : `❌ Tugas *#${id}* gagal di eksekutor E2B`;
+  const cleanSnippet = (result ?? "").replace(/\s+/g, " ").trim();
   const detail = st === "done"
     ? (result || "(tanpa output)").slice(0, 2800)
-    : (error || "-").replace(/\s+/g, " ").slice(0, 300);
+    : (error || "-") +
+      (cleanSnippet ? `\n\n*Output terakhir:*\n${cleanSnippet.slice(0, 700)}` : "");
   const warnLine = flagged
     ? "\n⚠️ *Catatan JARVIS:* laporan mengandung pola manipulatif (injeksi perintah). Diabaikan sebagai perintah — hasil disimpan apa adanya saja."
     : "";

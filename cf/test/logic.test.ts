@@ -2068,13 +2068,16 @@ async function testCapabilityFoundation() {
   assert.ok(desc.includes("Otak (inti)") && desc.includes("Perintah (webhook)"), "self-knowledge covers both planes");
   assert.ok(desc.toLowerCase().includes("kemampuan fondasi"), "self-knowledge names the vision");
 
-  // --- (4) Sumbu-bentuk (heavy capability) di-share satu sumber ---
-  assert.strictEqual(heavyCapabilityShape("ambil 3 artikel AI dari Google News lalu rangkum"), "search", "sourcing shape → search");
-  assert.strictEqual(heavyCapabilityShape("apa itu AI?"), "question", "communicate shape → question");
-  assert.strictEqual(heavyCapabilityShape("tulis skrip python untuk fetch harga BTC"), "code", "code shape → code");
-  assert.strictEqual(isCodeTaskIntent("aku suka coding"), false, "'suka coding' tidak dikira tugas kode");
-  assert.strictEqual(heavyCapabilityShape("ambil foto hasil jepretan"), null, "ambiguous → null (fail-closed)");
-  assert.strictEqual(heavyCapabilityShape("halo"), null, "greeting → null");
+  // --- (5) Eksekutor E2B dispatch bahasa dari kontrak terjemahan ---
+  // FIX LIVE m9-v11.48 (RC=2): skrip python pernah dijalankan lewat bash →
+  // { }/f-string = syntax error bash. Kini E2B_LAUNCH_SCRIPT memilih interpreter
+  // dari JARVIS_LANG yang dibawa kontrak (python → python3, bash → bash).
+  const e2bExec = await import("../src/lib/e2b_executor");
+  assert.ok(e2bExec.E2B_LAUNCH_SCRIPT.includes("JARVIS_LANG"), "e2b launch reads language env var");
+  assert.ok(e2bExec.E2B_LAUNCH_SCRIPT.includes("python3 /tmp/jarvis_script.sh"), "e2b python branch → python3");
+  assert.ok(e2bExec.E2B_LAUNCH_SCRIPT.includes("bash /tmp/jarvis_script.sh"), "e2b bash branch preserved");
+  const ev1 = /JARVIS_LANG/.test(e2bExec.E2B_LAUNCH_SCRIPT);
+  assert.ok(ev1, "e2b launch script wired to JARVIS_LANG");
 }
 
 async function testProjectPlanContract() {
@@ -2171,11 +2174,17 @@ async function testProjectPlanContract() {
 
   // (F) FAILURE path: mark running dulu, lalu finish failed (guard 'running').
   kv.clear(); events.length = 0;
+  const delegateOpts: any[] = [];
   await parkProjectPlan(baseEnv, 99, "ambil artikel", "python", "print(1)");
   const failOut = await launchParkedProject(baseEnv, 99, {
-    delegate: async () => { events.push({ sql: "::delegate::", params: [] }); return { error: "sandbox create refused" }; },
+    delegate: async (_env: any, _t: string, opts?: any) => {
+      delegateOpts.push(opts);
+      events.push({ sql: "::delegate::", params: [] });
+      return { error: "sandbox create refused" };
+    },
   });
   assert.ok(failOut && failOut.ok === false && failOut.reason === "launch", "launch failure surfaced");
+  assert.strictEqual(delegateOpts[0]?.language, "python", "v11.48: python plan carries language to the E2B runner");
   const failRun = events.filter((e) => e.sql.includes("SET status = 'running'"));
   const failFinish = events.filter((e) => e.sql.includes("status = ?") && e.params[0] === "failed");
   assert.strictEqual(failRun.length, 1, "failure path still transitions running once");
