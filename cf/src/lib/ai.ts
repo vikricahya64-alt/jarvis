@@ -15,6 +15,7 @@ import { Env, recentContext, searchMemory, storeLearnedKnowledge, isTopicKnown }
 import { withResilience, fetchWithTimeout, logRequest, getBreakerState } from "./resilience";
 import { getAnswerBehaviorContext, reflectOnTurn } from "./evolution";
 import { isResearchClass, orchestrateResearch } from "./subagents";
+import { isSourcingAsk } from "./executor_selection";
 import { buildConversationMessages } from "./conversation";
 import { buildFinalReply } from "./response_formatter";
 import { detectEmotion as detectEmotionSig, inferEmotionFromContext, getMoodState, detectTopicSentiment } from "./emotion";
@@ -1548,7 +1549,7 @@ export async function searchAndSynthesize(
   userText: string,
   topic: string,
   opts: { followupPrior?: string; replyLang?: string } = {},
-): Promise<{ reply: string; source: string; grounded?: boolean; citedSources?: number; hitsAvailable?: number }> {
+): Promise<{ reply: string; source: string; grounded?: boolean; citedSources?: number; hitsAvailable?: number; searched?: boolean }> {
   // SELF-REFERENTIAL GUARD — if a self-referential question somehow reaches the
   // search path, answer directly from identity instead of searching/hallucinating.
   const selfRefText = (userText || "").trim().toLowerCase();
@@ -1609,7 +1610,7 @@ export async function searchAndSynthesize(
     const sub = await orchestrateResearch(env, owner, userText, topic, followupAnchor, opts.replyLang ?? "");
     if (sub) {
       if (sub.length > 120) void reflectOnTurn(env, userText, sub, []).catch(() => {});
-      return { reply: sub, source: "subagents", grounded: true };
+      return { reply: sub, source: "subagents", grounded: true, searched: true };
     }
   }
   // Run all independent pre-LLM I/O in parallel: web search + conversation
@@ -1620,7 +1621,12 @@ export async function searchAndSynthesize(
   // M8-v27: institutional asks always search (never reuse stale memory); known-
   // topics shortcut applies only to non-institutional queries.
   const topicKnown = await isTopicKnown(env, topic, 2.0).catch(() => false);
-  const skipSearch = topicKnown && !instReq;
+  // v11.49 (kemampuan cabang pemilik): memori-shortcut (skip search) hanya
+  // sah untuk riset-inline-biasa. PERMINTAAN BUTIR-BERSUMBER (ambil/daftar/N
+  // artikel/link/teratas …) WAJIB memakai pencarian nyata — menjawab butir
+  // dari memori yang dihafal = mengarang sumber (kasus live: CNBC/The Verge/
+  // Reuters fiktif). JARVIS menolak menjawab butir tanpa mencari.
+  const skipSearch = topicKnown && !instReq && !isSourcingAsk(userText);
 
   // Run all independent pre-LLM I/O in parallel: web search + conversation
   // history + memory retrieval + answer-behavior context (each is a separate
@@ -1810,7 +1816,7 @@ export async function searchAndSynthesize(
     if (formatted.length > 120) {
       void reflectOnTurn(env, userText, formatted, []).catch(() => {});
     }
-    return { reply: formatted, source: `${g.source}+ddg`, grounded: searchResult !== null || hits.length > 0, citedSources, hitsAvailable: hits.length };
+    return { reply: formatted, source: `${g.source}+ddg`, grounded: searchResult !== null || hits.length > 0, citedSources, hitsAvailable: hits.length, searched: !skipSearch };
   }
   if (searchResult) {
     // SELF-LEARNING: Store the new knowledge for future queries
@@ -1822,11 +1828,11 @@ export async function searchAndSynthesize(
       "research",
       topicSentiment.sentiment,
     );
-    return { reply: formatted, source: "ddg", grounded: true };
+    return { reply: formatted, source: "ddg", grounded: true, searched: !skipSearch };
   }
   // Final fail-closed: canned reply.
   const canned = `Saya akan cari tentang *${topic}*, tapi belum bisa menghubungi mesin pencari saat ini. Coba lagi sebentar.`;
-  return { reply: canned, source: "canned", grounded: false };
+  return { reply: canned, source: "canned", grounded: false, searched: !skipSearch };
 }
 
 // ============================================================================
