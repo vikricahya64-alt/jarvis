@@ -1,0 +1,54 @@
+# CI — gerbang wajib untuk semua perubahan di cf/.
+# HEAD repo adalah SATU-SATUNYA sumber kebenaran untuk cf/; CI menjawab
+# kontrak minimum sebelum deploy / sebelum PR diterima:
+#
+#   typecheck -> test:safety -> test:logic -> wrangler deploy --dry-run
+#
+# TANPA secret, TANPA panggilan jaringan ke Cloudflare (dry-run membangun
+# bundle lokal saja), dan TANPA deploy otomatis. Deploy terjadi di
+# deploy.yml (push ke main); alarm kuota di autonomy.yml.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: cf
+
+jobs:
+  verify:
+    name: typecheck + safety + logic + bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22 (npm cache via cf/package-lock.json)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cf/package-lock.json
+
+      - name: Install dependencies (deterministic)
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Safety tests
+        run: npm run test:safety
+
+      - name: Logic tests
+        run: npm run test:logic
+
+      - name: Wrangler dry-run (validasi bundle, tanpa deploy)
+        run: npx wrangler deploy --dry-run --outdir /tmp/wr-out

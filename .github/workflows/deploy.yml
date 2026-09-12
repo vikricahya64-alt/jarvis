@@ -13,16 +13,20 @@
 
 name: Deploy Worker to Cloudflare
 
-# SAFETY GATE: manual-only. Live Cloudflare source (`/tmp/opencode/live_vercel`)
-# is authoritative and deploys are made from it directly; this workflow is a
-# diagnostic/emergency path from the repo snapshot. Auto-run on push is
-# dangerous (the repo copy may lag live → would deploy a stale worker) and the
-# old "Apply D1 migrations" step cannot work here: migrations 0001–0016 are
-# applied live via `wrangler d1 execute --file`, so `migrations apply` would
-# try to CREATE_EXISTING tables and fail. Use `workflow_dispatch` when needed.
-# (Automatic deploy can be re-enabled once the repo is kept byte-identical to
-# live AND a valid, linted CF_API_TOKEN secret exists.)
+# SAFETY GATE: repo HEAD adalah SATU-SATUNYA sumber kebenaran (cf/ untuk
+# worker, api/+utils/ untuk sisi Python/Vercel, termux/ untuk edge, data/
+# untuk konstitusi). Automatic deploy NONAKTIF sebelumnya karena repo bisa
+# tertinggal di belakang live; sekarang repo authoritative, jadi perubahan
+# ke main otomatis di-deploy setelah lolos gate yang sama seperti CI
+# (typecheck -> safety -> logic). Deploy hanya berjalan di push ke main.
+#
+# Catatan: langkah "Apply D1 migrations" TIDAK ada — migrations 0001-0016
+# diterapkan live via `wrangler d1 execute --file`, sehingga `migrations
+# apply` di sini akan mencoba CREATE_EXISTING dan gagal. Migrasi D1 tetap
+# urusan manual pemilik.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -56,6 +60,9 @@ jobs:
 
       - name: Run safety tests
         run: npm run test:safety
+
+      - name: Run logic tests
+        run: npm run test:logic
 
       # NOTE: the D1 migrations step was intentionally removed — see the
       # SAFETY GATE comment at the top. Migrations are applied live via
