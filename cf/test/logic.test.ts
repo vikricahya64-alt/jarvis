@@ -1982,6 +1982,32 @@ async function testEscalationOrdering() {
     "apa itu AI?"),
     "non-sourcing ask with no cites does NOT escalate");
 
+  // (F2) v11.49 KASUS LIVE (kemampuan cabang pemilik): topik 'AI' sudah
+  //     'dikenal' di memori → search SKIPPED (searched:false, hits=0) →
+  //     gerbang lama butuh hits>0 sehingga lolos → jawaban memori yang
+  //     mengarang sumber (CNBC/The Verge/Reuters) TERKIRIM. Sekarang:
+  //     sourcing ask + nol kutipan + pencarian tidak berjalan → ESKALASI.
+  assert.ok(shouldEscalateByAnswerEvidence(
+    { reply: "x", source: "groq+ddg", citedSources: 0, hitsAvailable: 0, searched: false },
+    "ambil 3 artikel teratas AI dari Google News lalu rangkum"),
+    "memory-only answer (no search) on a sourcing ask escalates — THE live fix");
+  assert.ok(shouldEscalateByAnswerEvidence(
+    { reply: "x", source: "groq+ddg", citedSources: 0, hitsAvailable: 0, searched: false },
+    "cari daftar 10 artikel terbaru tentang kripto"),
+    "skip-search sourcing ask escalates regardless of hits");
+  assert.ok(!shouldEscalateByAnswerEvidence(
+    { reply: "x", source: "groq+ddg", citedSources: 1, hitsAvailable: 0, searched: false },
+    "ambil 3 artikel teratas AI lalu rangkum"),
+    "search skipped but the answer DID cite → no escalation");
+  assert.ok(!shouldEscalateByAnswerEvidence(
+    { reply: "x", source: "groq+ddg", citedSources: 0, hitsAvailable: 0, searched: true },
+    "ambil 3 artikel teratas AI lalu rangkum"),
+    "searched but zero hits → not judged memory-only (no evidence, but honest)");
+  assert.ok(!shouldEscalateByAnswerEvidence(
+    { reply: "x", source: "groq+ddg", citedSources: 0, hitsAvailable: 0, searched: false },
+    "ceritakan cara kerja lampu"),
+    "non-sourcing ask never escalates even with skipped search");
+
   // (G) parseGoalNegotiation — kontrak hop penerjemah (klarifikasi ATAU rencana).
   assert.strictEqual(parseGoalNegotiation(null), null, "null rejected");
   assert.strictEqual(parseGoalNegotiation("tidak jelas"), null, "non-JSON rejected");
@@ -2067,6 +2093,9 @@ async function testCapabilityFoundation() {
   const desc = describeAllCapabilities();
   assert.ok(desc.includes("Otak (inti)") && desc.includes("Perintah (webhook)"), "self-knowledge covers both planes");
   assert.ok(desc.toLowerCase().includes("kemampuan fondasi"), "self-knowledge names the vision");
+  const regAll = await import("../src/lib/capability_registry");
+  assert.ok(regAll.getCapability("capability_branch"), "branch capability registered as a contract");
+  assert.ok(desc.includes("Kemampuan Cabang (Substitusi Output)"), "branch capability visible in /kemampuan");
 
   // --- (5) Eksekutor E2B dispatch bahasa dari kontrak terjemahan ---
   // FIX LIVE m9-v11.48 (RC=2): skrip python pernah dijalankan lewat bash →

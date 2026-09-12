@@ -10,10 +10,20 @@
 //   4. Memahami semua bidang ilmu pengetahuan.
 //   5. Adaptasi per sesi pemilik (jawaban pemilik: "untuk saya sendiri").
 //
-// KEMAMPUAN FONDASI KE-6 (m9-v11.47): mampu memahami & MENGGUNAKAN SEMUA
-// KEMAMPUAN FONDASI (1-5) DAN semua kemampuan lain secara TEPAT — berakar
+// KEMAMPUAN CABANG (juga dimasukkan pemilik, m9-v11.49 tersurat): memahami &
+// MENGGUNAKAN kemampuan sesuai OUTPUT TERBAIK — prinsip substitusi: saat
+// kemampuan bawaan memberi output yang tak benar-benar bersumber (model
+// knowledge yang dipoles — grounded=false, atau butir yang diminta tak dikutip
+// dari pencarian nyata), JARVIS sebagai negosiator MENOLAK output itu dan
+// menawarkan eksekutor pinjaman yang output-nya SAMA/LEBIH BAIK (evidence
+// di-branch executor_selection.ts; eksekusi tetap menunggu persetujuan pemilik).
+//
+// REKONSTRUKSI FONDASI KE-6 (m9-v11.47): mampu memahami & MENGGUNAKAN SEMUA
+// KEMAMPUAN FONDASI (1-5), kemampuan cabang di atas, DAN semua kemampuan lain
+// secara TEPAT — berakar
 // dari fondasi 1-4 (pahami teks itulah yang dipahami), bersandar pada 5
-// (adaptif per pemilik). Konsekuensi arsitektur:
+// (adaptif per pemilik) dan pada kemampuan cabang (pilih output TERBAIK,
+// bukan output yang paling nyaman dihasilkan inline). Konsekuensi arsitektur:
 //   - Setiap kemampuan didaftarkan sebagai KONTRAK TEKS (capability_registry):
 //     id + ringkasan + pemicu + izin + intent tertunda (parked). Menambah
 //     kemampuan = menambah satu kontrak, bukan regex liar per file.

@@ -52,6 +52,11 @@ export type SynthesisEvidence = {
   grounded?: boolean;
   citedSources?: number;
   hitsAvailable?: number;
+  /** Apakah mesin pencari benar-benar DIPANGGIL untuk menjawab ini (false =
+   *  jawaban dari memori/kenal-topik tanpa pencarian). v11.49: penanda untuk
+   *  gerbang evidence — butir bersumber yang dijawab tanpa mencari berarti
+   *  model knowledge yang dipoles, bukan hasil ambil-butir yang sah. */
+  searched?: boolean;
 };
 
 /** PURE, deterministic judgment #1: only an UNAMBIGUOUSLY ungrounded synthesis
@@ -65,7 +70,13 @@ export function shouldEscalateToConceptExecutor(res: SynthesisEvidence | null): 
 }
 
 /** Permintaan riset yang MENUNTUT butir bersumber (angka/daftar/artikel/berita
- *  terbaru) — jawaban tanpa SATU pun kutipan tidak bisa dipercaya di sini. */
+ *  terbaru) — jawaban tanpa SATU pun kutipan tidak bisa dipercaya di sini.
+ *  v11.49: di-export sebagai satu sumber; dipakai BOTH oleh gerbang evidence
+ *  (ikat: jawaban wajib mengutip) DAN oleh ai.ts (halangi memori-shortcut di
+ *  jalur ambil-butir — jangan pernah menjawab butir tanpa mencari). */
+export function isSourcingAsk(text: string): boolean {
+  return SOURCING_ASK_RE.test((text ?? "").trim());
+}
 const SOURCING_ASK_RE =
   /(artikel|berita|daftar|list|link|sumber|betapa|berapa|nilai|teratas|terbaru|rangkum|ringkas|sebutkan|tuliskan?\s+\d|\btop\s+\d|\b\d+\s+(artikel|hasil|item|putaran))/i;
 
@@ -73,14 +84,22 @@ const SOURCING_ASK_RE =
  *  bersumber"): mesin pencari MEMBERI sumber (hitsAvailable>0) TAPI jawaban
  *  yang dikirim mengutip NOL sumber nyata (citedSources===0) pada permintaan
  *  yang eksplisit menuntut butir — itu model knowledge, bukan riset. JARVIS
- *  sebagai negosiator menolaknya dan menawarkan eksekutor yang sebenarnya. */
+ *  sebagai negosiator menolaknya dan menawarkan eksekutor yang sebenarnya.
+ *
+ *  v11.49 FIX (kasus live): follow-up yang topiknya sudah "dikenal" membuat
+ *  search SKIPPED (memori-shortcut) → hitsAvailable=0, jadi gerbang lama
+ *  (butuh hits>0) tidak pernah menyala → jawaban memori yang mengkarang
+ *  (CNBC/The Verge/Reuters padahal tidak ditarik) lolos apa adanya. Sekarang:
+ *  sourcing-ask + nol kutipan → eskalasi bila (a) hit benar-benar ada tapi
+ *  tidak dikutip, ATAU (b) pencarian bahkan tidak dijalankan (searched=false). */
 export function shouldEscalateByAnswerEvidence(res: SynthesisEvidence | null, askText: string): boolean {
   if (!res) return false;
   if (!res.reply) return false;
   if (res.source === "canned" || res.source === "self_ref") return false;
   if (res.grounded === false) return true;
-  if (!SOURCING_ASK_RE.test(askText ?? "")) return false;
-  return (res.hitsAvailable ?? 0) > 0 && (res.citedSources ?? 0) === 0;
+  if (!isSourcingAsk(askText)) return false;
+  if ((res.citedSources ?? 0) > 0) return false;
+  return (res.hitsAvailable ?? 0) > 0 || res.searched === false;
 }
 
 /** Injectable side-effects for tests (defaults are the real implementations).

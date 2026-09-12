@@ -33,6 +33,7 @@ export type CapabilityId =
   | "translate"
   | "search"
   | "followup"
+  | "capability_branch"
   | "understand"
   | "command"
   | "chat"
@@ -173,6 +174,18 @@ export const CAPABILITY_CONTRACTS: CapabilityContract[] = [
     requires: ["kv"],
     errorCodes: ["REPETITIVE", "STALE"],
     metricsKey: "search_synth",
+  },
+  {
+    id: "capability_branch",
+    label: "Kemampuan Cabang (Substitusi Output)",
+    brief: "Memilih kapabilitas/eksekutor yang output-nya SAMA atau LEBIH BAIK (prinsip substitusi yang dimasukkan pemilik): jawaban riset yang tidak benar-benar bersumber — grounded=false ATAU butir yang diminta (artikel/daftar/berita) tak mengutip sumber nyata — ditolak negosiator, rencana di-park, eksekutor konsep-sistem (E2B) yang sebenarnya berjalan HANYA setelah persetujuan pemilik. Fail-closed: tanpa eksekutor, jawaban inline tetap dipertahankan.",
+    intent: "research_escalated",
+    approach: "evidence_substitution",
+    priority: 610,
+    fallbackId: "search",
+    requires: ["llm", "e2b"],
+    errorCodes: [],
+    metricsKey: "capability_branch",
   },
   {
     id: "understand",
