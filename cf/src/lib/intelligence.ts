@@ -1135,13 +1135,18 @@ export async function act(
 
     case "understand_intent": {
       // m9-v11.x EMPTY-SUBJECT GATE: pesan vague tanpa subjek ("saya sedang
-      // bingung", "bantu aku") yang TIDAK punya topik aktif dan TIDAK menunjuk
-      // kembali ke riwayat → tanya klarifikasi singkat secara deterministik
-      // (nol panggilan LLM). Live failure: "Saya sedang bingung" dijawab
-      // percaya diri soal "kerja remote" — model mengisi subjek sendiri.
-      const hasRecall = (enrichedContext ?? []).some((c) =>
-        /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
-      if (!topic && !perception.isContinuation && !hasRecall && isVagueNoSubject(d)) {
+      // bingung", "bantu aku") → tanya klarifikasi singkat secara deterministik
+      // (nol panggilan LLM). HALAMAN MERAH dari dua live failure berturut-turut:
+      //   (a) gate pertama memakai `!topic` — tetapi `topic` di sini hampir
+      //       selalu terisi oleh fallback `text.slice(0,80)`, jadi gate tak
+      //       pernah menyala;
+      //   (b) gate memakai `!hasRecall` — kehadiran blok memori ("kerja remote"
+      //       dari riwayat lama) malah MENAMBAH subjek yang tidak dikatakan user,
+      //       lalu model menjawab percaya diri soal subjek tebakan itu.
+      // Kesimpulan: subjek TIDAK boleh diisi dari memori/konteks; satu-satunya
+      // pembeda yang sah adalah kontinuitas percakapan saat ini. Kehadiran
+      // memori/recall tidak menambah subjek pada pesan yang tidak ber-subjek.
+      if (!perception.isContinuation && isVagueNoSubject(d)) {
         return {
           reply: "Hmm, aku belum menangkap konteksnya. Soal apa nih — boleh jelaskan sedikit?",
           source: "understand_clarify",
