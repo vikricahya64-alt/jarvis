@@ -269,6 +269,23 @@ function testNonSlangPassThrough() {
   assert.strictEqual(normalizeInput("help"), "help");
 }
 
+function testLeetButCode() {
+  // m9-v11.36: leetspeak must NOT rewrite program/version tokens whose digits
+  // all sit at the edge of the word. Live bug: /e2b python3 ... became
+  // "pythone" (3 -> e) and the sandbox ran a nonexistent command (exit 127).
+  assert.strictEqual(
+    normalizeInput("/e2b python3 -c \"print(6*7)\""),
+    "/e2b python3 -c \"print(6*7)\"",
+    "slash command keeps script verbatim (python3 not pythone)",
+  );
+  assert.strictEqual(normalizeInput("node18"), "node18", "program + version preserved");
+  assert.strictEqual(normalizeInput("react19"), "react19", "framework version preserved");
+  assert.strictEqual(normalizeInput("3d printer"), "3d printer", "dimension number preserved");
+  assert.strictEqual(normalizeInput("kelas 4a"), "kelas 4a", "class-room number preserved");
+  // Real leetspeak (digit in the MIDDLE of the word) still normalizes.
+  assert.strictEqual(normalizeInput("h3llo"), "hello", "leetspeak still applies");
+}
+
 function testExpandedSlang() {
   // Extended Indonesian social-media/Telegram slang dictionary (research-backed:
   // Han & Baldwin 2013, ViLexNorm EACL'24, MultiLexNorm++ 2026). All harmless
@@ -1652,6 +1669,7 @@ async function main() {
   testGroupPrefixStripping();
   testEmptyInput();
   testNonSlangPassThrough();
+  testLeetButCode();
   testExpandedSlang();
   testFollowUpDetection();
   testHumaneContinuity();

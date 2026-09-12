@@ -214,9 +214,17 @@ export function normalizeInput(raw: string): string {
     // ("https://…"), clock times ("15:30") and "name:/cmd" are NEVER mangled
     // (verified live bug M6: the old `[^:]+:\s` ate the scheme of any URL).
     .replace(/^[^\s:]+(?:\s+[^\s:]+)*:\s+/, "")
-    // Leetspeak normalization (hanya jika ada campuran angka+huruf)
+    // Leetspeak normalization (hanya jika ada campuran angka+huruf).
+    // Skip token program/versi yang digitnya SEMUA di ujung: "python3",
+    // "node18", "react19", "3d", "4k" — syntaxnya identik leetspeak tapi
+    // artinya nama file/perintah. Bug live m9-v11.35: /e2b python3 ...
+    // menjadi "pythone" sehingga sandbox menjalankan perintah yang tidak
+    // ada (exit 127). Leetspeak asli ("h3llo"->"hello") menyisipkan digit
+    // di TENGAH kata dan tidak pernah berformat huruf+digit berurutan.
     .replace(/\b\w*\d\w*\b/g, (w) => {
-      if (/\d/.test(w) && /[a-zA-Z]/.test(w)) return leetspeakNormalize(w);
+      if (/\d/.test(w) && /[a-zA-Z]/.test(w)
+        && !/^[a-z]+\d+$/i.test(w) && !/^\d+[a-z]+$/i.test(w)
+        && w.length <= 12) return leetspeakNormalize(w);
       return w;
     })
     .split(" ")
