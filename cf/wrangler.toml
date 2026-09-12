@@ -97,6 +97,13 @@ WORKER_URL = "https://jarvis-sovereign.vikricahya64.workers.dev"
 # gen needs no key at all. OPTIONAL: set VERCEL_CONNECTOR_TOKEN via
 # `wrangler secret put VERCEL_CONNECTOR_TOKEN` if the connector gates routes.
 VERCEL_CONNECTOR_URL = "https://jarvis-connector.vercel.app"
+# E2B (e2b.dev) sandbox executor — second borrowed external executor (RAW
+# execution, not repo-bound agent work like opencode: shell/Python in an
+# isolated Firecracker microVM). E2B_API_KEY is a SECRET via
+# `wrangler secret put E2B_API_KEY` (free Hobby: $100 credits, no CC).
+# E2B_API_URL optional (defaults to https://api.e2b.app). E2B_TEMPLATE
+# optional; defaults to the generic "e2b/sandbox" template.
+E2B_API_URL = "https://api.e2b.app"
 
 #------------------------------------------------------------------------------
 # Cron Triggers (≤5 allowed on free; request-driven daemons, not resident)

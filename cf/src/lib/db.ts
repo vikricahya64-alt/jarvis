@@ -42,6 +42,9 @@ export interface Env {
   WORKER_URL?: string;
   VERCEL_CONNECTOR_URL?: string;
   VERCEL_CONNECTOR_TOKEN?: string;
+  E2B_API_KEY?: string;
+  E2B_API_URL?: string;
+  E2B_TEMPLATE?: string;
   CLARITY_GATE?: string;
   RISK_CONSENT_THRESHOLD?: string;
   CONSENT_TIMEOUT_S?: string;

@@ -151,7 +151,7 @@ export const HELP = {
   header: "📋 *Perintah J.A.R.V.I.S.*",
   sections: [
     { title: "Umum", items: "/health — cek status sistem\n/status — status otonomi\n/help — bantuan ini\n/tugas — delegasi kerja berat ke eksekutor cloud (/tugas <pekerjaan>)" },
-    { title: "Pencarian", items: "/cari <topik> — cari informasi\nTerjemahkan <teks> — terjemahkan\n/baca <url> — baca + ringkas halaman" },
+    { title: "Pencarian", items: "/cari <topik> — cari informasi\nTerjemahkan <teks> — terjemahkan\n/baca <url> — baca + ringkas halaman\n/e2b <skrip> — eksekusi shell/Python di sandbox E2B" },
     { title: "Pengaturan", items: "/pause — pause otonomi\n/resume — lanjutkan otonomi\n/mark_stop <frasa> — larang aksi" },
     { title: "Lainnya", items: "/dms_status — status DMS\n/obedience_report — laporan kepatuhan" },
   ],

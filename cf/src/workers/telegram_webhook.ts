@@ -51,6 +51,7 @@ import { identityStatusText } from "../lib/identity_anchor";
 import { getPlans, getScheduledTasks } from "../lib/maestro";
 import { getDegradationStatus } from "../lib/degradation";
 import { delegateToGithub, flagAgentReport, truncationWarning, usesDeepResearchProtocol, stripDeepResearchFlag } from "../lib/agent_executor";
+import { e2bRun, e2bConfigured, e2bSummary, e2bStateHint } from "../lib/e2b";
 import { parseRecurSpec } from "../lib/agent_rules";
 import { readNegotiation, saveNegotiation, clearNegotiation, generateClarifyQuestions, compileFinalInstruction, type NegoSession } from "../lib/negotiation";
 import {
@@ -770,6 +771,19 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // unreadable/malformed inputs get a graceful message, never an error.
   if (isConnectorCommand(trimmed)) {
     await handleConnectorCommand(env, r, text);
+    return new Response("ok", { status: 200 });
+  }
+
+  // E2B (e2b.dev) sandbox executor — a SECOND borrowed external executor next
+  // to opencode, but for RAW EXECUTION instead of repo-bound agent work:
+  // /e2b <skrip> runs real shell/Python in an isolated Firecracker microVM
+  // (free Hobby tier: $100 credits, 20 sandboxes, no CC) and returns the
+  // output. Explicit command BEFORE the compliance pipeline. Fail-closed:
+  // each API/network error degrades to a graceful status message, never a
+  // dead "Ok.". When E2B_API_KEY is absent the capability reports as
+  // unconfigured and no sandbox is ever billed.
+  if (isE2bCommand(trimmed)) {
+    await handleE2bCommand(env, r, text);
     return new Response("ok", { status: 200 });
   }
 
@@ -1970,6 +1984,54 @@ async function handleConnectorCommand(env: Env, from: number, raw: string): Prom
   } catch (e) {
     await fire(sendMessage(env, from,
       `⚠️ Perintah connector gagal: ${String(e).slice(0, 200)}`));
+  }
+}
+
+/** True when the message is an E2B sandbox command (slash only). */
+function isE2bCommand(trimmed: string): boolean {
+  return trimmed === "/e2b" || /^\/e2b\b/i.test(trimmed);
+}
+
+/** Execute E2B commands: /e2b <skrip> runs real shell/Python in an E2B
+ *  Firecracker sandbox and DM the output; "/e2b" alone shows the syntax.
+ *  Fail-closed: unconfigured / network / API errors always degrade to a
+ *  graceful message, never throw. */
+async function handleE2bCommand(env: Env, from: number, raw: string): Promise<void> {
+  const trimmed = raw.trim();
+
+  try {
+    if (trimmed === "/e2b") {
+      await fire(sendMessage(env, from,
+        "💻 *E2B — eksekutor pinjaman eksternal kedua* (sandbox microVM gratis)\n" +
+        "Eksekusi nyata shell/Python yang tak bisa dilakukan sandbox Cloudflare (CPU 10ms). Benar-benar dijalankan di cloud E2B, bukan asumsi JARVIS.\n\n" +
+        "• `/e2b <skrip>` — jalankan perintah shell (mis. `python3 -c \"print(6*7)\"`)\n" +
+        "• `piplah dulu`? Sandbox baru setiap kali (instal paket di dalam perintah).\n\n" +
+        "Batas waktu eksekusi ±25 detik, output dibatasi. Gratis: Hobby tier $100 kredit awal, 20 sandbox paralel."));
+      return;
+    }
+
+    const sub = trimmed.match(/^\/e2b\s+(.+)$/s);
+    if (!sub) {
+      await fire(sendMessage(env, from, "Penggunaan: `/e2b <skrip shell/python>`"));
+      return;
+    }
+
+    const task = sub[1].trim();
+    if (!e2bConfigured(env)) {
+      await fire(sendMessage(env, from,
+        `⚠️ Eksekutor E2B belum aktif${e2bStateHint("e2b-not-configured")}`));
+      return;
+    }
+    if (task.length < 3) {
+      await fire(sendMessage(env, from, "📝 Beri perintah yang mau dijalankan (minimal 3 karakter)."));
+      return;
+    }
+
+    await fire(sendMessage(env, from, `💻 Menjalankan di sandbox E2B: \`${task.slice(0, 70)}${task.length > 70 ? "…" : ""}\` …`));
+    const res = await e2bRun(env, task, from);
+    await fire(sendMessage(env, from, e2bSummary(res, task)));
+  } catch (e) {
+    await fire(sendMessage(env, from, `⚠️ Perintah E2B gagal: ${String(e).slice(0, 200)}`));
   }
 }
 

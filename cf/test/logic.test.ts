@@ -29,6 +29,53 @@ import {
   detectRelevanceAmbiguity, resolveRelevanceConfirmation,
   parkPendingRelevance, readPendingRelevance, clearPendingRelevance,
 } from "../src/lib/relevance";
+import {
+  e2bRun, e2bConfigured, e2bStateHint, e2bDecodeConnectFrames, e2bSummary,
+} from "../src/lib/e2b";
+
+async function testE2bRails() {
+  // m9-v11.34 PINJAMAN: second borrowed external executor next to opencode
+  // (RAW sandbox execution via E2B). Fail-closed: no key / empty inputs must
+  // return safe shapes BEFORE any network is attempted, never throw.
+  const bare = { E2B_API_KEY: "", E2B_API_URL: "", E2B_TEMPLATE: "" };
+
+  assert.strictEqual(e2bConfigured(bare), false, "no key → unconfigured");
+  assert.strictEqual(e2bConfigured({ ...bare, E2B_API_KEY: "e2b_x" }), true, "key → configured");
+
+  const noKey = await e2bRun(bare, "echo halo", 1);
+  assert.strictEqual(noKey.ok, false, "no key → fail-closed (no network)");
+  assert.strictEqual(noKey.error, "e2b-not-configured", "no key → precise error token");
+  assert.strictEqual(noKey.stdout, undefined, "no key → no output fabricated");
+
+  const noTask = await e2bRun({ ...bare, E2B_API_KEY: "e2b_x" }, "   ", 1);
+  assert.strictEqual(noTask.error, "e2b-empty-task", "empty task → empty-task token");
+
+  assert.strictEqual(e2bStateHint("e2b-not-configured").includes("E2B_API_KEY"), true, "hint explains missing key");
+  assert.strictEqual(e2bStateHint("e2b-run_timeout").includes("batas"), true, "timeout hint readable");
+
+  // Connect frame decoder: craft a full envd stream -> stdout + end event.
+  const frame = (flag: number, obj: Record<string, unknown>): number[] => {
+    const json = Buffer.from(JSON.stringify(obj));
+    const head = [flag, (json.length >>> 24) & 0xff, (json.length >>> 16) & 0xff, (json.length >>> 8) & 0xff, json.length & 0xff];
+    return [...head, ...Array.from(json)];
+  };
+  const payloads: number[] = [
+    ...frame(0, { event: { start: { pid: 11 } } }),
+    ...frame(0, { event: { data: { stdout: Buffer.from("halo dari E2B\n").toString("base64") } } }),
+    ...frame(0, { event: { data: { stderr: Buffer.from("warn: kecil\n").toString("base64") } } }),
+    ...frame(0x80, { event: { end: { exited: true, status: "exit status 0" } } }),
+  ];
+  const frames = e2bDecodeConnectFrames(new Uint8Array(payloads));
+  assert.strictEqual(frames.length, 4, "decoder parses all Connect frames");
+  const endFrame = frames[3] as { event?: { end?: { status?: string } } };
+  assert.ok(/exit status 0/.test(endFrame.event?.end?.status ?? ""), "decoder keeps end event");
+
+  // e2bSummary renders a finished run markdown-safely.
+  const sum = e2bSummary({ ok: true, stdout: "42\n", exitCode: 0 }, "python3 -c 'print(6*7)'");
+  assert.ok(sum.includes("42"), "summary surfaces stdout");
+  assert.ok(sum.includes("💻"), "summary keeps the executor marker");
+  assert.ok(((sum.match(/```/g) ?? []).length % 2) === 0, "summary keeps code fences balanced");
+}
 
 async function testAgentExecutorRails() {
   // m9-v11.33 PINJAMAN optimization: dispatch must be fail-visible. A task
@@ -1651,6 +1698,7 @@ async function main() {
   testRelevanceGate();
   await testRelevancePersistence();
   await testAgentExecutorRails();
+  await testE2bRails();
   console.log("LOGIC TESTS PASSED");
 }
 
