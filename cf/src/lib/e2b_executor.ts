@@ -111,8 +111,20 @@ export async function probeE2bRun(env: Env, sandboxId: string): Promise<E2bProbe
   const s = await e2bStartProcessCollect(env, sandboxId, meta.accessToken, E2B_PROBE_SCRIPT, E2B_PROBE_TIMEOUT_MS);
   if (!s.ok) return { status: "gone", error: s.error ?? "e2b-probe-failed" };
   const out = `${s.stdout}${s.stderr}`.trim();
+  return e2bOutcome(out);
+}
+
+/** Pure: turn a probe's raw combined output into a status + clean report.
+ *  The probe appends "JARVIS_DONE" AFTER the run content, so strip the
+ *  TRAILING marker line (not a leading one) and keep everything user-side. */
+export function e2bOutcome(raw: string): E2bProbe {
+  const out = (raw ?? "").trim();
   if (!/JARVIS_DONE/.test(out)) return { status: "running" };
-  return { status: "done", output: out.replace(/^JARVIS_DONE\s*/, "").trim() };
+  const clean = out
+    .replace(/\n?JARVIS_DONE\s*$/, "")
+    .replace(/^JARVIS_DONE\s*/, "")
+    .trim();
+  return { status: "done", output: clean };
 }
 
 /** Extract the exit code line ("JARVIS_RC=0") from the raw run output. */
