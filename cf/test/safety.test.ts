@@ -330,6 +330,11 @@ async function testAiFailClosed() {
   const out = await ai.searchAndSynthesize(stubEnv, 1, "cari tentang xyz", "xyz");
   assert.strictEqual(typeof out.reply, "string");
   assert.ok(out.reply.length > 0, "canned fallback must be non-empty");
+  // m9-v11.40 evidence honesty: the pipeline must ALWAYS label whether the
+  // answer rests on citable search output (grounded), so a "riset" report can
+  // never quietly pass model knowledge off as verified research.
+  assert.strictEqual(typeof (out as { grounded?: boolean }).grounded, "boolean",
+    "reply must carry an explicit grounded flag");
 }
 
 // ----------------------------------------------------------------------

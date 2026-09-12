@@ -78,6 +78,14 @@ export function borrowedExecutorLabel(id: BorrowedExecutorId): string {
   }
 }
 
+/** Pure: build the riset report honoring evidence. A synthesis produced with
+ *  ZERO search output is not verified research — the report must carry a clear
+ *  ungrounded notice (never a confident ✅). Grounded replies pass through. */
+export function borrowedRisetReport(reply: string, grounded: boolean): string {
+  if (grounded) return reply;
+  return `${reply}\n\n⚠️ _Catatan JARVIS: tidak ada hasil pencarian terverifikasi saat eksekusi — ringkasan di atas berdasar pengetahuan model, bukan riset ter-grounding. Coba lagi nanti atau pakai \`/pinjam docs <library>\`._`;
+}
+
 /** Execute ONE borrowed task to a string report (fail-closed → "" on any
  *  error; the poller turns empty reports into a failed row). */
 export async function runBorrowedExecutor(
@@ -92,8 +100,11 @@ export async function runBorrowedExecutor(
     case "riset": {
       const res = await searchAndSynthesize(env, owner, b, b, {
         replyLang: "id",
-      }).catch(() => ({ reply: "", source: "failed" }));
-      return res.reply || "";
+      }).catch(() => null);
+      if (!res?.reply || res.source === "canned") return "";
+      // EVIDENCE HONESTY: route through the pure transform so ungrounded
+      // output is visibly labeled, not dressed up as verified research.
+      return borrowedRisetReport(res.reply, res.grounded ?? false);
     }
     case "docs": {
       const res = await lookupLibraryDocs(env, b).catch(() => ({ reply: null, ok: false, reason: "api_down" } as const));
