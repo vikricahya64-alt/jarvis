@@ -317,19 +317,6 @@ export function generateAcknowledgment(
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-/** Generate a progress indicator for long operations. */
-export function progressIndicator(stage: string): string {
-  const indicators: Record<string, string> = {
-    searching: "🔍 Mencari...",
-    analyzing: "🤔 Menganalisis...",
-    synthesizing: "📝 Menyusun...",
-    translating: "🌐 Menerjemahkan...",
-    reflecting: "💭 Merefleksi...",
-    default: "⏳ Memproses...",
-  };
-  return indicators[stage] ?? indicators.default;
-}
-
 /** Build the final reply by combining acknowledgment + formatted response. */
 export function buildFinalReply(
   rawReply: string,

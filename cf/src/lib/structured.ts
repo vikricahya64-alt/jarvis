@@ -20,26 +20,6 @@ export function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** Compose a validator for a set of required fields (string-typed, with
- *  optional per-field predicates). Extra keys are ignored. */
-export function stringFieldsValidator<T extends object>(
-  fields: Array<[keyof T & string, string]>,
-  predicates: Partial<Record<keyof T & string, (s: string) => boolean>> = {},
-): Validator {
-  return (v) => {
-    if (!isObj(v)) return "objektif: bukan objek JSON";
-    for (const [key, label] of fields) {
-      const fv = v[key as string];
-      if (typeof fv !== "string" || !fv.trim()) {
-        return `objektif: field '${label}' wajib bertipe string non-kosong`;
-      }
-      const pred = predicates[key];
-      if (pred && !pred(String(fv))) return `objektif: field '${label}' tidak valid`;
-    }
-    return null;
-  };
-}
-
 /** Extract a fenced JSON block from free text (```json ... ``` or a bare
  *  {...} region). Returns the matching substring, or null. */
 export function extractJsonBlock(text: string): string | null {

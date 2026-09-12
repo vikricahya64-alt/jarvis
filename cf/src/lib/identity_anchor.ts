@@ -13,15 +13,6 @@
 
 import { Env } from "./db";
 
-export interface IdentityEpoch {
-  epochId: string;           // SHA256 of config_hash + previous + timestamp
-  configHash: string;        // Hash of entire system config snapshot
-  previousEpochHash: string | null;
-  covenantHash: string;      // Hash of all active covenant clauses (for binding)
-  timestamp: number;         // Unix ms
-  verified: boolean;         // Set true after verification passes
-}
-
 /** sha-256 hex digest (native Web Crypto). */
 async function sha256(data: string): Promise<string> {
   const buffer = new TextEncoder().encode(data);

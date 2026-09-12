@@ -24,13 +24,13 @@
 // hilang diam-diam. Payload cap + truncation notice dipakai bersama.
 //=====================================================================
 
-import { Env, listBorrowedAgentTasks, finishAgentTask, rememberMemory } from "./db";
+import { Env, listBorrowedAgentTasks } from "./db";
 import { sanitizeAgentReport, flagAgentReport } from "./agent_executor";
+import { finalizeAgentTask } from "./agent_results";
 import { searchAndSynthesize } from "./ai";
 import { lookupLibraryDocs } from "./context7";
 import { readFigmaViaVercel, notionSearchViaVercel } from "./vercel";
 import { getWeatherText } from "./weather";
-import { sendMessage } from "./telegram";
 
 export type BorrowedExecutorId = "riset" | "docs" | "figma" | "notion" | "cuaca";
 
@@ -137,43 +137,21 @@ export async function pollBorrowedRuns(env: Env, limit = 6): Promise<number> {
   let finished = 0;
   for (const t of rows) {
     const parsed = parseBorrowedRow(t.task, t.executor ?? "");
-    const report = await runBorrowedExecutor(env, parsed.tag.replace(/^borrowed:/, "") as BorrowedExecutorId, parsed.body, t.owner_id);
+    const id = parsed.tag.replace(/^borrowed:/, "") as BorrowedExecutorId;
+    const report = await runBorrowedExecutor(env, id, parsed.body, t.owner_id);
     const raw = sanitizeAgentReport(report);
     const flagged = flagAgentReport(raw);
+    const base = {
+      env, id: t.id, owner: t.owner_id, task: t.task, flagged,
+      outcomeLabel: "eksekutor pinjaman", memoryLabel: `pinjaman ${id}`,
+    };
     if (!raw) {
-      const err = `eksekutor ${parsed.tag.replace("borrowed:", "")} tidak menghasilkan hasil`;
-      await finishAgentTask(env, t.id, "failed", "", err);
-      await deliverBorrowedResult(env, t.id, t.owner_id, "failed", "", err, flagged);
+      await finalizeAgentTask({ ...base, st: "failed", result: "", error: `eksekutor ${id} tidak menghasilkan hasil` });
       finished++;
       continue;
     }
-    await finishAgentTask(env, t.id, "done", raw.slice(0, 60000), "", "");
-    const headline = (raw || t.task).replace(/\s+/g, " ").trim().slice(0, 140);
-    await rememberMemory(env, `Eksekusi pinjaman ${parsed.tag.replace("borrowed:", "")} #${t.id}: ${headline}`, {
-      type: "fact", tags: ["agent_task", "executor", "borrowed"], importance: 3, source: "agent_task",
-    }).catch(() => {});
-    await deliverBorrowedResult(env, t.id, t.owner_id, "done", raw, "", flagged);
+    await finalizeAgentTask({ ...base, st: "done", result: raw, error: "" });
     finished++;
   }
   return finished;
-}
-
-/** DM the owner a finished borrowed-executor run (format mirrors /agent/done). */
-async function deliverBorrowedResult(
-  env: Env,
-  id: number,
-  owner: number,
-  st: "done" | "failed",
-  result: string,
-  error: string,
-  flagged: boolean,
-): Promise<void> {
-  const prefix = st === "done" ? `✅ Tugas *#${id}* selesai (eksekutor pinjaman)` : `❌ Tugas *#${id}* gagal (eksekutor pinjaman)`;
-  const detail = st === "done"
-    ? (result || "(tanpa output)").slice(0, 2800)
-    : (error || "-").replace(/\s+/g, " ").slice(0, 300);
-  const warnLine = flagged
-    ? "\n⚠️ *Catatan JARVIS:* laporan mengandung pola manipulatif (injeksi perintah). Disimpan apa adanya, tidak dieksekusi."
-    : "";
-  await sendMessage(env, owner, `${prefix}:\n\n${detail}${warnLine}\n(_riwayat: /tugas list_)`).catch(() => {});
 }

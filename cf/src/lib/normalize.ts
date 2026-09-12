@@ -238,30 +238,6 @@ export function normalizeInput(raw: string): string {
   return out;
 }
 
-/** Detect language of input text for normalization purposes. */
-export function detectInputLanguage(text: string): "id" | "en" | "mixed" {
-  const idWords = /\b(?:apa|siapa|dimana|kapan|kenapa|bagaimana|untuk|dengan|ini|itu|dan|atau|tidak|bisa|ada|adalah|akan|sudah|belum|sedang|mau|perlu|harus|tolong|bantu|cari|info|terima kasih|makasih|oke|baik)\b/i;
-  const enWords = /\b(?:what|who|where|why|how|the|is|are|can|do|does|for|with|this|that|and|or|not|have|has|will|would|could|should|please|thank|thanks|ok|good|hello|hey|hi)\b/i;
-
-  const idCount = (text.match(idWords) || []).length;
-  const enCount = (text.match(enWords) || []).length;
-
-  if (idCount > 0 && enCount > 0) return "mixed";
-  if (idCount > enCount) return "id";
-  if (enCount > idCount) return "en";
-  return "id"; // default to Indonesian
-}
-
-/** Normalize text based on detected language. */
-export function normalizeInputByLanguage(raw: string): {
-  text: string;
-  language: "id" | "en" | "mixed";
-} {
-  const language = detectInputLanguage(raw);
-  const text = normalizeInput(raw);
-  return { text, language };
-}
-
 /** Greeting matcher yang toleran terhadap slang/typo dan hiasan emoji. */
 export const GREETING_RE =
   /^(halo|hai|hi|hello|hey|pagi|siang|sore|malam|assalamualaikum|assalamu['`]?alaikum|selamat)/i;

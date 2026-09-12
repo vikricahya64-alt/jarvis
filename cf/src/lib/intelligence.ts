@@ -25,7 +25,6 @@ import {
   inferEmotionFromContext,
   type EmotionSignal, type MoodState,
 } from "./emotion";
-import { detectLanguage, type Language } from "./jarvis_language";
 import { comprehend, comprehensionNote, LANG_NAMES, type ComprehensionProfile } from "./comprehension";
 import {
   getSession, type SessionState,
@@ -53,11 +52,8 @@ import {
   detectRelevanceAmbiguity, parkPendingRelevance,
   readPendingRelevance, clearPendingRelevance, resolveRelevanceConfirmation,
 } from "./relevance";
-import { readFailureTally } from "./failure";
-import { describeGapProposals } from "./gap_upgrade";
 import { reflectOnTurn } from "./evolution";
 import { SELF_REF_RE } from "./identity";
-import { probeProviders } from "./providers";
 
 // ============================================================================
 // Types
@@ -65,7 +61,8 @@ import { probeProviders } from "./providers";
 
 /** Perception result — what the brain understands about the input. */
 export interface Perception {
-  language: Language;
+  /** Alias of comprehension.language (satu sumber: root comprehension, f3). */
+  language: ComprehensionProfile["language"];
   /** m9-v11.32: ROOT comprehension engine — universal language, literacy
    *  register, and knowledge-domain awareness. Aditif; cabang lain tetap
    *  memakai `language`/`intent` lama. */
@@ -162,9 +159,10 @@ export async function perceive(
   owner: number,
   text: string,
 ): Promise<Perception> {
-  // Parallel perception tasks (independent of each other)
-  const [language, rawEmotion, session] = await Promise.all([
-    Promise.resolve(detectLanguage(text)),
+  // Parallel perception tasks (independent of each other). Bahasa dideteksi
+  // SEKALI oleh root comprehension (f3) — satu sumber, bukan dua mesin.
+  const comp = comprehend(text);
+  const [rawEmotion, session] = await Promise.all([
     Promise.resolve(detectEmotion(text)),
     Promise.resolve(getSession(owner)),
   ]);
@@ -205,8 +203,8 @@ export async function perceive(
   const intent = classifyIntent(text, topic);
 
   return {
-    language,
-    comprehension: comprehend(text),
+    language: comp.language,
+    comprehension: comp,
     emotion,
     mood,
     intent,
@@ -1098,7 +1096,7 @@ export async function act(
     case "orchestrate_research": {
       if (!topic) return { reply: "Topik tidak ditemukan.", source: "research" };
       const anchor = isFollowUpQuery(d) ? resolveFollowUpAnchor(enrichedContext)?.prior ?? "" : "";
-      const result = await orchestrateResearch(env, owner, d, topic, anchor, replyLang);
+      const result = await orchestrateResearch(env, owner, d, topic, anchor, replyLang, comprehensionNote(perception.comprehension));
       if (result) return { reply: result, source: "research" };
       // Fallback to search
       const fallback = await searchAndSynthesize(env, owner, d, topic, { replyLang });
@@ -1465,66 +1463,4 @@ export async function processIntelligence(
       topic: perception.topic,
     },
   };
-}
-
-// ============================================================================
-// Brain Status: for /status command
-// ============================================================================
-
-/** Get comprehensive brain status for diagnostics. */
-export async function getBrainStatus(owner: number, env?: Env): Promise<string> {
-  const session = getSession(owner);
-  const mood = getMoodState(owner);
-  const metrics = brainMetrics;
-  const gateLines = env ? await readFailureTally(env) : "";
-  const gapLines = env ? await describeGapProposals(env) : "";
-  // m9-v11.18 free-service observability: live ping of every free provider
-  // (metadata endpoints only, cached 60s). Exposes a dead key/endpoint that
-  // aggregated rates alone would hide.
-  const probeLines = env
-    ? await probeProviders(env).then((ps) =>
-        ps.map((p) => {
-          const mark = p.configured ? (p.live ? "🟢" : "🔴") : "⚪";
-          return `  ${mark} ${p.name}: ${p.configured ? (p.live ? "live" : "DEAD") : "not configured"}${p.ms !== null ? ` (${p.ms})` : ""} — ${p.detail}`;
-        }),
-      )
-    : [];
-  const vectorDimsInfo =
-    env && probeLines.some((l) => l.includes("memory_vec"))
-      ? "  (bge-m3 ×1024 dims, cosine)" : "";
-
-  const lines = [
-    "🧠 *J.A.R.V.I.S. Brain Status*",
-    "",
-    `*Cognitive Cycle:*`,
-    `  Session: Turn ${session.turnCount}, Mode: ${session.conversationMode}`,
-    `  Mood: ${mood.current} (intensity: ${(mood.intensity * 100).toFixed(0)}%)`,
-    `  Topic: ${session.activeTopic ?? "None"}`,
-    `  Working Memory: ${session.workingMemory.extractedFacts.length} facts`,
-    "",
-    `*Performance:*`,
-    `  Total requests: ${metrics.totalRequests}`,
-    `  Avg latency: ${Math.round(metrics.avgLatencyMs)}ms`,
-    `  Strategies used: ${Object.entries(metrics.strategyCounts).map(([k, v]) => `${k}(${v})`).join(", ") || "none yet"}`,
-    "",
-    `*Provider Health:*`,
-    ...Object.entries(metrics.providerSuccessRates).map(([k, v]) => {
-      const rate = v.ok + v.fail > 0 ? ((v.ok / (v.ok + v.fail)) * 100).toFixed(0) : "N/A";
-      return `  ${k}: ${rate}% (${v.ok} ok, ${v.fail} fail)`;
-    }),
-    "",
-    `*Provider Probe (live):*`,
-    ...(probeLines.length > 0 ? probeLines : ["  (env not provided)"]),
-    "",
-    "*Sub-Systems:*",
-    "  • Perception (emotion/language/intent): ✅",
-    "  • Cognition (LLM/research/design): ✅",
-    "  • Reflection (learning/memory): ✅",
-    "  • Safety (verifier/heuristics): ✅",
-    "",
-  ];
-  if (vectorDimsInfo) lines.push(vectorDimsInfo);
-  if (gateLines) lines.push(gateLines);
-  if (gapLines) lines.push(gapLines);
-  return lines.map((l) => l.trimEnd()).join("\n");
 }

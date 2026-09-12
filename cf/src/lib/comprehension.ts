@@ -42,8 +42,8 @@
 //   - Karena akar-nya komprehensi teks, "memahami diri" ikut-ikutan paham
 //     tiap pembaruan kemampuan tanpa perlu di-rekode per kasus.
 //
-// Engine ini ADITIF — tidak menghapus cabang apa pun (jarvis_language,
-// normalize, translate, research, memory, dst). Ia hanya melengkapi
+// Engine ini ADITIF — tidak menghapus cabang apa pun (normalize,
+// translate, research, memory, dst). Ia hanya melengkapi
 // lapisan persepsi dengan profil pemahaman yang lebih dalam, murni
 // deterministic & zero-cost (free tier) sehingga aman dipakai di tiap
 // turn. Fail-open: bila teks tak cocok pola apa pun, tetap mengembalikan
@@ -96,7 +96,7 @@ export interface ComprehensionProfile {
   domain: { type: KnowDomain; confidence: number };
   /** Daftar bahasa yang terdeteksi campur (code-switching). */
   mixed: ComprehendLang[];
-  /** Rekomendasi adaptasi per-bahasa (mirror CulturalContext). */
+  /** Rekomendasi adaptasi per-bahasa. */
   adapt: {
     formality: "formal" | "casual" | "netral";
     honorifics: boolean;
@@ -194,7 +194,8 @@ function detectScriptAndExotic(text: string): { script: Script; lang: Comprehend
 }
 
 /**
- * Deteksi bahasa universal (aditif di atas jarvis_language).
+ * Deteksi bahasa universal — SATU-SATUNYA mesin deteksi bahasa JARVIS (f3)
+ * sejak jarvis_language.ts dihapus (m9-v11.51+).
  * Skor function-word untuk bahasa Latin + deteksi aksara untuk non-Latin.
  * Deterministic, fail-open (unknown bila tak cocok).
  */

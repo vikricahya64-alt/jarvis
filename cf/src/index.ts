@@ -37,17 +37,6 @@ const WORKER_URL = "https://jarvis-sovereign.vikricahya64.workers.dev";
 
 const OWNER = (env: Env) => Number(env.OWNER_TELEGRAM_ID || 0);
 
-/** Log request to D1 for monitoring (fire-and-forget). */
-async function logRequest(env: Env, path: string, method: string, status: number, startMs: number): Promise<void> {
-  const latency = Date.now() - startMs;
-  const error = status >= 500 ? 1 : 0;
-  try {
-    await env.DB.prepare(
-      `INSERT INTO request_log (ts, path, method, status_code, latency_ms, error) VALUES (?, ?, ?, ?, ?, ?)`,
-    ).bind(Date.now(), path.slice(0, 100), method, status, latency, error).run();
-  } catch { /* availability */ }
-}
-
 /** Fail-closed visibility: when handleUpdate throws, tell the owner instead of
  *  silently swallowing the message. Best-effort — never throws. */
 async function notifyOwnerFailure(
@@ -151,12 +140,9 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
-    const startMs = Date.now();
 
     const respond = async (res: Promise<Response> | Response): Promise<Response> => {
-      const r = await res;
-      logRequest(env, path, method, r.status, startMs).catch(() => {});
-      return r;
+      return res;
     };
 
     //------------------------------------------------------------------
@@ -191,35 +177,19 @@ env: env.APP_ENV ?? "unknown",
       } catch {
         return respond(new Response("bad json", { status: 400 }));
       }
-      // Idempotency: dedupe by update_id (KV, 48h TTL).
-      const updId = update?.update_id;
-      if (updId != null) {
-        try {
-          const seen = await env.CONFIG_KV.get(`upd:${updId}`);
-          if (seen) return respond(new Response("ok", { status: 200 }));
-        } catch { /* availability over dedupe */ }
-        let res: Response;
-        try {
-          res = await handleUpdate(env, update);
-        } catch (e) {
-          console.error("[webhook] handleUpdate error:", (e as Error).message, (e as Error).stack);
-          // NEVER silent: any internal exception still tells the owner what
-          // happened instead of dropping their message without a trace.
-          await notifyOwnerFailure(env, update);
-          res = new Response("ok", { status: 200 }); // always 200 to prevent Telegram retry storm
-        }
-        await env.CONFIG_KV.put(`upd:${updId}`, "1", { expirationTtl: 172800 }).catch(() => {});
-        return respond(res);
-      }
-      let res2: Response;
+      // Idempotency by update_id lives INSIDE handleUpdate (upd_rx:) so a
+      // redelivery during slow processing is rejected before side effects.
+      let res: Response;
       try {
-        res2 = await handleUpdate(env, update);
+        res = await handleUpdate(env, update);
       } catch (e) {
-        console.error("[webhook] handleUpdate error:", (e as Error).message);
+        console.error("[webhook] handleUpdate error:", (e as Error).message, (e as Error).stack);
+        // NEVER silent: any internal exception still tells the owner what
+        // happened instead of dropping their message without a trace.
         await notifyOwnerFailure(env, update);
-        res2 = new Response("ok", { status: 200 });
+        res = new Response("ok", { status: 200 }); // always 200 to prevent Telegram retry storm
       }
-      return respond(res2);
+      return respond(res);
     }
 
     //------------------------------------------------------------------
@@ -546,7 +516,7 @@ ts: Date.now(),
         await ensureTelegramCommands(env);
         const optResult = await runConfigOptimization(env);
         console.log(`[cron] config_opt: applied=${optResult.applied.length} suggestions=${optResult.suggestions.length} (${Date.now() - start}ms)`);
-      } else if (cron === "0 8 * * 0" || cron === "0 8 * * *") {
+      } else if (cron === "0 8 * * *") {
         const isSunday = new Date().getUTCDay() === 0;
         if (isSunday) {
           await sendWeeklyObedienceReport(env, owner);

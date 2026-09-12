@@ -191,12 +191,3 @@ export async function lookupLibraryDocs(
   }
   return { reply: reply.slice(0, 3600), ok: true };
 }
-
-export async function tryContext7(
-  env: Env,
-  userText: string,
-  context: Array<{ role: string; content: string }> = [],
-): Promise<string | null> {
-  const res = await lookupLibraryDocs(env, userText, context).catch(() => ({ reply: null, ok: false } as const));
-  return res.ok && res.reply ? res.reply : null;
-}

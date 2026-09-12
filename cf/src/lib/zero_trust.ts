@@ -14,9 +14,7 @@
 //   Cloudflare-Client-Cert-Issuer
 //=====================================================================
 
-import { Env } from "./db";
-
-export interface AuthContext {
+interface AuthContext {
   authenticated: boolean;
   ownerId: number | null;
   subjectCN: string | null;
@@ -46,38 +44,4 @@ export function requireCert(request: Request): { ok: boolean; error?: string } {
     return { ok: false, error: "certificate CN is not the system operator" };
   }
   return { ok: true };
-}
-
-/** Build a minimal auth context from the request + telemetry gate. */
-export function buildContext(
-  request: Request,
-  env: Env,
-  telegramId: number | null,
-): AuthContext {
-  const subject = request.headers.get("Cloudflare-Client-Cert-Subject") ?? null;
-  const verified = clientCertVerified(request);
-  // In production the tunnel (Access) already requires the cert, so a verified
-  // cert is authoritative. On a raw workers.dev exposure, also require CN match.
-  const sysOp = isSystemOperator(request);
-  const triggeredByTelegram = telegramId !== null && telegramId === Number(env.OWNER_TELEGRAM_ID || 0);
-
-  if (verified && (sysOp || triggeredByTelegram)) {
-    return { authenticated: true, ownerId: Number(env.OWNER_TELEGRAM_ID || 0), subjectCN: subject };
-  }
-  if (verified && !sysOp && !triggeredByTelegram) {
-    return { authenticated: false, ownerId: null, subjectCN: subject, reason: "non-operator cert" };
-  }
-  return { authenticated: false, ownerId: null, subjectCN: subject, reason: "no client cert" };
-}
-
-/**
- * Spectrum/Cron sender is Cloudflare itself (system), never a caller cert.
- * Scheduled invocations get their own context.
- */
-export function systemContext(env: Env): AuthContext {
-  return {
-    authenticated: true,
-    ownerId: Number(env.OWNER_TELEGRAM_ID || 0) || null,
-    subjectCN: "system",
-  };
 }

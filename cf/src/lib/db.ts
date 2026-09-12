@@ -199,12 +199,14 @@ export async function obedienceWeekly(env: Env, owner: number): Promise<(
   return results as { id: number; compliance: string; decision: string; priority: number; ts: number }[];
 }
 
-/** Queue depth counters for /queue_status. */
+/** Lifetime producer/consumer activity counters for /queue_status. Rows are
+ *  append-only (never decremented), so these are cumulative totals of tasks
+ *  ever enqueued per class — NOT current queue depth. */
 export async function queueStatus(env: Env): Promise<Record<string, number>> {
   const mk = async (q: string) => {
     try {
-      // D1 cannot introspect queue depth; derive from tasks table presence.
-      // We keep a lightweight counters table for producer/consumer activity.
+      // D1 cannot introspect queue depth; derive from the counters table the
+      // producer side appends to on every insert.
       const r = await env.DB.prepare(
         "SELECT COUNT(*) AS n FROM task_counters WHERE queue = ?",
       ).bind(q).first<{ n: number }>();
@@ -353,65 +355,6 @@ export async function amendConstitution(
 // ---------------------------------------------------------------------
 // Value alignment (L9 passive ethical learning port)
 // ---------------------------------------------------------------------
-export const DRIFT_THRESHOLD_CORRECTIONS = 5;
-export const DRIFT_WINDOW_DAYS = 14;
-export const PROPOSAL_TTL_DAYS = 7;
-
-/** Insert a correction signal (durable drift counter in interaction_logs). */
-export async function recordCorrection(
-  env: Env,
-  owner: number,
-  domain: string,
-  opts: { intent?: string; correction_signal?: number; note?: string } = {},
-): Promise<{ drift: boolean; domain: string; correctionsInWindow: number }> {
-  const dom = (domain || "misc").toLowerCase();
-  const now = Date.now();
-  const cutoff = now - DRIFT_WINDOW_DAYS * 86400_000;
-  await env.DB.prepare(
-    `INSERT INTO interaction_logs (owner_id, ts, kind, intent, correction_signal, payload_json)
-     VALUES (?, ?, 'correction', ?, ?, ?)`,
-  ).bind(owner, now, opts.intent ?? "", opts.correction_signal ?? -1,
-    JSON.stringify({ domain: dom, note: opts.note ?? "" })).run();
-  const { results } = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM interaction_logs
-     WHERE owner_id = ? AND kind='correction' AND ts >= ?`,
-  ).bind(owner, cutoff).all<{ n: number }>();
-  const count = results?.[0]?.n ?? 0;
-  return { drift: count >= DRIFT_THRESHOLD_CORRECTIONS, domain: dom, correctionsInWindow: count };
-}
-
-/** Insert a value-update proposal (status pending, expires in TTL). */
-export async function proposeValue(
-  env: Env,
-  owner: number,
-  domain: string,
-  proposal: string,
-  opts: { oldValue?: string; reason?: string; confidence?: number } = {},
-): Promise<number> {
-  const expiresAt = Date.now() + PROPOSAL_TTL_DAYS * 86400_000;
-  const res = await env.DB.prepare(
-    `INSERT INTO value_proposals
-     (owner_id, ts, domain, old_value, new_proposal, reason, confidence, status, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-  ).bind(owner, Date.now(), (domain || "misc").toLowerCase(),
-    opts.oldValue ?? "", proposal, opts.reason ?? "", opts.confidence ?? 0.7, expiresAt).run();
-  return res.meta.last_row_id as number;
-}
-
-/** Confirm or reject a pending proposal. Returns true if a row was updated. */
-export async function resolveProposal(
-  env: Env,
-  owner: number,
-  proposalId: number,
-  accept: boolean,
-): Promise<boolean> {
-  const status = accept ? "confirmed" : "rejected";
-  const res = await env.DB.prepare(
-    `UPDATE value_proposals SET status=?, confirmed_at=? WHERE id=? AND owner_id=? AND status='pending'`,
-  ).bind(status, Date.now(), proposalId, owner).run();
-  return (res.meta.changes ?? 0) > 0;
-}
-
 /** Mark unconfirmed proposals past TTL as expired. Returns count expired. */
 export async function sweepExpiredProposals(env: Env, now = Date.now()): Promise<number> {
   const res = await env.DB.prepare(
@@ -422,103 +365,6 @@ export async function sweepExpiredProposals(env: Env, now = Date.now()): Promise
 }
 
 // ---------------------------------------------------------------------
-// Passive Emotional Learning (L9 extension)
-// ---------------------------------------------------------------------
-// Stores emotional response patterns to adapt future responses.
-// When user corrects emotional tone, learn and adapt.
-
-/** Store emotional response pattern for a topic/user pair.
- *  Helps adapt tone when direct emotion detection fails. */
-export async function storeEmotionalPattern(
-  env: Env,
-  _owner: number,
-  topic: string,
-  emotion: string,
-  responseTone: string,
-  success: boolean, // true if user accepted, false if corrected
-): Promise<void> {
-  const content = `[emotional_pattern] Topic: ${topic} | Detected: ${emotion} | Tone: ${responseTone} | Success: ${success}`;
-  const importance = success ? 1.5 : 2.0; // Corrections are more important
-  await rememberMemorySmart(env, content, {
-    type: "fact",
-    tags: ["emotional_pattern", topic.toLowerCase().slice(0, 50)],
-    importance,
-    source: "emotional_learning",
-  });
-}
-
-/** Retrieve emotional patterns for a topic to adapt response tone. */
-export async function getEmotionalPatterns(
-  env: Env,
-  _owner: number,
-  topic: string,
-): Promise<Array<{ emotion: string; tone: string; success: boolean }>> {
-  try {
-    const tail = topic.trim().replace(/[^\w\s-]/g, " ").slice(0, 60);
-    if (!tail) return [];
-    // Build an explicit AND query with each token QUOTED. A bare tail string is
-    // unsafe as an FTS5 query — a user topic containing operator tokens
-    // ("OR", "AND", "NOT") changes semantics or errors out, and an unquoted
-    // multi-token string's implicit operator is tokenizer-dependent. Quoting +
-    // explicit AND makes the match deterministic.
-    const tokens = tail.split(/\s+/).filter(Boolean);
-    const q = tokens.map((t) => `"${t}"`).join(" AND ");
-    if (!q) return [];
-    const { results } = await env.DB.prepare(
-      `SELECT m.content
-       FROM memories_fts
-       JOIN memories m ON m.rowid = memories_fts.rowid
-       WHERE memories_fts MATCH ? AND m.source = 'emotional_learning'
-       ORDER BY bm25(memories_fts, 10.0, 5.0, 2.0) ASC
-       LIMIT 3`,
-    ).bind(q).all<{ content: string }>();
-    
-    return (results ?? []).map(r => {
-      const match = r.content.match(/Detected: (.+?) \| Tone: (.+?) \| Success: (true|false)/);
-      return match ? {
-        emotion: match[1],
-        tone: match[2],
-        success: match[3] === "true",
-      } : null;
-    }).filter((p): p is NonNullable<typeof p> => p !== null);
-  } catch {
-    return [];
-  }
-}
-
-/** Get the best response tone for a topic based on learned patterns. */
-export async function getBestResponseTone(
-  env: Env,
-  owner: number,
-  topic: string,
-): Promise<string | null> {
-  const patterns = await getEmotionalPatterns(env, owner, topic);
-  if (patterns.length === 0) return null;
-  
-  // Count successes per tone
-  const toneCounts: Record<string, { success: number; total: number }> = {};
-  for (const p of patterns) {
-    if (!toneCounts[p.tone]) toneCounts[p.tone] = { success: 0, total: 0 };
-    toneCounts[p.tone].total++;
-    if (p.success) toneCounts[p.tone].success++;
-  }
-  
-  // Return tone with highest success rate (min 2 uses)
-  let best: string | null = null;
-  let bestRate = 0;
-  for (const [tone, counts] of Object.entries(toneCounts)) {
-    if (counts.total >= 2) {
-      const rate = counts.success / counts.total;
-      if (rate > bestRate) {
-        bestRate = rate;
-        best = tone;
-      }
-    }
-  }
-  
-  return best;
-}
-
 /** Record a task counter for a queue class (used by producer side). */
 export async function recordTaskCounters(env: Env, queue: string, owner: number): Promise<void> {
   try {
@@ -902,17 +748,23 @@ export async function decayMemories(
       rowid: number; importance: number; last_retrieved: number; created_at: number;
     }>();
 
+    const batch: D1PreparedStatement[] = [];
     for (const row of (stale.results ?? [])) {
       const age = now - (row.last_retrieved || row.created_at);
       const decayFactor = Math.pow(0.5, age / halfLifeMs);
       const newImportance = Math.max(0.5, row.importance * decayFactor);
 
       if (newImportance < row.importance) {
-        await env.DB.prepare(
-          `UPDATE memories SET importance = ? WHERE rowid = ?`,
-        ).bind(Math.round(newImportance * 100) / 100, row.rowid).run();
-        decayed++;
+        batch.push(
+          env.DB.prepare(
+            `UPDATE memories SET importance = ? WHERE rowid = ?`,
+          ).bind(Math.round(newImportance * 100) / 100, row.rowid),
+        );
       }
+    }
+    if (batch.length) {
+      await env.DB.batch(batch).catch(() => {});
+      decayed = batch.length;
     }
 
     // Hapus memori yang sudah sangat tidak penting dan tidak pernah diakses
@@ -924,45 +776,6 @@ export async function decayMemories(
   } catch { /* availability */ }
 
   return { decayed, removed };
-}
-
-// ---------------------------------------------------------------------
-// Observational Memory (VentureBeat 2025)
-// ---------------------------------------------------------------------
-// Format: "[Tanggal] Observasi tentang user/preferensi/kejadian."
-// Structured, dated notes yang ringkas tapi bisa dirujuk dalam reasoning.
-
-/** Simpan observasi terstruktur tentang user. */
-export async function saveObservation(
-  env: Env,
-  _owner: number,
-  observation: string,
-  category: string = "general",
-): Promise<void> {
-  const dated = `[${new Date().toISOString().slice(0, 10)}] ${observation}`;
-  await rememberMemorySmart(env, dated, {
-    type: "context",
-    tags: ["observation", category],
-    importance: 1.5, // observasi lebih penting dari fakta biasa
-    source: "observation",
-  });
-}
-
-/** Ambil observasi terbaru tentang user. */
-export async function getRecentObservations(
-  env: Env,
-  k = 5,
-): Promise<string[]> {
-  try {
-    const { results } = await env.DB.prepare(
-      `SELECT content FROM memories
-       WHERE type = 'context' AND tags LIKE '%observation%'
-       ORDER BY created_at DESC LIMIT ?`,
-    ).bind(k).all<{ content: string }>();
-    return (results ?? []).map(r => r.content);
-  } catch {
-    return [];
-  }
 }
 
 // ---------------------------------------------------------------------
@@ -1098,20 +911,26 @@ export async function checkDueReminders(env: Env): Promise<Array<{ ownerId: numb
       `SELECT id, owner_id, text, due_at, notified, repeat FROM reminders WHERE notified = 0 AND due_at <= ? LIMIT 100`,
     ).bind(now).all<{ id: number; owner_id: number; text: string; due_at: number; repeat: string }>();
     const due = results ?? [];
+    const batch: D1PreparedStatement[] = [];
     for (const r of due) {
       if (r.repeat === "daily" || r.repeat === "weekly" || r.repeat === "hourly") {
         const step = r.repeat === "daily" ? 86400_000 : r.repeat === "weekly" ? 604800_000 : 3600_000;
         let next = r.due_at + step;
         while (next <= now) next += step; // skip catch-up bursts
-        await env.DB.prepare(
-          `UPDATE reminders SET due_at = ? WHERE id = ? AND notified = 0`,
-        ).bind(next, r.id).run().catch(() => {});
+        batch.push(
+          env.DB.prepare(
+            `UPDATE reminders SET due_at = ? WHERE id = ? AND notified = 0`,
+          ).bind(next, r.id),
+        );
       } else {
-        await env.DB.prepare(
-          `UPDATE reminders SET notified = 1 WHERE id = ? AND notified = 0`,
-        ).bind(r.id).run().catch(() => {});
+        batch.push(
+          env.DB.prepare(
+            `UPDATE reminders SET notified = 1 WHERE id = ? AND notified = 0`,
+          ).bind(r.id),
+        );
       }
     }
+    if (batch.length) await env.DB.batch(batch).catch(() => {});
     return due.map((r) => ({ ownerId: r.owner_id, text: r.text, dueAt: r.due_at }));
   } catch {
     return [];
@@ -1617,14 +1436,6 @@ export async function listProducts(env: Env, owner: number, status = "active"): 
   } catch { return []; }
 }
 
-export async function getProduct(env: Env, owner: number, id: number): Promise<Product | null> {
-  try {
-    return await env.DB.prepare(
-      `SELECT * FROM products WHERE owner_id = ? AND id = ?`,
-    ).bind(owner, id).first<Product>() ?? null;
-  } catch { return null; }
-}
-
 export async function updateProduct(
   env: Env, owner: number, id: number,
   fields: Partial<Pick<Product, "name" | "price" | "cost" | "stock" | "min_stock" | "unit" | "category" | "sku" | "description" | "status">>,
@@ -1641,24 +1452,6 @@ export async function updateProduct(
     const res = await env.DB.prepare(
       `UPDATE products SET ${sets.join(", ")} WHERE owner_id = ? AND id = ?`,
     ).bind(...vals).run();
-    return (res.meta.changes ?? 0) > 0;
-  } catch { return false; }
-}
-
-export async function deleteProduct(env: Env, owner: number, id: number): Promise<boolean> {
-  try {
-    const res = await env.DB.prepare(
-      `DELETE FROM products WHERE owner_id = ? AND id = ?`,
-    ).bind(owner, id).run();
-    return (res.meta.changes ?? 0) > 0;
-  } catch { return false; }
-}
-
-export async function adjustStock(env: Env, owner: number, id: number, delta: number): Promise<boolean> {
-  try {
-    const res = await env.DB.prepare(
-      `UPDATE products SET stock = MAX(0, stock + ?), updated_at = ? WHERE owner_id = ? AND id = ?`,
-    ).bind(delta, Date.now(), owner, id).run();
     return (res.meta.changes ?? 0) > 0;
   } catch { return false; }
 }
@@ -1705,22 +1498,6 @@ export async function listCustomers(env: Env, owner: number): Promise<Customer[]
     ).bind(owner).all<Customer>();
     return results ?? [];
   } catch { return []; }
-}
-
-export async function getCustomer(env: Env, owner: number, id: number): Promise<Customer | null> {
-  try {
-    return await env.DB.prepare(
-      `SELECT * FROM customers WHERE owner_id = ? AND id = ?`,
-    ).bind(owner, id).first<Customer>() ?? null;
-  } catch { return null; }
-}
-
-export async function searchCustomer(env: Env, owner: number, needle: string): Promise<Customer | null> {
-  try {
-    return await env.DB.prepare(
-      `SELECT * FROM customers WHERE owner_id = ? AND name LIKE ? COLLATE NOCASE LIMIT 1`,
-    ).bind(owner, `%${needle}%`).first<Customer>() ?? null;
-  } catch { return null; }
 }
 
 // ---- Order CRUD ------------------------------------------------------
@@ -1776,9 +1553,14 @@ export async function createOrder(env: Env, owner: number, input: OrderInput): P
     const results = await env.DB.batch(batch);
     const orderId = Number(results[0]?.meta?.last_row_id ?? 0);
 
-    // Decrease stock for items with product_id
-    for (const it of itemRows) {
-      if (it.product_id) await adjustStock(env, owner, it.product_id, -it.qty);
+    // Decrease stock for items with product_id (single batched round-trip).
+    if (orderId > 0) {
+      const stockBatch = itemRows
+        .filter((it) => it.product_id)
+        .map((it) => env.DB.prepare(
+          `UPDATE products SET stock = MAX(0, stock - ?), updated_at = ? WHERE owner_id = ? AND id = ?`,
+        ).bind(it.qty, Date.now(), owner, it.product_id));
+      if (stockBatch.length) await env.DB.batch(stockBatch).catch(() => {});
     }
     return orderId;
   } catch { return 0; }

@@ -150,17 +150,6 @@ export async function checkIn(env: Env, owner: number): Promise<string> {
   return `checkin:${r.meta.changes === 1 ? "reset" : "noop"}`;
 }
 
-/** D1 shutdown (see db.ts touchActivity which also resets). Keep in parity. */
-export async function touchInteraction(env: Env, owner: number): Promise<void> {
-  const now = Date.now();
-  await env.DB.prepare(
-    `UPDATE user_activity SET last_interaction=?, updated_at=? WHERE owner_id=?`,
-  ).bind(now, now, owner).run();
-  await env.DB.prepare(
-    `UPDATE dms_state SET stage='idle', last_interaction=?, updated_at=? WHERE owner_id=?`,
-  ).bind(now, now, owner).run();
-}
-
 async function notify(env: Env, owner: number, text: string): Promise<void> {
   try {
     await sendMessage(env, owner, text);

@@ -31,7 +31,7 @@ import {
   buildEnrichedContext, detectConversationMode, extractTopicLabel,
   getSession, buildContextSummary, wmTopicRelevant,
 } from "./context_manager";
-import { detectLanguage, type Language } from "./jarvis_language";
+import { comprehend, type ComprehensionProfile } from "./comprehension";
 import { JARVIS_IDENTITY } from "./identity";
 import { capabilityContextBlock } from "./capability_registry";
 
@@ -247,7 +247,7 @@ export function buildSystemPrompt(opts: {
   mood?: MoodState;
   contextSummary?: string;
   workingMemoryHint?: string;
-  language?: Language;
+  language?: ComprehensionProfile["language"];
   culturalContext?: string;
 }): string {
   const p = opts.personality ?? DEFAULT_PERSONALITY;
@@ -541,7 +541,7 @@ export async function buildConversationMessages(
     enrichedContext?: Array<{ role: string; content: string }>;
     session?: ReturnType<typeof getSession>;
     mood?: MoodState;
-    language?: Language;
+    language?: ComprehensionProfile["language"];
     /** True when the enrichedContext already ends with a user prompt, so the
      *  trailing `userText` message must NOT be appended again (prevents the
      *  same question being injected twice for sub-agent/pipeline prompts). */
@@ -554,8 +554,10 @@ export async function buildConversationMessages(
   const topic = opts.topic ?? extractTopicLabel(userText) ?? userText.slice(0, 80);
   const isFollowUp = /\b(lebih dalam|lanjut|terus|yang tadi|detail|expand)\b/i.test(userText);
 
-  // Detect language (enhanced with cultural context)
-  const language = opts.language ?? detectLanguage(userText);
+  // Detect language (root comprehension engine — f3) instead of the legacy
+  // jarvis_language detector (superseded by comprehension.ts).
+  const comp = opts.language ? null : comprehend(userText);
+  const language = opts.language ?? comp!.language;
 
   // Update mood tracking is owned by perceive() (single writer). This builder
   // only READS current state so the EMA is not applied multiple times per turn
@@ -601,10 +603,11 @@ export async function buildConversationMessages(
     workingMemoryHint = `[Memori kerja aktif: ${wm.stepsCompleted.length} langkah selesai untuk "${wm.currentTask!.slice(0, 50)}"]`;
   }
 
-  // Cultural context for international support
-  const culturalContext = language.culturalContext
-    ? `Konteks budaya: Formalitas ${language.culturalContext.formality}, Gunakan honorifik: ${language.culturalContext.honorifics ? "Ya" : "Tidak"}`
-    : undefined;
+  // Cultural context for international support — derived from the root
+  // comprehension adapt map (f3/f5) instead of the legacy culturalContext.
+  const culturalContext = `Konteks budaya: Formalitas ${
+    comp?.adapt.formality ?? "netral"
+  }, Gunakan honorifik: ${comp?.adapt.honorifics ? "Ya" : "Tidak"}`;
 
   const systemPrompt = buildSystemPrompt({
     intent,
@@ -647,6 +650,3 @@ export async function buildConversationMessages(
 
   return messages;
 }
-
-/** Re-export detectLanguage from jarvis_language for backward compatibility. */
-export { detectLanguage } from "./jarvis_language";

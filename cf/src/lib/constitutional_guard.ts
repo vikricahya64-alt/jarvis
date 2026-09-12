@@ -151,8 +151,3 @@ export function validateAction(actionDesc: string, options: {
     confidence: 1.0,
   };
 }
-
-/** Ref number for /value_alignment report of guard hits. */
-export function guardStats(hits: GuardResult[]): { blocked: number; allowed: number } {
-  return { blocked: hits.filter((h) => !h.allowed).length, allowed: hits.filter((h) => h.allowed).length };
-}

@@ -106,7 +106,7 @@ menimbulkan error):
 | **Web search DuckDuckGo** (gratis, tanpa API key) | `ddgSearch()` | otomatis — kirim `cari <topik>` / `ringkas <artikel>` |
 | **Sintesis pencarian + LLM + konteks** | `searchAndSynthesize()` | otomatis di jalur EXECUTE untuk teks ber-topik |
 | **Memori giliran percakapan** (last N turn) | `appendMemory()`/`recentContext()` → `conversation_log` (D1) | otomatis; dibatasi ~100 turn per owner |
-| **Queue depth nyata** (dulu selalu 0) | `recordTaskCounters()` → `task_counters` (D1) | otomatis; lihat `/queue_status` |
+| **Riwayat antrean kumulatif** (lifetime, bukan depth) | `recordTaskCounters()` → `task_counters` (D1) | otomatis; lihat `/queue_status` |
 | **Laporan kepatuhan Mingguan dikirim** (dulu log-only) | `index.ts` `sendWeeklyObedienceReport()` | cron `0 8 * * *` (Minggu) |
 
 Contoh: `cari tentang implementasi iscsi` → DDG ambil hasil → Groq rangkum →

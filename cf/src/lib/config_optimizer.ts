@@ -149,34 +149,6 @@ export function analyzeOptimizations(metrics: ConfigMetrics): ConfigSuggestion[]
  */
 export const applyOptimizations = async (): Promise<string[]> => [];
 
-/** Format optimization report for Telegram. */
-export function formatOptimizationReport(
-  metrics: ConfigMetrics,
-  suggestions: ConfigSuggestion[],
-): string {
-  const lines = ["⚙️ *Config Optimization Report*", ""];
-
-  // Metrics summary
-  lines.push("*Metrik Sistem:*");
-  lines.push(`  Error rate: ${(metrics.errorRate * 100).toFixed(1)}%`);
-  lines.push(`  Memory pressure: ${(metrics.memoryPressure * 100).toFixed(0)}%`);
-  lines.push(`  Cron success: ${(metrics.cronSuccessRate * 100).toFixed(0)}%`);
-  lines.push("");
-
-  // Suggestions (advisory only — no auto-apply exists today; knobs have no consumer)
-  if (suggestions.length > 0) {
-    lines.push("*Saran (perlu review owner, belum ada auto-apply):*");
-    for (const s of suggestions) {
-      lines.push(`  • ${s.key}: ${s.suggestedValue} ⚠️`);
-      lines.push(`    ${s.reason}`);
-    }
-  } else {
-    lines.push("✅ Tidak ada saran tuning.");
-  }
-
-  return lines.join("\n");
-}
-
 /** Main optimization loop. Called by loop_scheduler. */
 export async function runConfigOptimization(env: Env): Promise<{
   metrics: ConfigMetrics;

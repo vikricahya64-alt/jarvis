@@ -122,19 +122,21 @@ async function createPlan(env: Env, owner: number, goal: string, steps: PlanStep
   const planId = await sha256(`${owner}:${goal}:${Date.now()}`);
   const scheduleAt = Date.now();
 
-  for (const step of steps) {
-    await env.DB.prepare(
+  const batches = steps.map((step) =>
+    env.DB.prepare(
       `INSERT INTO plan_steps (id, owner_id, plan_id, step_index, goal, description, outcome, priority, status, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
     ).bind(
       step.id, owner, planId, step.stepIndex, step.goal, step.description, step.outcome, step.priority, Date.now(),
-    ).run();
-  }
-
-  await env.DB.prepare(
-    `INSERT INTO plans (id, owner_id, goal, description, cadence, schedule_at, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`,
-  ).bind(planId, owner, goal, `Plan: ${goal}`, 'once', scheduleAt, Date.now()).run();
+    ),
+  );
+  batches.push(
+    env.DB.prepare(
+      `INSERT INTO plans (id, owner_id, goal, description, cadence, schedule_at, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`,
+    ).bind(planId, owner, goal, `Plan: ${goal}`, 'once', scheduleAt, Date.now()),
+  );
+  await env.DB.batch(batches).catch(() => {});
 
   return planId;
 }

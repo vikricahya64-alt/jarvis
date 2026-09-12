@@ -60,16 +60,6 @@ export const BEHAVIOR_HALF_LIFE_DAYS = 14;
 // are never suppressed.
 export const BEHAVIOR_AFFINITY_KEEP = 0.5;
 
-export interface ReflectedTurn {
-  id: number;
-  turnText: string;
-  output: string;
-  errors: string;
-  critique: string;
-  refined: string;
-  score: number;
-}
-
 export interface Insight {
   id: number;
   ruleText: string;
@@ -449,14 +439,16 @@ export async function validateInsightsViaStability(env: Env, now = Date.now()): 
       `SELECT id, category FROM insights WHERE disabled = 0 AND last_validated_at = 0 LIMIT 200`,
     ).bind().all<{ id: number; category: string }>();
     let validated = 0;
+    const batch: D1PreparedStatement[] = [];
     for (const r of results ?? []) {
       const sig = signals.get(r?.category ?? "behavior");
       if (!sig) continue;
       if (sig.approvals >= 2 && sig.corrections === 0 && validated < 50) {
-        await env.DB.prepare(`UPDATE insights SET last_validated_at=? WHERE id=?`).bind(now, r.id).run();
+        batch.push(env.DB.prepare(`UPDATE insights SET last_validated_at=? WHERE id=?`).bind(now, r.id));
         validated++;
       }
     }
+    if (batch.length) await env.DB.batch(batch).catch(() => {});
     return validated;
   } catch {
     return 0;

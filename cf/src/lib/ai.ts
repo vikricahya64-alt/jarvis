@@ -12,7 +12,7 @@
 //=====================================================================
 
 import { Env, recentContext, searchMemory, storeLearnedKnowledge, isTopicKnown } from "./db";
-import { withResilience, fetchWithTimeout, logRequest, getBreakerState } from "./resilience";
+import { withResilience, fetchWithTimeout, logRequest } from "./resilience";
 import { getAnswerBehaviorContext, reflectOnTurn } from "./evolution";
 import { isResearchClass, orchestrateResearch } from "./subagents";
 import { isSourcingAsk } from "./executor_selection";
@@ -196,37 +196,6 @@ export async function readResearchAnchor(
  *  "Kecerdasan Buatan & Pembelajaran Mesin" headers + numbered bullets + the
  *  "beri tahu saya" template closer into production. Continuation now inherits
  *  the SAME flowing human-prose voice as the main writer, never a report. */
-export async function continueAnalysis(
-  env: Env,
-  prior: string,
-  userText: string,
-): Promise<string | null> {
-  const step = (userText || "").trim().slice(0, 80);
-  const system = [
-    "Kamu J.A.R.V.I.S., asisten setia pemilik. Tugas: MELANJUTKAN analisis/riset yang terpotong di atas.",
-    "Aturan:",
-    "1. JANGAN mengulang atau meringkas bagian yang sudah ditulis.",
-    "2. LANGSUNG lanjutkan ke bagian berikutnya agar jawaban tuntas sampai akhir.",
-    "3. Tulis lanjutannya dalam PROSA MENGALIR alami, persis gaya yang sudah dipakai penjawab di atas — seperti orang menjelaskan ke teman. DILARANG judul seksi tebal, poin bernomor/berurutan, dan kalimat penutup templat.",
-    "4. Bahasa Indonesia santai, jangan memakai kata 'Anda'.",
-    "5. Jika semua bagian sudah tuntas, akhiri dengan satu paragraf penutup singkat yang merangkum inti topik.",
-  ].join("\n");
-  const messages = [
-    { role: "system", content: system },
-    { role: "user", content: `Lanjutkan bagian berikut dari analisis ini (jangan ulang isinya):\n\n${(prior || "").slice(0, 6000)}` },
-  ];
-  try {
-    const groq = await groqRespond(env, step, { prebuiltMessages: messages, topic: "continuation" });
-    if (groq) return tidyContinuation(groq);
-    const nim = await nvidiaNimRespond(env, step, { prebuiltMessages: messages, topic: "continuation" });
-    if (nim) return tidyContinuation(nim);
-    const or = await openrouterRespond(env, step, { prebuiltMessages: messages, topic: "continuation", deep: true });
-    return or ? tidyContinuation(or) : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Derive a research topic from the last assistant analysis (for follow-up
  *  anchoring). Returns the last assistant reply's content as the anchor topic,
  *  or null if there's no prior assistant analysis to build on.
@@ -758,16 +727,35 @@ export async function groqSingleShot(
   }
 }
 
-/** Try to produce a generative assistant reply via Groq, using recent
- *  conversation context as memory. Returns null on any failure so the
- *  caller falls back to the canned reply (fail-closed). */
-export async function groqRespond(
+/** Shared options across the OpenAI-compatible provider responders. */
+export interface ProviderRespondOpts {
+  context?: Array<{ role: string; content: string }>;
+  topic?: string;
+  contextIsEnriched?: boolean;
+  skipUserMessage?: boolean;
+  prebuiltMessages?: Array<{ role: string; content: string }>;
+  deep?: boolean;
+  tools?: Array<{ type: "function"; function: { name: string; description?: string; parameters?: Record<string, unknown> } }>;
+}
+
+/** One unified OpenAI-compatible chat-completions responder.
+ *  Groq / OpenRouter / NVIDIA NIM share every step (key gate, message build,
+ *  base URL, payload, truncation repair, token ledger) — only the provider
+ *  config differs. Merging removes three near-identical 100-line functions. */
+async function openAICompatRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
+  opts: ProviderRespondOpts = {},
+  cfg: {
+    provider: "groq" | "openrouter" | "nvidia_nim";
+    key: string | undefined;
+    baseUrl: string;
+    model: string;
+    extraHeaders?: Record<string, string>;
+    withTools?: boolean;
+  },
 ): Promise<string | null> {
-  const key = env.GROQ_API_KEY;
-  if (!key) return null;
+  if (!cfg.key) return null; // fail-open: not configured
   const context = opts.context ?? [];
 
   const messages = opts.prebuiltMessages ?? await buildConversationMessages(
@@ -780,30 +768,34 @@ export async function groqRespond(
   ).catch(() => buildFallbackMessages(context, userText));
 
   let reply: string | null = null;
-  const ok = await withResilience(env, "groq", 0, async (timeoutMs) => {
-    // m9-v11.18 AI GATEWAY: when AI_GATEWAY_URL is set, route egress through
-    // Cloudflare's free AI Gateway (observability + cache + rate limit).
-    const base = env.AI_GATEWAY_URL ? `${env.AI_GATEWAY_URL}/groq/v1` : "https://api.groq.com/openai/v1";
-    const res = await fetchWithTimeout(`${base}/chat/completions`, {
+  const ok = await withResilience(env, cfg.provider, 0, async (timeoutMs) => {
+    const res = await fetchWithTimeout(`${cfg.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
+        Authorization: `Bearer ${cfg.key}`,
+        ...cfg.extraHeaders,
       },
-body: JSON.stringify({
-          model: GROQ_MODEL,
-          temperature: 0.6,
-          messages,
-          max_tokens: 2200,
-        }),
+      body: JSON.stringify({
+        model: cfg.model,
+        temperature: 0.6,
+        messages,
+        // Deep tier writes long-form research/prose — give it room so answers
+        // aren't cut before the full rewrite is done.
+        max_tokens: opts.deep ? 4096 : 2200,
+        ...(cfg.withTools && opts.tools && opts.tools.length ? { tools: opts.tools } : {}),
+      }),
     }, timeoutMs);
     if (!res.ok) return { ok: false, status: res.status };
-    const data = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
-    const content = data.choices?.[0]?.message?.content?.trim() ?? "";
-    if (!content) return { ok: false, status: res.status };
-    reply = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(content) : isLikelyTruncated(content) ? repairTruncatedReply(content) : content;
+    const data = (await res.json()) as {
+      choices?: { message?: { content?: string | null }; finish_reason?: string }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+    const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
+    if (!raw) return { ok: false, status: res.status };
+    reply = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(raw) : isLikelyTruncated(raw) ? repairTruncatedReply(raw) : raw;
     void trackTokenUsage(
-      env, "groq",
+      env, cfg.provider,
       data.usage?.prompt_tokens ?? messages.reduce((a, m) => a + estimateTokens(m.content ?? ""), 0),
       data.usage?.completion_tokens ?? estimateTokens(reply),
       { estimated: data.usage?.prompt_tokens == null || data.usage?.completion_tokens == null },
@@ -813,125 +805,69 @@ body: JSON.stringify({
   return ok ? reply : null;
 }
 
-/** OpenRouter generative response (free/provided models) — resilience fallback
- *  once Groq is unavailable, adding breadth cheaply under a single key. Mirrors
- *  groqRespond's OpenAI-compatible shape; null on any failure so the chain stays
- *  fail-closed. Fail-open: returns null (never throws) when key/model missing or
- *  the provider errors, so it can never block the other providers. */
-export async function openrouterRespond(
+/** Try to produce a generative assistant reply via Groq, using recent
+ *  conversation context as memory. Returns null on any failure so the
+ *  caller falls back to the canned reply (fail-closed). */
+export function groqRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }>; deep?: boolean } = {},
+  opts: ProviderRespondOpts = {},
 ): Promise<string | null> {
-  const key = env.OPENROUTER_API_KEY;
-  if (!key) return null; // fail-open: not configured
-  const context = opts.context ?? [];
+  return openAICompatRespond(env, userText, opts, {
+    provider: "groq",
+    key: env.GROQ_API_KEY,
+    // m9-v11.18 AI GATEWAY: when AI_GATEWAY_URL is set, route egress through
+    // Cloudflare's free AI Gateway (observability + cache + rate limit).
+    baseUrl: env.AI_GATEWAY_URL ? `${env.AI_GATEWAY_URL}/groq/v1` : "https://api.groq.com/openai/v1",
+    model: GROQ_MODEL,
+  });
+}
 
-  const messages = opts.prebuiltMessages ?? await buildConversationMessages(
-    env,
-    Number(env.OWNER_TELEGRAM_ID),
-    userText,
-    opts.contextIsEnriched && context.length > 0
-      ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
-      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined, skipUserMessage: opts.skipUserMessage },
-  ).catch(() => buildFallbackMessages(context, userText));
-
+/** OpenRouter generative response (free/provided models) — resilience fallback
+ *  once Groq is unavailable, adding breadth cheaply under a single key. Uses
+ *  the shared OpenAI-compatible responder; null on any failure so the chain
+ *  stays fail-closed. Fail-open: returns null (never throws) when key/model
+ *  missing or the provider errors, so it can never block the other providers. */
+export function openrouterRespond(
+  env: Env,
+  userText: string,
+  opts: ProviderRespondOpts = {},
+): Promise<string | null> {
   const model = opts.deep
     ? (env.OPENROUTER_DEEP_MODEL || OPENROUTER_DEEP_MODEL)
     : (env.OPENROUTER_MODEL || OPENROUTER_MODEL);
-  let reply: string | null = null;
-  const ok = await withResilience(env, "openrouter", 0, async (timeoutMs) => {
-    const base = env.AI_GATEWAY_URL ? `${env.AI_GATEWAY_URL}/openrouter/v1` : "https://openrouter.ai/api/v1";
-    const res = await fetchWithTimeout(`${base}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-        "HTTP-Referer": "https://jarvis-sovereign.vikricahya64.workers.dev",
-        "X-Title": "JARVIS-Sovereign",
-      },
-body: JSON.stringify({
-          model,
-          temperature: 0.6,
-          messages,
-          // Deep tier writes long-form research/prose — give it room so
-          // answers aren't cut before the full rewrite is done.
-          max_tokens: opts.deep ? 4096 : 2200,
-        }),
-    }, timeoutMs);
-    if (!res.ok) return { ok: false, status: res.status };
-    const data = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
-    const content = data.choices?.[0]?.message?.content?.trim() ?? "";
-    if (!content) return { ok: false, status: res.status };
-    reply = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(content) : isLikelyTruncated(content) ? repairTruncatedReply(content) : content;
-    void trackTokenUsage(
-      env, "openrouter",
-      data.usage?.prompt_tokens ?? messages.reduce((a, m) => a + estimateTokens(m.content ?? ""), 0),
-      data.usage?.completion_tokens ?? estimateTokens(reply),
-      { estimated: data.usage?.prompt_tokens == null || data.usage?.completion_tokens == null },
-    ).catch(() => {});
-    return { ok: true, status: res.status };
+  return openAICompatRespond(env, userText, opts, {
+    provider: "openrouter",
+    key: env.OPENROUTER_API_KEY,
+    baseUrl: env.AI_GATEWAY_URL ? `${env.AI_GATEWAY_URL}/openrouter/v1` : "https://openrouter.ai/api/v1",
+    model,
+    extraHeaders: {
+      "HTTP-Referer": "https://jarvis-sovereign.vikricahya64.workers.dev",
+      "X-Title": "JARVIS-Sovereign",
+    },
   });
-  return ok ? reply : null;
 }
 
 /** NVIDIA NIM generative response (hosted free-trial models) — resilience
  *  fallback parallel to OpenRouter, plus tool-calling support so JARVIS can
- *  reach NVIDIA's hosted open models for the same capabilities. Mirrors
- *  groqRespond's OpenAI-compatible shape; null on any failure so the chain
- *  stays fail-closed. Uses the free tier on integrate.api.nvidia.com. */
-export async function nvidiaNimRespond(
+ *  reach NVIDIA's hosted open models for the same capabilities. Uses the free
+ *  tier on integrate.api.nvidia.com via the shared OpenAI-compatible responder;
+ *  null on any failure so the chain stays fail-closed. */
+export function nvidiaNimRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }>; deep?: boolean; tools?: Array<{ type: "function"; function: { name: string; description?: string; parameters?: Record<string, unknown> } }> } = {},
+  opts: ProviderRespondOpts = {},
 ): Promise<string | null> {
-  const key = env.NVIDIA_NIM_API_KEY;
-  if (!key) return null; // fail-open: not configured
-  const context = opts.context ?? [];
-
-  const messages = opts.prebuiltMessages ?? await buildConversationMessages(
-    env,
-    Number(env.OWNER_TELEGRAM_ID),
-    userText,
-    opts.contextIsEnriched && context.length > 0
-      ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
-      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined, skipUserMessage: opts.skipUserMessage },
-  ).catch(() => buildFallbackMessages(context, userText));
-
   const model = opts.deep
     ? (env.NVIDIA_NIM_DEEP_MODEL || NVIDIA_NIM_DEEP_MODEL)
     : (env.NVIDIA_NIM_MODEL || NVIDIA_NIM_MODEL);
-  let reply: string | null = null;
-  const ok = await withResilience(env, "nvidia_nim", 0, async (timeoutMs) => {
-    const res = await fetchWithTimeout(`${NIM_BASE}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0.6,
-        messages,
-        max_tokens: opts.deep ? 4096 : 2200,
-        ...(opts.tools && opts.tools.length > 0 ? { tools: opts.tools } : {}),
-      }),
-    }, timeoutMs);
-    if (!res.ok) return { ok: false, status: res.status };
-    const data = (await res.json()) as { choices?: { message?: { content?: string | null }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
-    const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
-    const content = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(raw) : isLikelyTruncated(raw) ? repairTruncatedReply(raw) : raw;
-    if (!content) return { ok: false, status: res.status };
-    reply = content;
-    void trackTokenUsage(
-      env, "nvidia_nim",
-      data.usage?.prompt_tokens ?? messages.reduce((a, m) => a + estimateTokens(m.content ?? ""), 0),
-      data.usage?.completion_tokens ?? estimateTokens(reply),
-      { estimated: data.usage?.prompt_tokens == null || data.usage?.completion_tokens == null },
-    ).catch(() => {});
-    return { ok: true, status: res.status };
+  return openAICompatRespond(env, userText, opts, {
+    provider: "nvidia_nim",
+    key: env.NVIDIA_NIM_API_KEY,
+    baseUrl: NIM_BASE,
+    model,
+    withTools: true,
   });
-  return ok ? reply : null;
 }
 
 /** Google Gemini generative response (free-tier gemma) — resilience fallback
@@ -1146,12 +1082,8 @@ export async function llmRespond(
   );
   for (const cand of preferred) {
     if (cand.p === "workers_ai" && !env.AI) continue;
-    // Fail-closed: breaker read failure means "try it" (availability first).
-    const state = await getBreakerState(env, cand.p).catch(() => "closed" as const);
-    if (state === "open") {
-      console.error(`[llm] skipped ${cand.p}: breaker open`);
-      continue;
-    }
+    // Breaker fast-fail happens INSIDE withResilience (read once, then the
+    // provider responder dedupes: no outer pre-read to save D1 ops).
     const r = await cand.fn().catch(() => null);
     if (r) return { reply: r, source: cand.src };
   }
@@ -1215,76 +1147,94 @@ function stripTags(s: string): string {
 }
 
 /** DuckDuckGo search via plain fetch (no API key, free), with layered fallbacks.
- *  Tries the Official Instant Answer API (JSON) then the HTML endpoint, and
- *  finally Bing's lightweight HTML as a last resort. Returns a short human-
- *  readable summary or null when every source is unreachable.
+ *  Runs ONE pass that yields BOTH a short human-readable digest AND structured
+ *  citable hits (previously two functions duplicated the IA + SearXNG fetches).
  *  Returns an object so the caller can also know which source responded. */
-export async function ddgSearch(env: Env, query: string): Promise<string | null> {
-  const attempts: Array<() => Promise<string | null>> = [
-    // 1) Official Instant Answer API (JSON) — most stable, no scraping.
-    async () => {
-      const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-      const res = await fetchWithTimeout(url, { headers: { "Accept-Language": "id,id,en;q=0.8" } }, 10000);
-      if (!res.ok) return null;
+async function ddgSearchPackage(
+  env: Env,
+  query: string,
+): Promise<{ digest: string | null; hits: SearchHit[] }> {
+  const hits: SearchHit[] = [];
+  let digest: string | null = null;
+  const start = Date.now();
+  // 1) Official Instant Answer API (JSON) — most stable, no scraping. One fetch
+  //    feeds BOTH the digest and a citable hit (AbstractURL).
+  try {
+    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+    const res = await fetchWithTimeout(url, { headers: { "Accept-Language": "id,id,en;q=0.8" } }, 10000);
+    if (res.ok) {
       const d = (await res.json()) as {
         AbstractText?: string;
         Heading?: string;
         AbstractURL?: string;
         RelatedTopics?: Array<{ Text?: string }>;
       };
-      const parts: string[] = [];
-      if (d.AbstractText) parts.push(`${d.Heading || query}: ${d.AbstractText}`);
-      const first = d.RelatedTopics?.find((t) => t.Text);
-      if (first?.Text && parts.length < 2) parts.push(String(first.Text));
-      return parts.length ? parts.join(" — ").slice(0, 400) : null;
-    },
-    // 2) HTML endpoint (scrape) — bots/challenges may block; regex-tolerant.
-    async () => {
+      if (d.AbstractText) digest = `${d.Heading || query}: ${d.AbstractText}`.slice(0, 400);
+      if (d.AbstractURL && d.Heading) {
+        hits.push({ title: `${d.Heading}: ${(d.AbstractText ?? "").slice(0, 120)}`, url: d.AbstractURL, snippet: d.AbstractText ?? "" });
+      }
+      if (!digest) {
+        const first = d.RelatedTopics?.find((t) => t.Text);
+        if (first?.Text) digest = String(first.Text).slice(0, 400);
+      }
+    }
+  } catch { /* layer 1 */ }
+  // 2) SearXNG public meta-search — structured title/url/snippet, and a second
+  //    egress reputation. Adds hits AND a digest candidate.
+  const searx = await searxngSearch(query).catch(() => [] as SearchHit[]);
+  for (const h of searx) hits.push(h);
+  if (!digest && searx.length) {
+    digest = searx.slice(0, 2).map((h) => `${h.title}: ${h.snippet}`).join(" — ").slice(0, 400);
+  }
+  // 3) HTML endpoint (scrape) — bots/challenges may block; digest-only fallback.
+  if (!digest) {
+    try {
       const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
       const res = await fetchWithTimeout(url, { headers: { "Accept-Language": "id,id-ID;q=0.9,en;q=0.8" } }, 10000);
-      if (!res.ok) return null;
-      const html = await res.text();
-      const a = html.match(/class="result__a"[^>]*>([\s\S]*?)<\/a>/i);
-      const sn = html.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i);
-      if (!a && !sn) return null;
-      const title = a?.[1] ? stripTags(a[1]) : null;
-      const snippet = sn?.[1] ? stripTags(sn[1]) : null;
-      if (!title && !snippet) return null;
-      return [title, snippet].filter(Boolean).join(" — ").slice(0, 400);
-    },
-    // 3) SearXNG public meta-search — aggregates many upstream engines, giving
-    //    the search path an independent egress reputation beyond DDG/Bing.
-    async () => {
-      const hits = await searxngSearch(query);
-      if (!hits.length) return null;
-      return hits.slice(0, 2).map((h) => `${h.title}: ${h.snippet}`).join(" — ").slice(0, 400);
-    },
-    // 4) Bing lightweight HTML — different egress reputation, likely reachable.
-    async () => {
+      if (res.ok) {
+        const html = await res.text();
+        const a = html.match(/class="result__a"[^>]*>([\s\S]*?)<\/a>/i);
+        const sn = html.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i);
+        const title = a?.[1] ? stripTags(a[1]) : null;
+        const snippet = sn?.[1] ? stripTags(sn[1]) : null;
+        if (title || snippet) digest = [title, snippet].filter(Boolean).join(" — ").slice(0, 400);
+      }
+    } catch { /* layer 3 */ }
+  }
+  // 4) Bing lightweight HTML — different egress reputation, digest-only fallback.
+  if (!digest) {
+    try {
       const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=1`;
       const res = await fetchWithTimeout(url, {
         headers: { "User-Agent": "Mozilla/5.0 (Linux; Android 10)", "Accept-Language": "en,id;q=0.8" },
       }, 10000);
-      if (!res.ok) return null;
-      const html = await res.text();
-      const m = html.match(/<li class="b_algo"[^>]*>([\s\S]*?)<\/li>/i);
-      if (!m?.[1]) return null;
-      const block = stripTags(m[1]).slice(0, 400);
-      return block || null;
-    },
-  ];
-  let result: string | null = null;
-  const start = Date.now();
-  for (const tryFn of attempts) {
-    const r = await tryFn().catch(() => null);
-    if (r) {
-      result = r;
-      break;
-    }
+      if (res.ok) {
+        const html = await res.text();
+        const m = html.match(/<li class="b_algo"[^>]*>([\s\S]*?)<\/li>/i);
+        if (m?.[1]) digest = stripTags(m[1]).slice(0, 400) || null;
+      }
+    } catch { /* layer 4 */ }
   }
-  await logRequest(env, "ddg", result ? "ok" : "fail", Date.now() - start, 0,
-    result ? "search ok" : "all layers failed");
-  return result;
+  // Dedupe hits by host (keep strongest first), cap at 6. Empty = fail-closed.
+  const seen = new Set<string>();
+  const out: SearchHit[] = [];
+  for (const h of hits) {
+    let host = "";
+    try { host = new URL(h.url).hostname.replace(/^www\./, ""); } catch { host = h.url.slice(0, 40); }
+    if (!host || seen.has(host)) continue;
+    seen.add(host);
+    out.push(h);
+    if (out.length >= 6) break;
+  }
+  await logRequest(env, "ddg", digest ? "ok" : "fail", Date.now() - start, 0,
+    digest ? "search ok" : "all layers failed").catch(() => {});
+  return { digest, hits: out };
+}
+
+/** Digest-only wrapper (backward-compatible public API / tests). */
+export async function ddgSearch(env: Env, query: string): Promise<string | null> {
+  const p = await ddgSearchPackage(env, query).catch(() => ({ digest: null, hits: [] }));
+  return p.digest;
 }
 
 /** A single web-search hit with its snippet (untrusted, must be spotlighted
@@ -1300,34 +1250,9 @@ export interface SearchHit {
 /** Structured search hits WITH URLs (used for citations). Fail-closed: always
  *  returns an array; layers that can't produce a URL are skipped. Deduped by
  *  host so the source list never feels like a link-farm. */
-export async function ddgSearchHits(_env: Env, query: string): Promise<SearchHit[]> {
-  const hits: SearchHit[] = [];
-  try {
-    // 1) Official Instant Answer API — carries an AbstractURL.
-    const ia = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-    const res = await fetchWithTimeout(ia, { headers: { "Accept-Language": "id,id,en;q=0.8" } }, 10000);
-    if (res.ok) {
-      const d = (await res.json()) as { Heading?: string; AbstractURL?: string; AbstractText?: string };
-      if (d.AbstractURL && d.Heading) {
-        hits.push({ title: `${d.Heading}: ${(d.AbstractText ?? "").slice(0, 120)}`, url: d.AbstractURL, snippet: d.AbstractText ?? "" });
-      }
-    }
-  } catch { /* fail-closed */ }
-  // 2) SearXNG meta-search — structured title/url/snippet.
-  const searx = await searxngSearch(query).catch(() => [] as SearchHit[]);
-  for (const h of searx) hits.push(h);
-  // Dedupe by host (keep strongest first), cap at 6.
-  const seen = new Set<string>();
-  const out: SearchHit[] = [];
-  for (const h of hits) {
-    let host = "";
-    try { host = new URL(h.url).hostname.replace(/^www\./, ""); } catch { host = h.url.slice(0, 40); }
-    if (!host || seen.has(host)) continue;
-    seen.add(host);
-    out.push(h);
-    if (out.length >= 6) break;
-  }
-  return out;
+export async function ddgSearchHits(env: Env, query: string): Promise<SearchHit[]> {
+  const p = await ddgSearchPackage(env, query).catch(() => ({ digest: null, hits: [] as SearchHit[] }));
+  return p.hits;
 }
 
 /** Pure, deterministic source-citation list (markdown) for appending to replies.
@@ -1637,18 +1562,17 @@ export async function searchAndSynthesize(
   const instHitsP = instReq
     ? institutionalSearchHits(env, instReq, 6).catch(() => [] as SearchHit[])
     : Promise.resolve([] as SearchHit[]);
-  const [ , searchResult, hits, context, mems, behaviorContext] = await Promise.all([
-    instHitsP,
-    skipSearch ? Promise.resolve(null)
-      : instReq ? instHitsP.then((ih) => (ih.length ? institutionalDigest(ih) : ddgSearch(env, topic)))
-        : ddgSearch(env, topic),
-    skipSearch ? Promise.resolve([] as SearchHit[])
-      : instReq ? instHitsP.then((ih) => (ih.length ? ih : [] as SearchHit[]))
-        : ddgSearchHits(env, topic),
-    followupAnchor && anchorCtx ? Promise.resolve(anchorCtx.slice(-4)) : recentContext(env, owner, 4),
+const [pkg, context, mems, behaviorContext] = await Promise.all([
+    // ONE search pass yielding both digest + hits (no duplicated IA/SearXNG).
+    skipSearch ? Promise.resolve({ digest: null, hits: [] as SearchHit[] })
+      : instReq ? instHitsP.then(async (ih) => ({ digest: ih.length ? institutionalDigest(ih) : (await ddgSearch(env, topic)), hits: ih }))
+        : ddgSearchPackage(env, topic),
+    recentContext(env, owner, 4),
     searchMemory(env, topic, 4).catch(() => []),
     getAnswerBehaviorContext(env, topic).catch(() => null),
   ]);
+  const searchResult = pkg.digest;
+  const hits = pkg.hits;
   if (mems.length > 0) {
     context.push({
       role: "system",

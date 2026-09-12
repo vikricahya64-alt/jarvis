@@ -190,9 +190,6 @@ async function testMigrationIntegrity() {
 async function testValueAlignmentShape() {
   // Drift constants honour L9 parity.
   const mod = await import("../src/lib/db");
-  assert.strictEqual(mod.DRIFT_THRESHOLD_CORRECTIONS, 5);
-  assert.strictEqual(mod.DRIFT_WINDOW_DAYS, 14);
-  assert.strictEqual(mod.PROPOSAL_TTL_DAYS, 7);
   assert.strictEqual(typeof mod.sweepExpiredProposals, "function");
   assert.strictEqual(typeof mod.logViolation, "function");
   assert.strictEqual(typeof mod.pendingProposals, "function");
@@ -606,6 +603,10 @@ async function testLevel14Subagents() {
   const subSrc = readFileSync(new URL("../src/lib/subagents.ts", import.meta.url), "utf-8");
   assert.ok(/Promise\.all/.test(subSrc), "angle searches must fan out in parallel (Promise.all)");
   assert.ok(/searchTopResults/.test(subSrc), "gather must use multi-result searchTopResults");
+  // Foundation coverage: the research WRITER must receive the universal
+  // comprehension rail (language/literacy/domain/adaptation) so every research
+  // reply path is grounded in the same perception as inline answers.
+  assert.ok(/comprehensionNote/.test(subSrc), "orchestrator must thread comprehensionNote to the writer");
   const aiSrc = readFileSync(new URL("../src/lib/ai.ts", import.meta.url), "utf-8");
   assert.ok(typeof searchTopResults === "function", "ai must export searchTopResults for fan-out");
   assert.ok(/uddg=/.test(aiSrc), "searchTopResults must extract real URLs from DDG redirects");

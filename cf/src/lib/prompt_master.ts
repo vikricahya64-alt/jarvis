@@ -11,8 +11,46 @@ export function isPromptMasterRequest(text: string): boolean {
   return /\bprompts?\b|\bprompting\b/i.test(text);
 }
 
-const PROMPT_MASTER_SYSTEM =
-  `Kamu adalah J.A.R.V.I.S. dalam peran prompt engineer tingkat pakar, memakai skill "prompt-master" v1.8.0.
+/** KV-lazy loader for the skill/templates/patterns markdown. Reads the three
+ *  blobs from CONFIG_KV once (keys `pm:skill`, `pm:templates`, `pm:patterns`),
+ *  falls back to the bundled defaults until an operator seeds the keys, and
+ *  caches the result for the worker's lifetime so prompt-master costs a single
+ *  3-read KV burst on its first use instead of bundling 56KB into boot. */
+let promptMasterCache: { skill: string; templates: string; patterns: string } | null = null;
+export async function getPromptMasterData(
+  env: Env,
+): Promise<{ skill: string; templates: string; patterns: string }> {
+  if (promptMasterCache) return promptMasterCache;
+  const fallback = {
+    skill: PROMPT_MASTER_SKILL_MD,
+    templates: PROMPT_MASTER_TEMPLATES_MD,
+    patterns: PROMPT_MASTER_PATTERNS_MD,
+  };
+  try {
+    const kv = env.CONFIG_KV;
+    if (kv) {
+      const [skill, templates, patterns] = await Promise.all([
+        kv.get("pm:skill"),
+        kv.get("pm:templates"),
+        kv.get("pm:patterns"),
+      ]);
+      promptMasterCache = {
+        skill: skill ?? fallback.skill,
+        templates: templates ?? fallback.templates,
+        patterns: patterns ?? fallback.patterns,
+      };
+    } else {
+      promptMasterCache = fallback;
+    }
+  } catch {
+    promptMasterCache = fallback;
+  }
+  return promptMasterCache;
+}
+
+async function buildPromptMasterSystem(env: Env): Promise<string> {
+  const md = await getPromptMasterData(env);
+  return `Kamu adalah J.A.R.V.I.S. dalam peran prompt engineer tingkat pakar, memakai skill "prompt-master" v1.8.0.
 Tugas: hasilkan prompt yang OPTIMAL dan siap pakai untuk tool AI yang diminta pemilik.
 
 Ikuti skill secara ketat (teks SKILL.md di bawah adalah otoritas). Khususnya:
@@ -48,13 +86,14 @@ dan tampilkan hasil dengan 2 angka desimal.
 CATATAN: kalau jari-jari harus dari input pengguna, jalankan via tool Python, jangan tulis kodenya di blok PROMPT.
 
 === SKILL.md (profil & aturan) ===
-${PROMPT_MASTER_SKILL_MD}
+${md.skill}
 
 === references/templates.md ===
-${PROMPT_MASTER_TEMPLATES_MD}
+${md.templates}
 
 === references/patterns.md ===
-${PROMPT_MASTER_PATTERNS_MD}`;
+${md.patterns}`;
+}
 
 export interface PromptMasterResult {
   reply: string | null;
@@ -67,6 +106,7 @@ export async function writeExpertPrompt(
   context: Array<{ role: string; content: string }> = [],
 ): Promise<PromptMasterResult> {
   const baseTopic = (userText || "").trim().slice(0, 80);
+  const systemOverride = await buildPromptMasterSystem(env);
   const r = await llmRespond(
     env,
     (userText || "").trim() || "Buatkan prompt contoh.",
@@ -74,7 +114,7 @@ export async function writeExpertPrompt(
       topic: `prompt-master-${baseTopic}`,
       contextIsEnriched: true,
       context,
-      systemOverride: PROMPT_MASTER_SYSTEM,
+      systemOverride,
     },
   ).catch(() => null);
   let reply = (r?.reply ?? "").trim();
@@ -100,7 +140,7 @@ export async function writeExpertPrompt(
               "baris 'SASARAN:', lalu 'PROMPT:' diikuti blok kode fenced, lalu (opsional) 'CATATAN:'.",
           },
         ],
-        systemOverride: PROMPT_MASTER_SYSTEM,
+        systemOverride,
       },
     ).catch(() => null);
     const retryReply = (retry?.reply ?? "").trim();
