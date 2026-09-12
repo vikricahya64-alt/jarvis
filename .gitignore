@@ -5,6 +5,7 @@ __pycache__/
 .vercel/
 .vercel
 .env*
+!.env.example
 
 # Cloudflare local runtime/mig artifacts
 wrangler local_state/
