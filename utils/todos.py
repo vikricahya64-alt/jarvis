@@ -1,0 +1,274 @@
+"""
+Persistent per-user todo list, stored in Supabase (PostgREST).
+
+Requires the `todos` table (see sql/todos_schema.sql, run it once in the
+SQL Editor). All functions are synchronous and return plain dicts — they
+never raise, so the orchestrator loop can keep going. If the table is
+missing, functions return a graceful error hint instead of crashing.
+"""
+import httpx
+from utils.supabase_client import _config, _auth_headers
+
+_TIMEOUT = httpx.Timeout(20)
+
+
+def _todos_url() -> str:
+    base, _ = _config()
+    return f"{base}/rest/v1/todos"
+
+
+def _fmt(items, show: str):
+    if not items:
+        return "Belum ada item."
+    lines = []
+    for i, it in enumerate(items, 1):
+        mark = "x" if it.get("status") == "done" else " "
+        lines.append(f"[{mark}] {i}. {it.get('text', '')}")
+    return "\n".join(lines)
+
+
+def _get_items(telegram_id: int, status_filter: str = None) -> list:
+    params = {
+        "select": "id,text,status,created_at",
+        "telegram_id": f"eq.{telegram_id}",
+        "order": "created_at.asc",
+    }
+    if status_filter:
+        params["status"] = f"eq.{status_filter}"
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            r = client.get(_todos_url(), params=params, headers=_auth_headers())
+            if r.status_code >= 400:
+                return []
+            return r.json()
+    except Exception:
+        return []
+
+
+def render_todo_list(telegram_id: int) -> str:
+    """Plain text list of pending todos."""
+    items = _get_items(telegram_id, "pending")
+    return _fmt(items, "pending")
+
+
+def render_todo_keyboard(telegram_id: int):
+    """Return (text, reply_markup) with inline buttons for pending todos."""
+    items = _get_items(telegram_id, "pending")
+    rows = []
+    for it in items:
+        tid = it["id"]
+        rows.append([
+            {"text": f"✅ {it['text']}", "callback_data": f"td:done:{tid}"},
+            {"text": "🗑", "callback_data": f"td:del:{tid}"},
+        ])
+    if not rows:
+        text = "Daftar todo kosong. Tambah dengan: /add <tugas>"
+        markup = {"inline_keyboard": []}
+    else:
+        text = _fmt(items, "pending")
+        text += "\n\nTap ✅ = selesai, 🗑 = hapus"
+        markup = {"inline_keyboard": rows}
+    return text, markup
+
+
+def add_todo(telegram_id: int, text: str) -> dict:
+    """Insert a new pending todo for a user (skips exact duplicates)."""
+    text = (text or "").strip()
+    if not text:
+        return {"success": False, "error": "Isi todo kosong."}
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            # Dedupe: skip if an identical pending todo already exists.
+            norm = " ".join(text.casefold().split())
+            r = client.get(
+                _todos_url(),
+                params={"select": "id,text,status",
+                        "telegram_id": f"eq.{telegram_id}",
+                        "status": "eq.pending"},
+                headers=_auth_headers(),
+            )
+            if r.status_code == 404:
+                return {"success": False,
+                        "error": "Tabel todos belum dibuat (jalankan sql/todos_schema.sql)."}
+            r.raise_for_status()
+            for row in r.json():
+                existing = " ".join((row.get("text") or "").casefold().split())
+                if existing == norm:
+                    return {"success": True,
+                            "id": row["id"], "text": row["text"],
+                            "note": "Sudah ada di daftar (tidak dibuat duplikat)."}
+
+            r = client.post(
+                _todos_url(),
+                json={"telegram_id": telegram_id, "text": text},
+                headers={**_auth_headers(), "Prefer": "return=representation"},
+            )
+            r.raise_for_status()
+            row = r.json()[0]
+        return {"success": True, "id": row["id"], "text": text}
+    except httpx.HTTPError as exc:
+        return {"success": False, "error": f"Todo gagal disimpan: {exc}"}
+
+
+def list_todos(telegram_id: int, show: str = "pending") -> dict:
+    """List todos; show: 'pending' (default), 'all', or 'done'."""
+    try:
+        status_filter = None
+        if show == "pending":
+            status_filter = "pending"
+            show = "pending"
+        elif show == "done":
+            status_filter = "done"
+            show = "done"
+        else:
+            show = "all"
+        params = {
+            "select": "id,text,status,created_at",
+            "telegram_id": f"eq.{telegram_id}",
+            "order": "created_at.asc",
+        }
+        if status_filter:
+            params["status"] = f"eq.{status_filter}"
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            r = client.get(_todos_url(), params=params, headers=_auth_headers())
+            if r.status_code == 404:
+                return {"success": False,
+                        "error": "Tabel todos belum dibuat (jalankan sql/todos_schema.sql)."}
+            r.raise_for_status()
+            rows = r.json()
+        return {"success": True, "show": show, "count": len(rows),
+                "items": [{"text": x["text"], "status": x["status"]} for x in rows]}
+    except httpx.HTTPError as exc:
+        return {"success": False, "error": f"Todo gagal dimuat: {exc}"}
+
+
+def _norm_text(s):
+    """Normalize for fuzzy match: lowercase, strip punctuation, collapse spaces."""
+    import re
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", (s or "").lower())).strip()
+
+
+def _clean_match(match):
+    """Parse the user's target out of phrasing like "hapus todo telur":
+    strips leading todo verbs/particles and stray numbering so over-qualified
+    LLM/webhook args still hit the intended item. Case/space-insensitive."""
+    import re
+    m = (match or "").strip()
+    m = re.sub(r'^[\s"\'`.,;!?\-–—]+|[\s"\'`.,;!?\-–—]+$', "", m)
+    cleaned = m
+    for _ in range(3):
+        new = re.sub(
+            r"^(?:(?:hapus(?:kan)?|delete|remove|del|todo|tugas|task|item|"
+            r"yang|buat)\s+)+", "", cleaned, count=1, flags=re.IGNORECASE)
+        if new == cleaned:
+            break
+        cleaned = new
+    cleaned = re.sub(r"^(?:no\s*)?\d+(?:\.|\))?\s+(?=\S)", "", cleaned,
+                     flags=re.IGNORECASE).strip()
+    cleaned = cleaned.lower()
+    return cleaned or m
+
+
+def _match_todo(rows, match: str) -> dict:
+    """Pick a todo row by text match (> threshold), index (1-based), or id."""
+    m = (match or "").strip()
+    if not rows:
+        return None
+    if m.isdigit():
+        i = int(m)
+        if 1 <= i <= len(rows):
+            return rows[i - 1]
+    cleaned = _clean_match(m)
+    low_texts = [_norm_text(row.get("text")) for row in rows]
+    best, score = None, 0.0
+    for row, t in zip(rows, low_texts):
+        s = 0.0
+        if cleaned:
+            if len(cleaned) >= 3 and cleaned in t:
+                s = 1.0
+            elif t in cleaned or t in _norm_text(m):
+                s = len(cleaned) / max(len(t), 1)
+        if s > 0.3 and s > score:
+            best, score = row, s
+    if best is not None:
+        return best
+    if cleaned:
+        tokens = {w for w in cleaned.split() if len(w) > 1}
+        if tokens:
+            for row, t in zip(rows, low_texts):
+                words = set(t.split())
+                if tokens <= words:
+                    s = sum(len(w) for w in tokens) / max(len(t), 1)
+                    if s > 0.3 and s > score:
+                        best, score = row, s
+    if best is not None:
+        return best
+    for row in rows:
+        if row.get("id") is not None and str(row["id"]) == m:
+            return row
+    return None
+
+
+def done_todo(telegram_id: int, match: str) -> dict:
+    """Mark a pending todo as done (match = text, 1-based index, or id)."""
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            r = client.get(
+                _todos_url(),
+                params={"select": "id,text,status",
+                        "telegram_id": f"eq.{telegram_id}",
+                        "status": "eq.pending", "order": "created_at.asc"},
+                headers=_auth_headers(),
+            )
+            if r.status_code == 404:
+                return {"success": False,
+                        "error": "Tabel todos belum dibuat (jalankan sql/todos_schema.sql)."}
+            r.raise_for_status()
+            row = _match_todo(r.json(), match)
+            if row is None:
+                return {"success": False,
+                        "error": f"Todo '{match}' tidak ditemukan."}
+            import datetime
+            p = client.patch(
+                _todos_url(),
+                params={"id": f"eq.{row['id']}", "status": "eq.pending"},
+                json={"status": "done",
+                      "done_at": datetime.datetime.utcnow().isoformat()},
+                headers={**_auth_headers(), "Prefer": "return=representation"},
+            )
+            if p.status_code >= 400:
+                return {"success": False, "error": f"Update gagal: HTTP {p.status_code}"}
+        return {"success": True, "done": row["text"]}
+    except httpx.HTTPError as exc:
+        return {"success": False, "error": f"Todo gagal di-update: {exc}"}
+
+
+def remove_todo(telegram_id: int, match: str) -> dict:
+    """Delete a todo (match = text, index, or id)."""
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            r = client.get(
+                _todos_url(),
+                params={"select": "id,text,status",
+                        "telegram_id": f"eq.{telegram_id}",
+                        "order": "created_at.asc"},
+                headers=_auth_headers(),
+            )
+            if r.status_code == 404:
+                return {"success": False,
+                        "error": "Tabel todos belum dibuat (jalankan sql/todos_schema.sql)."}
+            r.raise_for_status()
+            row = _match_todo(r.json(), match)
+            if row is None:
+                return {"success": False,
+                        "error": f"Todo '{match}' tidak ditemukan."}
+            d = client.delete(
+                _todos_url(),
+                params={"id": f"eq.{row['id']}"},
+                headers=_auth_headers(),
+            )
+            if d.status_code >= 400:
+                return {"success": False, "error": f"Hapus gagal: HTTP {d.status_code}"}
+        return {"success": True, "removed": row["text"]}
+    except httpx.HTTPError as exc:
+        return {"success": False, "error": f"Todo gagal dihapus: {exc}"}
