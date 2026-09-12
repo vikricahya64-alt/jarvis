@@ -1894,16 +1894,125 @@ async function testRuntimeEditRails() {
 }
 
 async function testEscalationOrdering() {
-  // v11.43 REGRESSION: "... Tugas #32 gagal di eksekutor E2B: sandbox id hilang
-  // di ledger". Root cause: markAgentTaskRunning was called TWICE — it only
-  // transitions pending→running (WHERE status='pending'), so the SECOND call
-  // (carrying the sandbox id) became a no-op and run_id never landed on the
-  // ledger; the poller then had nothing to poll and failed the task.
-  // Contract: launch the sandbox FIRST, then transition the row ONCE *with*
-  // its run id; on a launch error mark running then finish failed (finish only
-  // passes its guard when status='running'). Runs fully offline via injected
-  // translate/delegate deps + a stub ledger.
-  const { maybeEscalateToE2b } = await import("../src/lib/executor_selection");
+  // v11.45 CONTRACT (koreksi konsep): JARVIS = NEGOSIATOR + PENERJEMAH keinginan
+  // pemilik; eksekutor E2B hanyalah LINGKUNGAN + KEMAMPUAN pinjaman — bukan
+  // pengambil keputusan. Eskalasi riset sekarang PARK rencana + minta keputusan
+  // pemilik ("ya proyek"): TIDAK ADA ledger/sandbox yang disentuh di sini.
+  // (v11.43: eskalasi meluncurkan sandbox langsung dan pernah meng-crash ledger
+  // karena markAgentTaskRunning ganda — kontrak transisi tunggal itu kini hidup
+  // di launchParkedProject, diuji terpisah di testProjectPlanContract.)
+  const { maybeEscalateToE2b, shouldEscalateByAnswerEvidence } =
+    await import("../src/lib/executor_selection");
+  const { parseGoalNegotiation } = await import("../src/lib/translator");
+  const { isRelevantExecutorTask, isCasualOnly } = await import("../src/lib/relevance");
+
+  const baseEnv = { APP_ENV: "test", E2B_API_KEY: "e2b_x" } as any;
+  const ungrounded = { reply: "x", source: "groq+ddg", grounded: false };
+  const plan = {
+    language: "bash" as const,
+    code: "curl -s 'https://news.google.com/rss/search?q=AI' | head -n 30",
+    steps: ["ambil feed", "tampilkan 30 baris"],
+    summary: "Ambil feed Google News AI.",
+  };
+
+  // (A) PLAN path: park rencana → ACK untuk pemilik. Tanpa delegate, tanpa
+  //     INSERT, tanpa transisi 'running'.
+  const parked: { owner: number; task: string; lang: string; code: string }[] = [];
+  const ack = await maybeEscalateToE2b(
+    baseEnv, 99, "ambil 3 artikel teratas tentang AI dari Google News lalu rangkum", ungrounded,
+    {
+      negotiate: async () => ({ kind: "plan", plan }),
+      park: async (_e, owner, task, lang, code) => { parked.push({ owner, task, lang, code }); },
+    },
+  );
+  assert.ok(ack && ack.includes("pihak ketiga"), "negotiated-plan framing in the ack");
+  assert.ok(ack && ack.includes("ya proyek"), "ack asks for the owner's approval");
+  assert.ok(ack && ack.includes("Keputusan eksekusi tetap di kamu"), "decision stays with the owner");
+  assert.ok(ack && ack.includes("Langkah yang akan dikerjakan"), "plan steps shown for discussion");
+  assert.strictEqual(parked.length, 1, "plan parked exactly once (no auto-launch)");
+  assert.strictEqual(parked[0].task, "ambil 3 artikel teratas tentang AI dari Google News lalu rangkum",
+    "original natural-language goal preserved in the parked plan");
+  assert.strictEqual(parked[0].code, plan.code,
+    "parked artefact is the TRANSLATED code — deployment artefact, not the goal");
+
+  // (B) ASK path: penerjemah minta klarifikasi → DITERUSKAN ke pemilik; NOL park.
+  let parkedAsk = 0;
+  const askAck = await maybeEscalateToE2b(baseEnv, 99, "lanjut", ungrounded, {
+    negotiate: async () => ({ kind: "ask", ask: "Lanjut bagian mana yang harus dikerjakan?" }),
+    park: async () => { parkedAsk++; },
+  });
+  assert.ok(askAck && askAck.includes("klarifikasi"), "clarification relayed to the owner");
+  assert.ok(askAck && askAck.includes("Lanjut bagian mana"), "interpreter's question preserved verbatim");
+  assert.strictEqual(parkedAsk, 0, "no plan parked on a clarification");
+
+  // (C) Penolakan terjemahan → null (fail-closed, TIDAK ada fallback ke teks mentah).
+  let parkNull = 0;
+  const refused = await maybeEscalateToE2b(baseEnv, 99, "ambil artikel", ungrounded, {
+    negotiate: async () => null,
+    park: async () => { parkNull++; },
+  });
+  assert.strictEqual(refused, null, "no plan/no clarification → null (fail-closed)");
+  assert.strictEqual(parkNull, 0, "nothing parked on refusal");
+
+  // (D) Output grounded → tidak dinaikkan (jalur murah menang).
+  assert.strictEqual(
+    await maybeEscalateToE2b(baseEnv, 99, "ambil 3 artikel", { reply: "x", source: "groq+ddg", grounded: true },
+      { negotiate: async () => ({ kind: "plan", plan }), park: async () => {} }),
+    null, "grounded → no escalation");
+
+  // (E) Tanpa kunci E2B → null (fail-closed).
+  assert.strictEqual(
+    await maybeEscalateToE2b({ ...baseEnv, E2B_API_KEY: "" }, 99, "ambil 3 artikel", ungrounded,
+      { negotiate: async () => ({ kind: "plan", plan }), park: async () => {} }),
+    null, "no key → no escalation");
+
+  // (F) Gerbang bukti-jawaban (v11.45): pencarian MEMBERI hits tapi jawaban
+  //     mengutip NOL sumber pada permintaan yang menuntut butir → model
+  //     knowledge, bukan riset. Tapi permintaan non-butir tidak di-gate.
+  assert.ok(shouldEscalateByAnswerEvidence(
+    { reply: "x", source: "groq+ddg", citedSources: 0, hitsAvailable: 5 },
+    "ambil 3 artikel teratas AI lalu rangkum"),
+    "sourcing ask + 0 cited sources escalates");
+  assert.ok(!shouldEscalateByAnswerEvidence(
+    { reply: "x", source: "groq+ddg", citedSources: 1, hitsAvailable: 5 },
+    "ambil 3 artikel teratas AI lalu rangkum"),
+    "a cited answer stays on the cheap path");
+  assert.ok(!shouldEscalateByAnswerEvidence(
+    { reply: "x", source: "groq+ddg", citedSources: 0, hitsAvailable: 5 },
+    "apa itu AI?"),
+    "non-sourcing ask with no cites does NOT escalate");
+
+  // (G) parseGoalNegotiation — kontrak hop penerjemah (klarifikasi ATAU rencana).
+  assert.strictEqual(parseGoalNegotiation(null), null, "null rejected");
+  assert.strictEqual(parseGoalNegotiation("tidak jelas"), null, "non-JSON rejected");
+  assert.strictEqual(parseGoalNegotiation('{"negotiate":true}'), null, "negotiate without ask rejected");
+  const neg = parseGoalNegotiation('{"negotiate":true,"ask":"Lanjut bagian mana?"}');
+  assert.ok(neg && neg.kind === "ask" && neg.ask.includes("bagian"), "negotiate-ask parsed");
+  const planN = parseGoalNegotiation('{"language":"bash","code":"curl .","steps":["ambil"],"summary":"s"}');
+  assert.ok(planN && planN.kind === "plan" && planN.plan.language === "bash", "plan branch parsed");
+  assert.strictEqual(parseGoalNegotiation(
+    '{"negotiate":true,"ask":"x","language":"bash","code":"y","steps":["a"]}'), null,
+    "mixed negotiate+plan rejected (single-contract fail-closed)");
+
+  // (H) Predikat relevansi eksekutor eksternal (v11.45) — murni & deterministik.
+  assert.strictEqual(isRelevantExecutorTask(null), false, "null goal not executor-worthy");
+  assert.strictEqual(isRelevantExecutorTask("halo"), false, "greeting not executor-worthy");
+  assert.strictEqual(isRelevantExecutorTask("lanjut"), false, "bare ambiguous word not executor-worthy");
+  assert.ok(isRelevantExecutorTask("ambil 3 artikel teratas AI dari Google News lalu rangkum"),
+    "concrete sourcing task is executor-worthy");
+  assert.ok(isRelevantExecutorTask("buat skrip laporan penjualan harian dari API innerx"),
+    "script-building task is executor-worthy");
+  assert.strictEqual(isCasualOnly("halo"), true, "greeting detected as casual-only");
+  assert.strictEqual(isCasualOnly("ambil 3 artikel"), false, "execution task NOT casual-only");
+}
+
+async function testProjectPlanContract() {
+  // v11.45 GERBANG EKSEKUSI TUNGGAL: launchParkedProject adalah SATU-SATUNYA
+  // jalur yang boleh membuka sandbox, dipanggil hanya setelah pemilik setuju
+  // ("ya proyek"). Mempertahankan kontrak v11.43 (urutan yang membetulkan
+  // "sandbox id hilang di ledger") pada lapisan paling terakhir.
+  const { planAndParkProject, launchParkedProject, parkProjectPlan } =
+    await import("../src/lib/project_plan");
 
   const events: { sql: string; params: unknown[] }[] = [];
   const stubDB = {
@@ -1925,14 +2034,18 @@ async function testEscalationOrdering() {
       };
     },
   };
+  const kv = new Map<string, string>();
+  const configKV = {
+    get: async (k: string) => kv.get(k) ?? null,
+    put: async (k: string, v: string) => { kv.set(k, v); },
+    delete: async (k: string) => { kv.delete(k); },
+  };
   const baseEnv = {
     APP_ENV: "test",
     E2B_API_KEY: "e2b_x",
-    E2B_API_URL: "",
-    E2B_TEMPLATE: "",
     DB: stubDB,
+    CONFIG_KV: configKV,
   } as any;
-  const ungrounded = { reply: "x", source: "groq+ddg", grounded: false };
   const plan = {
     language: "bash" as const,
     code: "curl -s 'https://news.google.com/rss/search?q=AI' | head -n 30",
@@ -1940,97 +2053,79 @@ async function testEscalationOrdering() {
     summary: "Ambil feed Google News AI.",
   };
 
-  // Success path: translator used, ledger carries the sandbox id, exactly ONE
-  // running-transition, and it happens AFTER the sandbox launch.
-  const ack = await maybeEscalateToE2b(
-    baseEnv, 99, "ambil 3 artikel teratas tentang AI dari Google News lalu rangkum", ungrounded,
-    {
-      translate: async () => plan,
-      delegate: async (_e, task) => {
-        events.push({ sql: "::delegate::", params: [String(task)] });
-        return { runId: "sandbox-abc-123" };
-      },
-    },
-  );
-  assert.ok(ack && ack.includes("menjadi skrip"), "ack announces the translator hop");
-  assert.ok(ack.includes("sandbox E2B"), "ack keeps the borrowed-executor framing");
-  const delegations = events.filter((e) => e.sql === "::delegate::");
-  assert.strictEqual(delegations.length, 1, "sandbox launched once");
-  assert.strictEqual(delegations[0].params[0], plan.code,
-    "delegated body is the TRANSLATED code, never the raw natural-language goal");
+  // (A) planAndParkProject: rencana → disimpan, TIDAK dieksekusi.
+  const presented = await planAndParkProject(baseEnv, 99, "ambil artikel AI teratas", undefined, {
+    negotiate: async () => ({ kind: "plan", plan }),
+  });
+  assert.ok(presented && presented.kind === "plan", "plan returned for presentation");
+  assert.strictEqual(presented.goal, "ambil artikel AI teratas", "goal attached for display");
+  assert.ok((kv.get("proyek_plan:99") ?? "").includes(plan.code), "plan parked in CONFIG_KV");
+
+  // (B) ask → diteruskan, TIDAK diparkir.
+  const askP = await planAndParkProject(baseEnv, 99, "lanjut", undefined, {
+    negotiate: async () => ({ kind: "ask", ask: "lanjut yang mana?" }),
+  });
+  assert.ok(askP && askP.kind === "ask", "clarification forwarded");
+  assert.strictEqual(kv.has("proyek_plan:99"), true, "parked plan from (A) untouched");
+
+  // (C) negosiasi gagal → null, tidak parkir apa-apa.
+  const nope = await planAndParkProject(baseEnv, 99, "ambil artikel", undefined, {
+    negotiate: async () => null,
+  });
+  assert.strictEqual(nope, null, "negotiation failure → null");
+
+  // (D) TANPA persetujuan → launchParkedProject menolak (tidak ada sandbox).
+  kv.clear();
+  const noCong = await launchParkedProject({ ...baseEnv, E2B_API_KEY: "e2b_x" }, 99);
+  assert.ok(noCong && noCong.ok === false && noCong.reason === "no-plan", "no plan → no-plan (never guesses)");
+
+  // (E) SUCCESS path: park → launch → SATU transisi running MEMBAWA run_id,
+  //     dan terjadi SETELAH delegate (kontrak v11.43). Ledger terisi dulu.
+  kv.clear(); events.length = 0;
+  await parkProjectPlan(baseEnv, 99, "ambil artikel AI teratas", "bash", plan.code);
+  const okOut = await launchParkedProject(baseEnv, 99, {
+    delegate: async () => { events.push({ sql: "::delegate::", params: [] }); return { runId: "sandbox-xyz-9" }; },
+  });
+  assert.ok(okOut && okOut.ok && okOut.id === 1 && okOut.language === "bash", "launch committed");
   assert.ok(events[0].sql.includes("INSERT INTO agent_tasks"), "task queued on the ledger first");
+  assert.strictEqual(events.filter((e) => e.sql === "::delegate::").length, 1, "sandbox launched once");
   const running = events.filter((e) => e.sql.includes("SET status = 'running'"));
-  assert.strictEqual(running.length, 1, "exactly ONE running transition (the bug made two)");
-  assert.strictEqual(running[0].params[0], "sandbox-abc-123",
+  const delegations = events.filter((e) => e.sql === "::delegate::");
+  assert.strictEqual(running.length, 1, "exactly ONE running transition (the v11.43 bug made two)");
+  assert.strictEqual(running[0].params[0], "sandbox-xyz-9",
     "the single transition carried the sandbox id as run_id");
-  const delegateIdx = events.indexOf(delegations[0]);
-  const runIdx = events.indexOf(running[0]);
-  assert.ok(delegateIdx >= 0 && delegateIdx < runIdx,
+  assert.ok(events.indexOf(delegations[0]) < events.indexOf(running[0]),
     "sandbox launched BEFORE the transition — run_id is never a second no-op");
   assert.ok(!events.some((e) => e.sql.includes("status = 'failed'")), "success path never fails the row");
+  assert.ok(!kv.has("proyek_plan:99"), "plan cleared after commit (one-shot approval)");
 
-  // Failure path: row marked running THEN finished failed (finish's guard is
-  // WHERE status='running'; finishing a 'pending' row would silently no-op and
-  // leave it wedged).
-  const failEvents: { sql: string; params: unknown[] }[] = [];
-  const failDB = {
-    prepare(sql: string) {
-      return {
-        bind(...params: unknown[]) {
-          const row = { sql, params };
-          return {
-            async run() {
-              failEvents.push(row);
-              return { meta: { last_row_id: 1, changes: 1 } };
-            },
-            async all() {
-              failEvents.push(row);
-              return { results: [] };
-            },
-          };
-        },
-      };
-    },
-  };
-  const refused = await maybeEscalateToE2b(
-    { ...baseEnv, DB: failDB }, 99, "ambil 3 artikel teratas tentang AI", ungrounded,
-    {
-      translate: async () => plan,
-      delegate: async () => {
-        failEvents.push({ sql: "::delegate::", params: [] });
-        return { error: "sandbox create refused" };
-      },
-    },
-  );
-  assert.strictEqual(refused, null, "launch failure → no ack to the owner");
-  const failRun = failEvents.filter((e) => e.sql.includes("SET status = 'running'"));
-  const failFinish = failEvents.filter((e) => e.sql.includes("status = ?") && e.params[0] === "failed");
+  // (F) FAILURE path: mark running dulu, lalu finish failed (guard 'running').
+  kv.clear(); events.length = 0;
+  await parkProjectPlan(baseEnv, 99, "ambil artikel", "python", "print(1)");
+  const failOut = await launchParkedProject(baseEnv, 99, {
+    delegate: async () => { events.push({ sql: "::delegate::", params: [] }); return { error: "sandbox create refused" }; },
+  });
+  assert.ok(failOut && failOut.ok === false && failOut.reason === "launch", "launch failure surfaced");
+  const failRun = events.filter((e) => e.sql.includes("SET status = 'running'"));
+  const failFinish = events.filter((e) => e.sql.includes("status = ?") && e.params[0] === "failed");
   assert.strictEqual(failRun.length, 1, "failure path still transitions running once");
   assert.strictEqual(failFinish.length, 1, "failure path finalizes as failed");
-  assert.ok(failEvents.indexOf(failRun[0]) < failEvents.indexOf(failFinish[0]),
+  assert.ok(events.indexOf(failRun[0]) < events.indexOf(failFinish[0]),
     "mark running BEFORE finish so finish's status='running' guard passes");
 
-  // Gating: grounded output never reaches a sandbox.
-  const idle = await maybeEscalateToE2b(baseEnv, 99, "ambil 3 artikel",
-    { reply: "x", source: "groq+ddg", grounded: true },
-    { translate: async () => plan, delegate: async () => ({ runId: "nope" }) });
-  assert.strictEqual(idle, null, "grounded result stays on the cheap path (no escalation)");
+  // (G) Tanpa kunci → ditolak tanpa menyentuh ledger.
+  kv.clear(); events.length = 0;
+  await parkProjectPlan(baseEnv, 99, "ambil artikel", "bash", "echo hi");
+  const lock = await launchParkedProject({ ...baseEnv, E2B_API_KEY: "" }, 99);
+  assert.ok(lock && lock.ok === false && lock.reason === "e2b-not-configured", "no key → fail-closed");
+  assert.strictEqual(events.filter((e) => e.sql.includes("INSERT INTO agent_tasks")).length, 0,
+    "no key → nothing queued");
 
-  // Gating: no E2B key → nothing queued or launched.
-  const idle2 = await maybeEscalateToE2b(
-    { ...baseEnv, E2B_API_KEY: "" }, 99, "ambil 3 artikel", ungrounded,
-    { translate: async () => plan, delegate: async () => ({ runId: "nope" }) });
-  assert.strictEqual(idle2, null, "no key → fail-closed (no escalation)");
-
-  // Translation failure falls back to the raw goal (older etask semantics).
-  const fallbackSpy: string[] = [];
-  const fb = await maybeEscalateToE2b(baseEnv, 99, "curl -s example.com | head -n 3", ungrounded, {
-    translate: async () => null,
-    delegate: async (_e, task) => { fallbackSpy.push(String(task)); return { runId: "fb-1" }; },
-  });
-  assert.ok(fb && fb.includes("E2B"), "translation failure still escalates (fallback)");
-  assert.strictEqual(fallbackSpy[0], "curl -s example.com | head -n 3",
-    "fallback delegates the raw goal text");
+  // (H) Tanpa rencana tertunda → tidak menyentuh apa pun.
+  kv.clear(); events.length = 0;
+  const empty = await launchParkedProject(baseEnv, 99);
+  assert.ok(empty && empty.ok === false && empty.reason === "no-plan", "empty → no-plan");
+  assert.strictEqual(events.length, 0, "no DB/delegate events without an approved plan");
 }
 
 async function main() {
@@ -2096,6 +2191,7 @@ async function main() {
   await testExecutorSelectionRails();
   await testTranslatorRails();
   await testEscalationOrdering();
+  await testProjectPlanContract();
   await testRuntimeEditRails();
   console.log("LOGIC TESTS PASSED");
 }

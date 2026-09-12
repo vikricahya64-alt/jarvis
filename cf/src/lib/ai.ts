@@ -1548,7 +1548,7 @@ export async function searchAndSynthesize(
   userText: string,
   topic: string,
   opts: { followupPrior?: string; replyLang?: string } = {},
-): Promise<{ reply: string; source: string; grounded?: boolean }> {
+): Promise<{ reply: string; source: string; grounded?: boolean; citedSources?: number; hitsAvailable?: number }> {
   // SELF-REFERENTIAL GUARD — if a self-referential question somehow reaches the
   // search path, answer directly from identity instead of searching/hallucinating.
   const selfRefText = (userText || "").trim().toLowerCase();
@@ -1775,8 +1775,14 @@ export async function searchAndSynthesize(
     // ANTI-HALUSINASI (audit): hanya URL dari sumber yang benar-benar
     // dikembalikan mesin pencari boleh sampai ke pemilik — tautan fabrikasi
     // LLM dipotong deterministik (bukan instruksi prompt belaka).
+    // v11.45: hitung berapa sumber NYATA yang TERSISA di jawaban (citedSources)
+    // — grounding dinilai dari jawaban, bukan hanya dari fakta bahwa mesin
+    // pencari sempat dipanggil. Nol kutipan pada permintaan yang menuntut butir
+    // = model knowledge → negosiator menawarkan eksekutor yang sebenarnya.
+    let citedSources = 0;
     if (hits.length > 0) {
       generated = sanitizeUncitedLinks(generated, hits.map((h) => h.url));
+      citedSources = hits.filter((h) => generated.includes(h.url)).length;
     }
     // SELF-LEARNING: Store the synthesized knowledge for future queries
     if (searchResult) {
@@ -1804,7 +1810,7 @@ export async function searchAndSynthesize(
     if (formatted.length > 120) {
       void reflectOnTurn(env, userText, formatted, []).catch(() => {});
     }
-    return { reply: formatted, source: `${g.source}+ddg`, grounded: searchResult !== null || hits.length > 0 };
+    return { reply: formatted, source: `${g.source}+ddg`, grounded: searchResult !== null || hits.length > 0, citedSources, hitsAvailable: hits.length };
   }
   if (searchResult) {
     // SELF-LEARNING: Store the new knowledge for future queries

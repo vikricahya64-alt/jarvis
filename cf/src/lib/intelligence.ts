@@ -370,7 +370,10 @@ function classifyIntent(text: string, _topic: string | null): IntentResult {
   // but an ask-shaped phrasing ("bagaimana cara riset X?") that doesn't order
   // it gets ANSWERED + verified instead of burning a search literally (owner:
   // respond then verify, not every turn — text-clear turns skip verification).
-  if (/\b(?:cari|search|riset|reseach|research|studi|study|pelajari|mempelajari|meneliti|info|tentang|analisis|review|bandingkan|ringkas|laporan|kajian)\b/i.test(low)) {
+  // v11.45: "ambil/rangkum/ambilkan" = perintah ambil butir bersumber; tanpa
+  // ini "ambil 3 artikel teratas AI dari Google News lalu rangkum" lolos ke
+  // chat model-memory (dulu bergantung kata "tentang"). Mulai: kata kunci.
+  if (/\b(?:cari|search|riset|reseach|research|studi|study|pelajari|mempelajari|meneliti|info|tentang|analisis|review|bandingkan|ringkas|rangkum|ambilkan|ambilin|laporan|kajian)\b/i.test(low)) {
     if (heavyCapVerdict("search", text) === "verify") {
       return { type: "question", urgency: "low", formality: "neutral", confidence: 0.7, entities: { heavyVerify: "search", topic: text.slice(0, 100) } };
     }
