@@ -83,3 +83,13 @@ jarvis/
 - **Free-tier discipline**: ≤5 crons, bounded CPU/timeouts, provider cascade
   instead of paid upgrades.
 - Use `cf/docs/SETUP.md` for provisioning, `cf/deploy.sh` for operations.
+
+## 🔒 Keamanan & Environment
+
+- Nilai rahasia (`OWNER_TELEGRAM_ID`, token bot, PAT, API key) TIDAK
+  di-commit; simpan hanya di environment Vercel / Cloudflare / machine
+  lokal (`~/.codex/telegram-bridge.json` bila perlu).
+- Repo ini adalah **satu-satunya sumber kebenaran** untuk `cf/`, `api/`,
+  dan `utils/`; arsitektur sebelumnya terbagi ke dalam fork identitas yang
+  sekarang tidak dipakai — cabang `origin/main` adalah otoritatif.
+- Jika menemukan secret bocor, lihat `SECURITY.md`.
