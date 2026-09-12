@@ -2026,6 +2026,38 @@ function likelyClear(text: string): boolean {
   return false;
 }
 
+/** Kata sambung yang TIDAK membawa subjek — boleh tersisa di ekor pesan vague
+ *  tanpa membuat pesan itu "ber-subjek". */
+const VAGUE_TAIL_FILLERS = new Set([
+  "yang", "dengan", "soal", "tentang", "apa", "ya", "sih", "dong", "ini", "itu",
+  "karena", "jadi", "dan", "nah", "eh", "kan", "deh", "aja", "juga", "saja",
+  "saya", "aku", "gue", "gw", "kamu", "kamu", "lagi", "sedang", "adalah",
+  "mau", "ingin", "tanya", "nanya", "pengen", "butuh", "minta", "tolong", "bantu",
+]);
+
+/** True for a vague emotional statement or bare plea with NO concrete subject
+ *  ("saya sedang bingung", "bantu aku", "gimana ya"). Answering such a message
+ *  with confidence, when there's no active topic and no memory-recall in
+ *  context, makes JARVIS invent a subject (live failure: "Saya sedang bingung"
+ *  → nasihat "kerja remote"). Deterministic: strip the vague head, then require
+ *  the remaining words to be filler only (no content noun). */
+export function isVagueNoSubject(text: string): boolean {
+  const low = (text ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (low.length < 4 || low.length > 60) return false;
+  const head = low
+    .replace(
+      /^(?:saya|aku|gue|gw)?[\s,]*(?:sedang|lagi|sangat|betul-betul|makin|semakin)?\s*(?:bingung|buntu|pusing|kurang jelas|tidak?\s+(?:paham|mengerti|ngerti)|nggak?\s+(?:paham|ngerti)|gak?\s+(?:paham|ngerti))\b/i,
+      "",
+    )
+    .replace(/^(?:bantu|tolong)\s+(?:aku|saya)\b/i, "")
+    .replace(/^(?:boleh|bisa)\s+minta\s+(?:tolong|bantuan)\b/i, "")
+    .replace(/^(?:aku|saya)\s+(?:butuh|minta)\s+bantuan\b/i, "")
+    .replace(/^(?:gimana|bagaimana|gimana sih|bagaimana dong)\s*(?:ya|sih|dong|nih|tuh)?$/i, "");
+  if (head === low) return false; // tidak cocok pola vague → bukan pesan tanpa subjek
+  const tokens = head.toLowerCase().split(/[^a-z]+/).filter((w) => w.length >= 2);
+  return tokens.every((w) => VAGUE_TAIL_FILLERS.has(w));
+}
+
 /** Minimum confidence for the comprehension gate to treat a message as clear.
  *  Fail-closed: BELOW this bar we ASK instead of answering — confidence is
  *  expensive (a confident fabricated claim is worse than a clarifying ask). */

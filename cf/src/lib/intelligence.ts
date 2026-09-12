@@ -39,6 +39,7 @@ import {
   storeResearchAnchor,
   detectGarbledInput,
   unknownEntitySignal,
+  isVagueNoSubject,
 } from "./ai";
 import {
   isResearchClass, orchestrateResearch,
@@ -880,6 +881,14 @@ export function buildUniversalFrame(opts: {
     `perkiraanku, mau aku pastikan/riset?"). Bila tidak ada rekomendasi yang ` +
     `pantas, cukup satu paragraf jawaban. Jangan memaksakan dua paragraf bila ` +
     `tidak perlu — dan JANGAN pernah mengubah pertanyaan pilihan menjadi isi. ` +
+    `CATATAN ANTI-KUTIPAN MEMORI: frasa "berdasarkan catatan kita", "tadi kita ` +
+    `bahas", "seperti yang kita sepakati" HANYA boleh dipakai bila topik ` +
+    `rekomendasi itu sungguh ADA pada konteks yang diberikan (blok riwayat atau ` +
+    `percakapan terakhir memang membahasnya). Kalau konteks TIDAK berisi ` +
+    `pembahasan topik itu, JANGAN mengklaim kita pernah membahasnya — tulis ` +
+    `rekomendasi sebagai opini/pengalaman pribadi ("menurutku", "biasanya", ` +
+    `"pengalamanku") tanpa mengarang rekam jejak bersama; mengutip memori yang ` +
+    `tidak ada itu halusinasi. ` +
     `Aturan ini berlaku untuk SEMUA topik percakapan. ` +
     `JANGAN mengarang atau menjelaskan dengan percaya diri tentang platform, produk, merek, ` +
     `atau istilah yang tidak kamu kenal dan tidak muncul di konteks percakapan — kalau ` +
@@ -936,7 +945,10 @@ export function buildUniversalFrame(opts: {
       `singkat dan minta pemilik mengingatkan konteksnya. ` +
       `ABAIKAN topik percakapan terakhir — JANGAN menggabungkan topik lama dengan ` +
       `topik baru dari percakapan terakhir (mis. jangan mencampur "bekerja remote" ` +
-      `dengan thread gambar/storyboard).` +
+      `dengan thread gambar/storyboard). ` +
+      `Basis "berdasarkan catatan kita" pada rekomendasi HANYA boleh merujuk isi ` +
+      `blok riwayat ini — JANGAN menambahkan detail rekomendasi yang tidak ` +
+      `tercantum di blok itu.` +
       compRail) + heavyNote;
   }
   if (perception.isContinuation && topic) {
@@ -1122,6 +1134,19 @@ export async function act(
     }
 
     case "understand_intent": {
+      // m9-v11.x EMPTY-SUBJECT GATE: pesan vague tanpa subjek ("saya sedang
+      // bingung", "bantu aku") yang TIDAK punya topik aktif dan TIDAK menunjuk
+      // kembali ke riwayat → tanya klarifikasi singkat secara deterministik
+      // (nol panggilan LLM). Live failure: "Saya sedang bingung" dijawab
+      // percaya diri soal "kerja remote" — model mengisi subjek sendiri.
+      const hasRecall = (enrichedContext ?? []).some((c) =>
+        /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
+      if (!topic && !perception.isContinuation && !hasRecall && isVagueNoSubject(d)) {
+        return {
+          reply: "Hmm, aku belum menangkap konteksnya. Soal apa nih — boleh jelaskan sedikit?",
+          source: "understand_clarify",
+        };
+      }
       // Decode what the user actually WANTS, even for unknown/vague requests.
       // m9-v11.32: feed the ROOT comprehension (universal language/literacy/
       // domain) so understanding works across all human languages & fields.
