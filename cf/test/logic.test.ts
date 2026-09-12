@@ -1861,6 +1861,38 @@ async function testTranslatorRails() {
     "too-short goal → null");
 }
 
+async function testRuntimeEditRails() {
+  // v11.44 phase-C: /proyek lanjut — runtime-edit atas tugas yang sudah
+  // berjalan. buildIterationConstraint menyalurkan konteks putaran sebelumnya
+  // + instruksi baru ke penerjemah tanpa pemilik mengulang tujuannya.
+  const { buildIterationConstraint, translateTaskToExecutable } = await import("../src/lib/translator");
+
+  const c = buildIterationConstraint({
+    goal: "ambil 3 artikel AI dari Google News lalu rangkum",
+    status: "failed",
+    outcome: "jq: command not found",
+    instruction: "pakai python+jq parsing json, sertakan link",
+  });
+  assert.ok(c.includes("ITERASI PERBAIKAN"), "constraint labels the iteration");
+  assert.ok(c.includes("TUJUAN ASLI"), "original goal carried over (owner need not repeat it)");
+  assert.ok(c.includes("ambil 3 artikel AI"), "goal text preserved verbatim");
+  assert.ok(c.includes("jq: command not found"), "previous failure outcome passed as context");
+  assert.ok(/sebelumnya \(failed\)/i.test(c), "previous status surfaced");
+  assert.ok(c.includes("python+jq"), "owner instruction passed through");
+  assert.ok(c.includes("Pertahankan esensi tujuan asli"), "iterative guardrail present (no drift)");
+
+  // Empty/blank iteration fields are safe (never throws, never fabricated).
+  const thin = buildIterationConstraint({ goal: "", status: "done", outcome: "", instruction: "   " });
+  assert.ok(thin.includes("ITERASI PERBAIKAN"), "empty iteration context still safe");
+
+  // Fail-closed: no LLM key → iteration translation returns null, no network.
+  assert.strictEqual(
+    await translateTaskToExecutable({ APP_ENV: "test" } as any, "ambil artikel", { constraint: c }),
+    null,
+    "iteration translation fails closed without an LLM gateway",
+  );
+}
+
 async function testEscalationOrdering() {
   // v11.43 REGRESSION: "... Tugas #32 gagal di eksekutor E2B: sandbox id hilang
   // di ledger". Root cause: markAgentTaskRunning was called TWICE — it only
@@ -2064,6 +2096,7 @@ async function main() {
   await testExecutorSelectionRails();
   await testTranslatorRails();
   await testEscalationOrdering();
+  await testRuntimeEditRails();
   console.log("LOGIC TESTS PASSED");
 }
 

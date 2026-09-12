@@ -55,7 +55,7 @@ import { delegateToGithub, flagAgentReport, truncationWarning, usesDeepResearchP
 import { e2bRun, e2bConfigured, e2bSummary, e2bStateHint } from "../lib/e2b";
 import { delegateToE2b } from "../lib/e2b_executor";
 import { parseBorrowedTarget, borrowedExecutorTag, borrowedExecutorLabel, BORROWED_EXECUTOR_IDS } from "../lib/borrowed_executor";
-import { translateTaskToExecutable } from "../lib/translator";
+import { translateTaskToExecutable, buildIterationConstraint } from "../lib/translator";
 import { parseRecurSpec } from "../lib/agent_rules";
 import { readNegotiation, saveNegotiation, clearNegotiation, generateClarifyQuestions, compileFinalInstruction, type NegoSession } from "../lib/negotiation";
 import {
@@ -2181,6 +2181,33 @@ async function clearProjectPlan(env: Env, owner: number): Promise<void> {
   await env.CONFIG_KV.delete(projectPlanKey(owner)).catch(() => {});
 }
 
+// --- Per-task proyek meta (goal asli + kode), dipakai oleh /proyek lanjut
+//     untuk REITERASI: pemilik tidak perlu mengulang tujuannya — penerjemah
+//     mendapat konteks putaran sebelumnya + instruksi perbaikan baru. TTL 7 hari.
+const PROJECT_META_TTL_S = 7 * 24 * 60 * 60;
+
+function projectMetaKey(taskId: number): string {
+  return `proyek_meta:${taskId}`;
+}
+
+type ProjectMeta = { goal: string; language: string; code: string; ts: number };
+
+async function storeProjectMeta(env: Env, taskId: number, goal: string, language: string, code: string): Promise<void> {
+  await env.CONFIG_KV.put(projectMetaKey(taskId), JSON.stringify({ goal, language, code, ts: Date.now() }), {
+    expirationTtl: PROJECT_META_TTL_S,
+  }).catch(() => {});
+}
+
+async function readProjectMeta(env: Env, taskId: number): Promise<ProjectMeta | null> {
+  try {
+    const raw = await env.CONFIG_KV.get(projectMetaKey(taskId));
+    if (!raw) return null;
+    const o = JSON.parse(raw) as ProjectMeta;
+    if (!o?.goal) return null;
+    return { goal: String(o.goal), language: String(o.language ?? "bash"), code: String(o.code ?? ""), ts: Number(o.ts ?? 0) };
+  } catch { return null; }
+}
+
 /** Execute the /proyek loop:
  *    /proyek            → help
  *    /proyek <tujuan>   → JARVIS (pihak ketiga) menerjemahkan tujuan pemilik
@@ -2210,6 +2237,9 @@ async function handleProyekCommand(env: Env, from: number, raw: string): Promise
         await fire(sendMessage(env, from, "⚠️ Gagal menyimpan rencana. Coba lagi."));
         return;
       }
+      // Keep the ORIGINAL goal + code per task so /proyek lanjut <id> can
+      // re-translate later without the owner re-typing the whole goal.
+      await storeProjectMeta(env, id, parked.goal, parked.language, parked.code);
       const { runId, error } = await delegateToE2b(env, parked.code).catch(
         () => ({ runId: "", error: "e2b-launch-failed" }),
       );
@@ -2230,12 +2260,68 @@ async function handleProyekCommand(env: Env, from: number, raw: string): Promise
       return;
     }
 
+    // --- Iteration: "/proyek lanjut <id> [instruksi]" re-translates the SAME
+    //     goal with the previous run's outcome as context + the owner's new
+    //     instruction (runtime-edit). The refined plan is parked, then requires
+    //     "ya proyek" again — diskusi tetap mendahului eksekusi.
+    const lanjut = trimmed.match(/^\/proyek\s+lanjut\s+(\d+)\s*(.*)$/is);
+    if (lanjut) {
+      const taskId = Number(lanjut[1]);
+      const instruction = lanjut[2].trim();
+      if (!instruction) {
+        const meta = await readProjectMeta(env, taskId);
+        const task = await getAgentTask(env, taskId);
+        if (!meta || !task || task.owner_id !== from) {
+          await fire(sendMessage(env, from, "Tugas proyek tidak ditemukan. Buka `/tugas list` untuk melihat id yang valid."));
+          return;
+        }
+        await fire(sendMessage(env, from,
+          `✏️ *Runtime-edit tugas #${taskId}*\nTujuan: ${meta.goal.slice(0, 220)}\nPutaran terakhir: *${task.status}*.\n\n` +
+          `Lanjutkan dengan instruksi perbaikannya: \`/proyek lanjut ${taskId} <instruksi>\`\nContoh: \`/proyek lanjut ${taskId} rapikan keluarannya jadi bullet point dan sertakan link\``));
+        return;
+      }
+      const meta = await readProjectMeta(env, taskId);
+      const task = await getAgentTask(env, taskId);
+      if (!meta || !task || task.owner_id !== from) {
+        await fire(sendMessage(env, from, "Tugas proyek tidak ditemukan. Buka `/tugas list` untuk melihat id yang valid."));
+        return;
+      }
+      if (!e2bConfigured(env)) {
+        await fire(sendMessage(env, from,
+          `⚠️ Eksekutor E2B belum aktif${e2bStateHint("e2b-not-configured")} — terjemahan berjalan, tapi sandbox tidak bisa dibuka.`));
+      }
+      const outcome = (task.status === "failed" ? task.error : task.result) ?? "";
+      const constraint = buildIterationConstraint({
+        goal: meta.goal,
+        status: task.status as "done" | "failed" | "running" | "pending",
+        outcome,
+        instruction,
+      });
+      const plan = await translateTaskToExecutable(env, meta.goal, { constraint });
+      if (!plan) {
+        await fire(sendMessage(env, from, "🌐 Penerjemah tidak menghasilkan skrip yang valid saat ini. Coba lagi sebentar."));
+        return;
+      }
+      await parkProjectPlan(env, from, meta.goal, plan.language, plan.code);
+      const stepsLines = plan.steps.map((s, i) => `  ${i + 1}. ${s}`).join("\n");
+      await fire(sendMessage(env, from,
+        `✏️ *Rencana iterasi untuk tugas #${taskId}* — runtime-edit (diskusi dulu, eksekusi setelah setuju).\n\n` +
+        `*Tujuan asli:* ${meta.goal.slice(0, 220)}\n` +
+        `*Putaran terakhir:* ${task.status}${outcome ? ` — konteks disertakan ke penerjemah (${Math.min(outcome.length, 400)}+ karakter)` : ""}\n` +
+        `*Instruksi perbaikan:* ${instruction.slice(0, 220)}\n\n` +
+        `*Langkah baru:*\n${stepsLines}\n\n` +
+        `*Kode terjemahan* (\`${plan.language}\`):\n\`\`\`${plan.language}\n${plan.code.slice(0, 2000)}${plan.code.length > 2000 ? "\n…(dipotong untuk tampilan; skrip utuh tersimpan)" : ""}\n\`\`\`\n\n` +
+        `Setuju? balas *ya proyek* untuk membuka sandbox dan menjalankan iterasi ini.`));
+      return;
+    }
+
     if (trimmed === "/proyek") {
       await fire(sendMessage(env, from,
         "🗂️ *Proyek — diskusi dulu, eksekusi setelah setuju*\n" +
         "JARVIS = *penerjemah pihak ketiga* antara bahasamu dan bahasa pemrograman (konsep-sistem seperti E2B: platform pinjaman mengeksekusi dengan kemampuan penuh).\n\n" +
         "• `/proyek <tujuan>` — JARVIS menerjemahkan tujuanmu menjadi *skrip bash/python* + daftar langkah, lalu menampilkan rencana (tidak langsung jalan)\n" +
         "• balas *ya proyek* — sandbox E2B dibuka, kode terjemahan dijalankan, hasil di-DM\n" +
+        "• `/proyek lanjut <id> <instruksi>` — *runtime-edit*: perbaiki hasil tugas yang sudah berjalan (penerjemah memakai konteks putaran lalu + instruksimu)\n" +
         "• metode ini selalu *diskusi sebelum eksekusi* (output terbaik, tanpa kejutan)"));
       return;
     }
