@@ -48,6 +48,7 @@ import {
 import { writeExpertPrompt } from "./prompt_master";
 import { lookupLibraryDocs, context7FailureMessage } from "./context7";
 import { capabilityIntent, approachForIntent } from "./capability_registry";
+import { maybeEscalateToE2b } from "./executor_selection";
 import {
   detectRelevanceAmbiguity, parkPendingRelevance,
   readPendingRelevance, clearPendingRelevance, resolveRelevanceConfirmation,
@@ -1017,12 +1018,24 @@ export async function act(
       if (result) return { reply: result, source: "research" };
       // Fallback to search
       const fallback = await searchAndSynthesize(env, owner, d, topic, { replyLang });
+      // v11.41 OUTPUT-DRIVEN BRANCH: inline research returned an answer with
+      // ZERO citable evidence → a borrowed concept-system executor (E2B) can
+      // do strictly better. Hand the confirmed topic over instead of shipping
+      // an ungrounded "research" reply. Fail-closed: no executor → keep inline.
+      const escalated = await maybeEscalateToE2b(env, owner, d, fallback).catch(() => null);
+      if (escalated != null) return { reply: escalated, source: "research_escalated" };
       return { reply: fallback.reply ?? "Gagal melakukan riset.", source: "research_fallback" };
     }
 
     case "search_synthesize": {
       if (!topic) return { reply: "Topik tidak ditemukan.", source: "search" };
       const result = await searchAndSynthesize(env, owner, d, topic, { replyLang });
+      // v11.41 OUTPUT-DRIVEN BRANCH (same rule as orchestrate_research above):
+      // ungrounded single-pass output is worse than what the borrowed third
+      // party produces → delegate instead of presenting model knowledge as
+      // verified research. Fail-closed: no executor configured → inline stays.
+      const escalated = await maybeEscalateToE2b(env, owner, d, result).catch(() => null);
+      if (escalated != null) return { reply: escalated, source: "research_escalated" };
       return { reply: result.reply ?? "Pencarian tidak menghasilkan jawaban.", source: result.source ?? "search" };
     }
 
