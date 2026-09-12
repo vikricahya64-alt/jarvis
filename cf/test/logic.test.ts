@@ -1795,6 +1795,34 @@ async function testBorrowedExecutorRails() {
     "ungrounded report never presents a confident checkmark");
 }
 
+async function testExecutorSelectionRails() {
+  // m9-v11.41: OUTPUT-DRIVEN branch intelligence — pick the executor by the
+  // evidence (grounded flag) the inline capability PRODUCED, and hand worse
+  // output to the third-party concept executor only when clearly warranted.
+  // Pure predicates here: no network, no ledger, no side effects.
+  const { pickEscalationExecutor, shouldEscalateToConceptExecutor, CONCEPT_EXECUTORS } =
+    await import("../src/lib/executor_selection");
+
+  assert.ok(CONCEPT_EXECUTORS.includes("e2b"), "E2B is a first-class third-party concept executor");
+  assert.strictEqual(pickEscalationExecutor({}), null, "no key → no escalation target (fail-closed)");
+  assert.strictEqual(pickEscalationExecutor({ E2B_API_KEY: "e2b_x" }), "e2b", "key wired → E2B selected");
+
+  assert.strictEqual(shouldEscalateToConceptExecutor(null), false, "null result never escalates");
+  assert.strictEqual(shouldEscalateToConceptExecutor({ reply: "" }), false, "empty reply never escalates");
+  assert.strictEqual(
+    shouldEscalateToConceptExecutor({ reply: "x", source: "canned", grounded: false }), false,
+    "canned reply stays on its graceful path (never escalates)");
+  assert.strictEqual(
+    shouldEscalateToConceptExecutor({ reply: "x", source: "self_ref", grounded: false }), false,
+    "identity answers never escalate to a sandbox");
+  assert.strictEqual(
+    shouldEscalateToConceptExecutor({ reply: "x", source: "groq+ddg", grounded: true }), false,
+    "grounded output keeps the cheap path");
+  assert.strictEqual(
+    shouldEscalateToConceptExecutor({ reply: "x", source: "groq+ddg", grounded: false }), true,
+    "unambiguously ungrounded research output selects the better executor");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -1855,6 +1883,7 @@ async function main() {
   await testBorrowedRails();
   await testGroqSingleShotRails();
   await testBorrowedExecutorRails();
+  await testExecutorSelectionRails();
   console.log("LOGIC TESTS PASSED");
 }
 
