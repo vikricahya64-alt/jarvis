@@ -2128,6 +2128,52 @@ async function testProjectPlanContract() {
   assert.strictEqual(events.length, 0, "no DB/delegate events without an approved plan");
 }
 
+async function testSourcingOrderIntent() {
+  // v11.45.1/v11.46 REGRESSION: "ambil 3 artikel teratas AI dari Google News
+  // lalu rangkum" harus terdeteksi sebagai ORDER eksekusi (type 'search') —
+  // bukan jatuh ke question/heavyVerify yang menjawab dari model-memory
+  // (mengarang "GPT-4o/Gemini...", kasus live). Penyebab: verba ambil/rangkum
+  // tak dikenal daftar order → verdict 'verify'. Kini FONDASI menilai BENTUK
+  // (isSourcingOrder): verba ambil + target-butir ATAU target-butir + verba
+  // hasil, dipakai semua jalur (bukan ditambah kata per kata).
+  const { classifyIntent, isSourcingOrder } = await import("../src/lib/intelligence");
+
+  // --- classifyIntent: perintah ambil-butir → 'search' (eksekusi) ---
+  const order = classifyIntent("ambil 3 artikel teratas AI dari Google News lalu rangkum", null);
+  assert.strictEqual(order.type, "search", "sourcing order classified as search (execution)");
+
+  const order2 = classifyIntent("ambilkan 3 berita teratas perihal AI lalu ringkas", null);
+  assert.strictEqual(order2.type, "search", "ambilkan...ringkas also classified as search");
+
+  // Tanpa kata kunci riset klasik pun (hanya bern 'berita') tetap terdeteksi
+  // lewat BENTUK — bukti fondasi menyambung, bukan enumerasi kata.
+  assert.strictEqual(classifyIntent("sebutkan 5 berita terbaru industri chip lalu tulis ringkasannya", null).type, "search",
+    "shape-only sourcing order (no 'cari/tentang') still reaches search");
+
+  // --- Non-regression: kasual/ask tetap bukan eksekusi ---
+  assert.notStrictEqual(classifyIntent("ambil foto hasil jepretan tadi", null).type, "search",
+    "'ambil foto' (without sourced noun) is NOT search");
+  assert.strictEqual(classifyIntent("cara ambil 3 artikel teratas tentang AI?", null).type, "question",
+    "ask-shaped sourcing question stays a question");
+  assert.strictEqual(classifyIntent("apa itu AI?", null).type, "question",
+    "plain knowledge question unaffected");
+
+  // --- isSourcingOrder (fondasi shape) ---
+  assert.strictEqual(isSourcingOrder(null), false, "null → false");
+  assert.strictEqual(isSourcingOrder("ambil 3 artikel AI dari Google News lalu rangkum"), true,
+    "collect-verb + sourced target + report verb → order");
+  assert.strictEqual(isSourcingOrder("sebutkan 5 berita terbaru tentang iklim lalu ringkas"), true,
+    "collect-verb + numbered source target → order");
+  assert.strictEqual(isSourcingOrder("3 artikel teratas AI lalu rangkum"), true,
+    "sourced target + report verb (no leading verb) → order");
+  assert.strictEqual(isSourcingOrder("ambil foto hasil jepretan tadi"), false,
+    "no sourced noun → not a sourcing order");
+  assert.strictEqual(isSourcingOrder("cara ambil 3 artikel dari Google News?"), false,
+    "question-shaped → not an order");
+  assert.strictEqual(isSourcingOrder("apa itu AI"), false, "plain question → not an order");
+  assert.strictEqual(isSourcingOrder("halo"), false, "greeting → not an order");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -2192,6 +2238,7 @@ async function main() {
   await testTranslatorRails();
   await testEscalationOrdering();
   await testProjectPlanContract();
+  await testSourcingOrderIntent();
   await testRuntimeEditRails();
   console.log("LOGIC TESTS PASSED");
 }
