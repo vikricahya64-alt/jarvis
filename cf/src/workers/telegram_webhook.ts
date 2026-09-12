@@ -51,7 +51,6 @@ import { identityStatusText } from "../lib/identity_anchor";
 import { getPlans, getScheduledTasks } from "../lib/maestro";
 import { getDegradationStatus } from "../lib/degradation";
 import { delegateToGithub, flagAgentReport, truncationWarning, usesDeepResearchProtocol, stripDeepResearchFlag } from "../lib/agent_executor";
-import { simulateOdyssey, odysseyJobStatus, odysseyRecording, odysseyStateLabel, odysseyConfigured } from "../lib/odyssey";
 import { parseRecurSpec } from "../lib/agent_rules";
 import { readNegotiation, saveNegotiation, clearNegotiation, generateClarifyQuestions, compileFinalInstruction, type NegoSession } from "../lib/negotiation";
 import {
@@ -771,18 +770,6 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // unreadable/malformed inputs get a graceful message, never an error.
   if (isConnectorCommand(trimmed)) {
     await handleConnectorCommand(env, r, text);
-    return new Response("ok", { status: 200 });
-  }
-
-  // Odyssey (odyssey.ml) world-model executor — a SECOND borrowed external
-  // executor next to opencode, but for WORLD SIMULATION instead of code:
-  // /odyssey <prompt> submits an interactive-video simulation job in the
-  // background and /odyssey status <jobId> polls its result. Explicit
-  // command BEFORE the compliance pipeline. Fail-closed: every API/network
-  // error degrades to a graceful status message, never a dead "Ok.". When
-  // ODYSSEY_API_KEY is absent the capability reports as unconfigured.
-  if (isOdysseyCommand(trimmed)) {
-    await handleOdysseyCommand(env, r, text);
     return new Response("ok", { status: 200 });
   }
 
@@ -1984,127 +1971,6 @@ async function handleConnectorCommand(env: Env, from: number, raw: string): Prom
     await fire(sendMessage(env, from,
       `⚠️ Perintah connector gagal: ${String(e).slice(0, 200)}`));
   }
-}
-
-/** True when the message is an Odyssey world-model command (slash only). */
-function isOdysseyCommand(trimmed: string): boolean {
-  return trimmed === "/odyssey" || /^\/odyssey\b/i.test(trimmed);
-}
-
-/** Execute Odyssey world-model commands: /odyssey <prompt> submits a
- *  simulation job; /odyssey status <jobId> polls it; /odyssey saat without
- *  args lists the syntax. Fail-closed: unconfigured / network / API errors
- *  always degrade to a graceful message, never throw. */
-async function handleOdysseyCommand(env: Env, from: number, raw: string): Promise<void> {
-  const trimmed = raw.trim();
-
-  try {
-    // --- Help: "/odyssey" alone ---
-    if (trimmed === "/odyssey") {
-      await fire(sendMessage(env, from,
-        "🌍 *Odyssey — eksekutor simulasi dunia (world model)*\n" +
-        "Eksekutor pinjaman kedua (selain opencode): membuat video simulasi interaktif dari teks — benar-benar dijalankan di cloud gratis Odyssey, bukan asumsi JARVIS.\n\n" +
-        "• `/odyssey <prompt>` — mulai simulasi (mis. `seorang astronot berjalan di bulan`)\n" +
-        "• `/odyssey status <jobId>` — cek hasil simulasi\n\n" +
-        "Hasilnya (video) kubalas begitu selesai. Sub-jobs maksimal 10; saat antre penuh akan kutunda ke pengerjaan lain."));
-      return;
-    }
-
-    // --- Status: "/odyssey status <jobId>" ---
-    const stat = trimmed.match(/^\/odyssey\s+(?:status|cek|check)\s+([A-Za-z0-9_-]+)\s*$/i);
-    if (stat) {
-      const res = await odysseyJobStatus(env, stat[1]);
-      if (!res.ok) {
-        await fire(sendMessage(env, from,
-          `⚠️ Tidak bisa cek status simulasi ${odysseyCtxHint(env, res.error)}`));
-        return;
-      }
-      const job = res.job!;
-      await fire(sendMessage(env, from, odysseyJobLine(job)));
-      return;
-    }
-
-    // --- Video: "/odyssey video <jobId>" → resolve final recording URL ---
-    const vid = trimmed.match(/^\/odyssey\s+(?:video|tonton)\s+([A-Za-z0-9_-]+)\s*$/i);
-    if (vid) {
-      const st = await odysseyJobStatus(env, vid[1]);
-      if (!st.ok || !st.job) {
-        await fire(sendMessage(env, from,
-          `⚠️ Tidak bisa mengambil hasil video (${odysseyCtxHint(env, st.error)})`));
-        return;
-      }
-      if (st.job.status !== "completed") {
-        await fire(sendMessage(env, from, odysseyJobLine(st.job)));
-        return;
-      }
-      const stream = st.job.streams?.[0];
-      if (!stream?.stream_id) {
-        await fire(sendMessage(env, from, "⚠️ Simulasi selesai tapi tanpa stream video — coba buat job baru."));
-        return;
-      }
-      const rec = await odysseyRecording(env, stream.stream_id);
-      if (!rec.ok || !rec.videoUrl) {
-        await fire(sendMessage(env, from,
-          `⚠️ Video belum siap diambil (${odysseyCtxHint(env, rec.error)}). Coba lagi sebentar.`));
-        return;
-      }
-      await fire(sendMessage(env, from,
-        `🌍 *Video simulasi siap*\n\n${rec.videoUrl}\n\nDurasi: ${rec.durationSeconds ?? "±"} detik. Buka link di atas untuk menonton.`));
-      return;
-    }
-
-    // --- Submit: "/odyssey <prompt>" ---
-    const sub = trimmed.match(/^\/odyssey\s+(.+)$/s);
-    if (sub) {
-      const prompt = sub[1].trim();
-      if (prompt.length < 5) {
-        await fire(sendMessage(env, from, "📝 Beri deskripsi adegan yang ingin disimulasikan (minimal 5 karakter)."));
-        return;
-      }
-      const res = await simulateOdyssey(env, prompt);
-      if (!res.ok) {
-        await fire(sendMessage(env, from,
-          `⚠️ Gagal mengirim simulasi ke Odyssey: ${odysseyCtxHint(env, res.error)}`));
-        return;
-      }
-      const job = res.job!;
-      await fire(sendMessage(env, from,
-        `🌍 Simulasi diterima Odyssey.\n\n` +
-        `• ID: \`${job.job_id}\` (status: ${odysseyStateLabel(job.status)})\n` +
-        `• Prompt: "_${prompt.slice(0, 120)}${prompt.length > 120 ? "…" : ""}_"\n\n` +
-        `Kirim \`/odyssey status ${job.job_id}\` sebentar lagi untuk hasilnya.`));
-      return;
-    }
-
-    await fire(sendMessage(env, from,
-      "Penggunaan: `/odyssey <prompt>` — atau `/odyssey status <jobId>` untuk cek hasil."));
-  } catch (e) {
-    await fire(sendMessage(env, from, `⚠️ Perintah Odyssey gagal: ${String(e).slice(0, 200)}`));
-  }
-}
-
-/** Fail-open human hint for an Odyssey error token (never leaks internals). */
-function odysseyCtxHint(env: Env, error: string | undefined): string {
-  if (!odysseyConfigured(env)) {
-    return "— kunci ODYSSEY_API_KEY belum dipasang di Worker. Tambahkan lalu coba lagi.";
-  }
-  if (error === "odyssey-empty-prompt") return "— prompt kosong, beri deskripsi adegan.";
-  if (error === "odyssey-sim-network" || error === "odyssey_auth_network" || error === "odyssey_stat_network" || error === "odyssey_rec_network") {
-    return "— jaringannya waktu habis, coba lagi sebentar.";
-  }
-  if (error === "odyssey_auth_401") return "— kunci API ditolak Odyssey (expired/tidak sah).";
-  if (error === "odyssey_http_429") return "— antrean Odyssey penuh (10 job), tunda sebentar lalu ulangi.";
-  return `(${error ?? "tak dikenal"})`;
-}
-
-/** One-line deterministic status of a simulation job (markdown-safe). */
-function odysseyJobLine(job: { job_id: string; status?: string; error_message?: string | null }): string {
-  const head = `🌍 Simulasi \`${job.job_id}\` — status: *${odysseyStateLabel(job.status)}*`;
-  if (job.status === "completed") {
-    return `${head}\n\nVideo simulasi siap. Gunakan \`/odyssey video ${job.job_id}\` untuk mengambil link tontonnya.`;
-  }
-  if (job.status === "failed") return `${head}\n\nDetail: ${job.error_message ?? "tidak tersedia"}. Coba ulangi dengan prompt berbeda.`;
-  return `${head}\n\nBelum selesai — cek lagi lewat \`/odyssey status ${job.job_id}\`.`;
 }
 
 /** Compact, markdown-safe summary of a Notion object (page or query results). */

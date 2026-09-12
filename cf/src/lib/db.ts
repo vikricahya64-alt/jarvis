@@ -42,8 +42,6 @@ export interface Env {
   WORKER_URL?: string;
   VERCEL_CONNECTOR_URL?: string;
   VERCEL_CONNECTOR_TOKEN?: string;
-  ODYSSEY_API_KEY?: string;
-  ODYSSEY_API_URL?: string;
   CLARITY_GATE?: string;
   RISK_CONSENT_THRESHOLD?: string;
   CONSENT_TIMEOUT_S?: string;
