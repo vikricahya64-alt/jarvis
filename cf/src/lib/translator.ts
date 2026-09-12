@@ -38,6 +38,39 @@ export interface ExecutablePlan {
 /** Cap kode (sama dengan kontrak payload bersama 4000). */
 export const TRANSLATOR_CODE_CAP = 3500;
 
+/** Konteks iterasi-pengeditan saat proses berjalan (/proyek lanjut <id>).
+ *  Pengingat bahwa ini ITERASI berikutnya atas TUGAS yang sama — penerjemah
+ *  harus mempertahankan tujuan asli sambil menerapkan perbaikan pemilik. */
+export interface IterationContext {
+  goal: string;
+  status: "done" | "failed" | "running" | "pending";
+  /** Hasil/kesalahan PUTARAN SEBELUMNYA (ringkas, sudah dipotong oleh panggil). */
+  outcome: string;
+  /** Instruksi perbaikan baru dari pemilik. */
+  instruction: string;
+}
+
+/** Pure: bangun string BATASAN untuk translateTaskToExecutable pada iterasi
+ *  lanjutan. Menyalurkan (a) konteks putaran sebelumnya supaya pemilik tidak
+ *  perlu mengulang tujuannya, dan (b) instruksi perbaikan — JARVIS tetap
+ *  berdiri sebagai penerjemah antara bahasa pemilik dan kode baru. */
+export function buildIterationConstraint(ctx: IterationContext): string {
+  const goal = (ctx.goal ?? "").trim();
+  const instruction = (ctx.instruction ?? "").trim();
+  const outcome = (ctx.outcome ?? "").trim();
+  const lines = [
+    `Ini ITERASI PERBAIKAN (runtime-edit) atas tujuan yang sudah pernah dijalankan:`,
+  ];
+  if (goal) lines.push(`TUJUAN ASLI:\n${goal.slice(0, 1200)}`);
+  if (outcome) lines.push(`HASIL PUTARAN SEBELUMNYA (${ctx.status}):\n${outcome.slice(0, 2000)}`);
+  if (instruction) lines.push(`INSTRUKSI PERBAIKAN PEMILIK:\n${instruction.slice(0, 1200)}`);
+  lines.push(
+    `Pertahankan esensi tujuan asli; terapkan instruksi perbaikan. Jika putaran sebelumnya gagal, ` +
+    `perbaiki penyebab kegagalannya (cetak data, tangani error, jangan hanya status sukses).`,
+  );
+  return lines.join("\n\n");
+}
+
 /** Pure, deterministic: parse the strict-JSON plan the LLM must return.
  *  Accepts a ```json fence around the object, strips BOM/whitespace, and
  *  validates types + allowed languages. Returns null on ANY deviation
