@@ -1,0 +1,19 @@
+# Artefak build/lokal Vercel — jangan ikut ter-deploy ke serverless.
+.vercel
+.vercelignore
+.env*
+cf/
+data/
+deploy/
+scripts/
+supabase/
+termux/
+tests/
+tools/
+.github/
+*.md
+Dockerfile*
+node_modules/
+__pycache__/
+*.pyc
+.hidden/**

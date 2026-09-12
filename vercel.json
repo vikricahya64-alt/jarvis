@@ -1,0 +1,62 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "rewrites": [
+    {
+      "source": "/api/analytics/:path*",
+      "destination": "/api/analytics"
+    },
+    {
+      "source": "/api/device_gateway/:path*",
+      "destination": "/api/device_gateway"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/maintenance",
+      "schedule": "30 21 * * *"
+    }
+  ],
+  "functions": {
+    "api/webhook.py": {
+      "maxDuration": 60
+    },
+    "api/orchestrator.py": {
+      "maxDuration": 60
+    },
+    "api/cron.py": {
+      "maxDuration": 60
+    },
+    "api/cron-trigger.py": {
+      "maxDuration": 60
+    },
+    "api/oauth2-callback.py": {
+      "maxDuration": 60
+    },
+    "api/maintenance.py": {
+      "maxDuration": 60
+    },
+    "api/health.py": {
+      "maxDuration": 60
+    },
+    "api/swarm_coordinator.py": {
+      "maxDuration": 60
+    },
+    "api/webhook_multimodal.py": {
+      "maxDuration": 60
+    },
+    "api/analytics.py": {
+      "maxDuration": 60
+    },
+    "api/device_gateway.py": {
+      "maxDuration": 60
+    },
+    "api/simulator_proxy.py": {
+      "maxDuration": 60
+    }
+  }
+}
