@@ -14,7 +14,7 @@ import { pollBorrowedRuns } from "./lib/borrowed_executor";
 import { sanitizeAgentReport, flagAgentReport } from "./lib/agent_executor";
 import { fireDueAgentRules } from "./lib/agent_rules";
 import { handleUpdate, ensureWebhook } from "./workers/telegram_webhook";
-import { setWebhook, sendMessage, getWebhookInfo, getMe, setMyCommands } from "./lib/telegram";
+import { emitText as sendMessage, setWebhook, getWebhookInfo, getMe, setMyCommands, handleIncoming, registerUpdateRouter } from "./lib/telegram_gate";
 import { runDms } from "./daemons/dead_mans_switch";
 
 import { requireCert } from "./lib/zero_trust";
@@ -34,6 +34,11 @@ import { runRecoveryLoop } from "./lib/recovery_loop";
 
 const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
 const WORKER_URL = "https://jarvis-sovereign.vikricahya64.workers.dev";
+
+// Wire the single Telegram door: ALL inbound updates route through
+// telegram_gate.handleIncoming, which delegates to the webhook router.
+// Registered once at module scope (per isolate); idempotent.
+registerUpdateRouter(handleUpdate);
 
 const OWNER = (env: Env) => Number(env.OWNER_TELEGRAM_ID || 0);
 
@@ -171,17 +176,19 @@ env: env.APP_ENV ?? "unknown",
           return respond(new Response("unauthorized", { status: 401 }));
         }
       }
-      let update: Parameters<typeof handleUpdate>[1];
+      let update: Parameters<typeof handleIncoming>[1];
       try {
-        update = (await request.json()) as Parameters<typeof handleUpdate>[1];
+        update = (await request.json()) as Parameters<typeof handleIncoming>[1];
       } catch {
         return respond(new Response("bad json", { status: 400 }));
       }
       // Idempotency by update_id lives INSIDE handleUpdate (upd_rx:) so a
       // redelivery during slow processing is rejected before side effects.
+      // handleIncoming is the SINGLE DOOR: every Telegram update enters here
+      // (routing registered once at module scope via registerUpdateRouter).
       let res: Response;
       try {
-        res = await handleUpdate(env, update);
+        res = await handleIncoming(env, update);
       } catch (e) {
         console.error("[webhook] handleUpdate error:", (e as Error).message, (e as Error).stack);
         // NEVER silent: any internal exception still tells the owner what

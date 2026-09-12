@@ -22,7 +22,7 @@ import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbac
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText, salesReport } from "../src/lib/db";
 import { isBareTodoVerb, parseReminder, tidyVisionReply } from "../src/workers/telegram_webhook";
-import { deliverSmartReply } from "../src/lib/telegram";
+import { emitSmartReply as deliverSmartReply, brainExitRail } from "../src/lib/telegram_gate";
 import { detectTopicContinuity } from "../src/lib/context_manager";
 import { cleanLLMArtifacts, proseifyResearch, buildFinalReply } from "../src/lib/response_formatter";
 import {
@@ -2072,6 +2072,46 @@ async function testVagueNoSubject() {
   }
 }
 
+// m9-v11.x BRAIN EXIT RAIL (telegram_gate): the single outbound door re-gates
+// brain-origin text — belt-and-braces on top of the input gate inside
+// processIntelligence. A blind reply must become the clarify message;
+// unanchored memory citations must be rewritten to a sober opinion lead.
+async function testBrainExitRail() {
+  // Vague no-subject reply → replaced byte-identically with CLARIFY.
+  assert.strictEqual(
+    brainExitRail("Saya sedang bingung"),
+    "Hmm, aku belum menangkap konteksnya. Soal apa nih — boleh jelaskan sedikit?",
+    "blind brain reply must be re-gated to clarify",
+  );
+  assert.strictEqual(
+    brainExitRail("aku bingung"),
+    "Hmm, aku belum menangkap konteksnya. Soal apa nih — boleh jelaskan sedikit?",
+    "bare bingung must be re-gated",
+  );
+  // CLARIFY itself is idempotent (not vague — no loop).
+  assert.strictEqual(
+    brainExitRail("Hmm, aku belum menangkap konteksnya. Soal apa nih — boleh jelaskan sedikit?"),
+    "Hmm, aku belum menangkap konteksnya. Soal apa nih — boleh jelaskan sedikit?",
+    "clarify message must not be double-gated",
+  );
+  // Unanchored memory citation → sober-opinion rewrite, content preserved.
+  assert.strictEqual(
+    brainExitRail("Berdasarkan catatan kita, kamu suka kerja remote. Menurut analisis, risikonya tinggi."),
+    "Menurut ingatanku, kamu suka kerja remote. Menurut analisis, risikonya tinggi.",
+    "forwarding-memory citation must be scrubbed to opinion",
+  );
+  assert.strictEqual(
+    brainExitRail("Seperti yang kita sepakati, minggu depan ada demo."),
+    "Menurut ingatanku, minggu depan ada demo.",
+    "sepakati-lead must be scrubbed",
+  );
+  // Contentful normal reply passes through untouched.
+  const normal = "Menurutku bekerja remote memang nyaman, tapi lebih baik verifikasi dulu infrastrukturnya.";
+  assert.strictEqual(brainExitRail(normal), normal, "contentful reply must pass untouched");
+  // Empty input → empty output (never throws).
+  assert.strictEqual(brainExitRail("   "), "", "empty brain text → empty, never throws");
+}
+
 async function testCapabilityFoundation() {
   // m9-v11.47 FONDASI KE-6 (rekonstruksi visi 5 kemampuan fondasi): JARVIS
   // memahami & MENGGUNAKAN semua kemampuan secara tepat dari KONTRAK TEKS di
@@ -2414,6 +2454,7 @@ async function main() {
   await testAntiHallucinationRails();
   await testSalesReportBasis();
   await testSmartReplyDelivery();
+  await testBrainExitRail();
   testCleanSubReply();
   testAlignAngles();
   testDetectConfusableTopic();

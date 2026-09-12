@@ -20,7 +20,7 @@
 
 import { Env, addAgentTask, getDueAgentRules, updateAgentRuleFired, getDmsConfig, markAgentTaskRunning } from "./db";
 import { delegateToGithub, truncationWarning } from "./agent_executor";
-import { sendMessage } from "./telegram";
+import { emitText as sendMessage } from "./telegram_gate";
 
 const WIB_OFFSET_MIN = 7 * 60; // UTC+7
 const DAY_NAMES: Record<string, number> = {

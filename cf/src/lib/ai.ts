@@ -2035,6 +2035,14 @@ const VAGUE_TAIL_FILLERS = new Set([
   "mau", "ingin", "tanya", "nanya", "pengen", "butuh", "minta", "tolong", "bantu",
 ]);
 
+/** Single-source deterministic clarify reply for vague no-subject input. Shared
+ *  by (a) the global EMPTY-SUBJECT GATE inside processIntelligence and (b) the
+ *  brain-exit rail at the single Telegram door (telegram_gate) — so a blind
+ *  reply that somehow slipped past the input gate is caught AGAIN before it
+ *  ever leaves, and both layers return byte-identical text (idempotent). */
+export const CLARIFY_EMPTY_SUBJECT =
+  "Hmm, aku belum menangkap konteksnya. Soal apa nih — boleh jelaskan sedikit?";
+
 /** True for a vague emotional statement or bare plea with NO concrete subject
  *  ("saya sedang bingung", "bantu aku", "gimana ya"). Answering such a message
  *  with confidence, when there's no active topic and no memory-recall in
