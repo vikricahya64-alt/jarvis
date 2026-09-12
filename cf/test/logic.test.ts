@@ -2032,6 +2032,46 @@ async function testEscalationOrdering() {
   assert.strictEqual(isCasualOnly("ambil 3 artikel"), false, "execution task NOT casual-only");
 }
 
+async function testVagueNoSubject() {
+  // m9-v11.x EMPTY-SUBJECT GATE: pesan vague tanpa subjek deterministik.
+  // Live failure: "Saya sedang bingung" → JARVIS menebak topik "kerja remote".
+  const { isVagueNoSubject } = await import("../src/lib/ai");
+  // Vague no-subject → gate fires (klarifikasi singkat, bukan jawaban confident).
+  for (const t of [
+    "saya sedang bingung",
+    "aku bingung",
+    "saya bingung",
+    "aku lagi bingung",
+    "saya tidak paham",
+    "aku nggak ngerti",
+    "gak ngerti",
+    "saya tidak mengerti",
+    "nggak paham",
+    "bantu aku",
+    "bantu saya",
+    "tolong aku",
+    "boleh minta tolong",
+    "aku butuh bantuan",
+    "gimana ya",
+    "aku bingung mau tanya apa",
+  ]) {
+    assert.strictEqual(isVagueNoSubject(t), true, `vague must be subject-less: "${t}"`);
+  }
+  // Pesan dengan subjek → gate TIDAK boleh menyala.
+  for (const t of [
+    "aku bingung dengan hitungan tadi",
+    "saya bingung kenapa error ini muncul",
+    "tolong buatkan desain logo baru",
+    "bantu aku cari apartemen murah",
+    "saya tidak paham dengan konsep 4 konsep AI",
+    "bingung soal sejarah tambang",
+    "bagaimana cara deploy worker",
+    "tolong jelaskan perbedaan groq dan gemini",
+  ]) {
+    assert.strictEqual(isVagueNoSubject(t), false, `contentful must NOT be subject-less: "${t}"`);
+  }
+}
+
 async function testCapabilityFoundation() {
   // m9-v11.47 FONDASI KE-6 (rekonstruksi visi 5 kemampuan fondasi): JARVIS
   // memahami & MENGGUNAKAN semua kemampuan secara tepat dari KONTRAK TEKS di
@@ -2394,6 +2434,7 @@ async function main() {
   await testRuntimeEditRails();
   await testCapabilityFoundation();
   await testFoundationAnchoring();
+  await testVagueNoSubject();
   console.log("LOGIC TESTS PASSED");
 }
 

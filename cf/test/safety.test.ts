@@ -1063,6 +1063,22 @@ async function testComprehensionGate() {
   assert.ok(/TIDAK PERNAH muncul di konteks percakapan/.test(aiSrc),
     "ai gate must check whether named platforms/terms are grounded in context");
 
+  // m9-v11.x EMPTY-SUBJECT GATE: pesan vague tanpa subjek ("saya sedang
+  // bingung") tanpa topik aktif & tanpa riwayat → klarifikasi deterministik,
+  // bukan jawaban confident yang menebak topik (live failure: "kerja remote").
+  assert.ok(/isVagueNoSubject/.test(brainSrc),
+    "brain must call isVagueNoSubject (empty-subject gate)");
+  assert.ok(/isVagueNoSubject/.test(aiSrc) && /VAGUE_TAIL_FILLERS/.test(aiSrc),
+    "ai must export isVagueNoSubject with a deterministic filler set");
+
+  // m9-v11.x ANTI-KUTIPAN-MEMORI RAIL: frasa "berdasarkan catatan kita"
+  // hanya boleh dipakai bila topik sungguh ada di konteks; tanpa dasar →
+  // opini pribadi, bukan mengklaim rekam jejak bersama.
+  assert.ok(/ANTI-KUTIPAN MEMORI/.test(brainSrc),
+    "brain rail must forbid fabricated memory citations (berdasarkan catatan kita)");
+  assert.ok(/tanpa mengarang rekam jejak bersama/.test(brainSrc),
+    "brain rail must offer the personal-opinion alternative over shared-record claims");
+
   // m9-v11 ANTI-FABRICATION RAIL: the chat path must never confidently
   // explain an unknown platform/product. Applies to ALL simple_llm turns.
   assert.ok(/ANTI-FABRICATION RAIL/.test(brainSrc),
