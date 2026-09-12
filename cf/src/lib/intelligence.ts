@@ -1134,24 +1134,9 @@ export async function act(
     }
 
     case "understand_intent": {
-      // m9-v11.x EMPTY-SUBJECT GATE: pesan vague tanpa subjek ("saya sedang
-      // bingung", "bantu aku") → tanya klarifikasi singkat secara deterministik
-      // (nol panggilan LLM). HALAMAN MERAH dari dua live failure berturut-turut:
-      //   (a) gate pertama memakai `!topic` — tetapi `topic` di sini hampir
-      //       selalu terisi oleh fallback `text.slice(0,80)`, jadi gate tak
-      //       pernah menyala;
-      //   (b) gate memakai `!hasRecall` — kehadiran blok memori ("kerja remote"
-      //       dari riwayat lama) malah MENAMBAH subjek yang tidak dikatakan user,
-      //       lalu model menjawab percaya diri soal subjek tebakan itu.
-      // Kesimpulan: subjek TIDAK boleh diisi dari memori/konteks; satu-satunya
-      // pembeda yang sah adalah kontinuitas percakapan saat ini. Kehadiran
-      // memori/recall tidak menambah subjek pada pesan yang tidak ber-subjek.
-      if (!perception.isContinuation && isVagueNoSubject(d)) {
-        return {
-          reply: "Hmm, aku belum menangkap konteksnya. Soal apa nih — boleh jelaskan sedikit?",
-          source: "understand_clarify",
-        };
-      }
+      // NOTE: empty-subject gate kini GLOBAL di processIntelligence (sebelum
+      // decide/act) — pesan vague tanpa subjek sudah ditangani sana; case ini
+      // hanya melayani pesan yang TETAP ambigu setelah gate lolos.
       // Decode what the user actually WANTS, even for unknown/vague requests.
       // m9-v11.32: feed the ROOT comprehension (universal language/literacy/
       // domain) so understanding works across all human languages & fields.
@@ -1430,6 +1415,34 @@ export async function processIntelligence(
         };
       }
     }
+  }
+
+  // m9-v11.x EMPTY-SUBJECT GATE (GLOBAL): pesan vague tanpa subjek ("saya
+  // sedang bingung", "bantu aku") → tanya klarifikasi singkat secara
+  // deterministik (nol panggilan LLM). PSA ATAS TIGA live failure berturut-
+  // turut: "Saya sedang bingung" dijawab PERCAYA DIRI soal "kerja remote" —
+  // model mengisi subjek dari MEMORI. Version pertama menaruh gate di dalam
+  // case understand_intent + syarat `!topic`/`!hasRecall`; (a) `topic` hampir
+  // selalu terisi fallback text.slice(0,80), dan (b) kehadiran blok memori
+  // ("kerja remote" di riwayat) MALAH menambah subjek yang tidak diucapkan
+  // user. Kesimpulan: subjek boleh datang HANYA dari kata-kata user saat ini,
+  // tidak pernah dari memori/konteks. Gate ini GLOBAL — berjalan SEBELUM
+  // decide/act pada setiap strategi, sehingga routing apa pun tidak bisa
+  // menghindarinya. Satu-satunya pembeda sah adalah kontinuitas percakapan
+  // saat ini. Skipped pada resume parked, command, dan jalur deterministik.
+  const skipEmptySubject =
+    pending ||
+    /^\//.test(text.trim()) ||
+    /^(emergency|self_referential|translation|command|prompt_writer|context7)$/.test(perception.intent.type);
+  if (!skipEmptySubject && !perception.isContinuation && isVagueNoSubject(effectiveText)) {
+    return {
+      text: "Hmm, aku belum menangkap konteksnya. Soal apa nih — boleh jelaskan sedikit?",
+      perception,
+      strategy,
+      source: "understand_clarify",
+      latencyMs: Date.now() - start,
+      reflection: { shouldReflect: false, topic: perception.topic },
+    };
   }
 
   // Phase 3: ACT

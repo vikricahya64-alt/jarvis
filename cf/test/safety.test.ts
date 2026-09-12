@@ -1070,11 +1070,14 @@ async function testComprehensionGate() {
     "brain must call isVagueNoSubject (empty-subject gate)");
   assert.ok(/isVagueNoSubject/.test(aiSrc) && /VAGUE_TAIL_FILLERS/.test(aiSrc),
     "ai must export isVagueNoSubject with a deterministic filler set");
-  // Dua live failure: gate lama yang bergantung pada `!topic` / `!hasRecall`
-  // tidak pernah menyala — topic selalu terisi fallback slice, dan blok memori
-  // malah menambah subjek tebakan. Gate sekarang HANYA bergantung pada
-  // kontinuitas percakapan; kehadiran memori tidak menambah subjek.
-  assert.ok(/!perception\.isContinuation && isVagueNoSubject\(d\)/.test(brainSrc),
+  // Dua live failure: gate lama di dalam case understand_intent + bergantung
+  // pada `!topic` / `!hasRecall` tidak pernah menyala — topic selalu terisi
+  // fallback slice, dan blok memori malah menambah subjek tebakan. Gate kini
+  // GLOBAL di processIntelligence (sebelum decide/act) sehingga routing apa
+  // pun tidak bisa menghindarinya; kehadiran memori tidak menambah subjek.
+  assert.ok(/EMPTY-SUBJECT GATE \(GLOBAL\)/.test(brainSrc),
+    "brain must carry a global empty-subject gate in processIntelligence");
+  assert.ok(/!skipEmptySubject && !perception\.isContinuation && isVagueNoSubject\(effectiveText\)/.test(brainSrc),
     "gate must fire on 'no continuation + vague subject-less' regardless of memory/recall");
   assert.ok(!/!topic && !perception\.isContinuation && !hasRecall/.test(brainSrc),
     "obsolete topic/hasRecall-gated variant must be gone");
