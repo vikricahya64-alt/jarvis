@@ -1757,6 +1757,7 @@ async function testBorrowedExecutorRails() {
   const {
     parseBorrowedTarget, parseBorrowedRow, borrowedExecutorTag,
     borrowedExecutorLabel, BORROWED_EXECUTOR_IDS, runBorrowedExecutor,
+    borrowedRisetReport,
   } = await import("../src/lib/borrowed_executor");
 
   assert.deepStrictEqual(parseBorrowedTarget("riset kompetitor AI 2026"),
@@ -1781,6 +1782,17 @@ async function testBorrowedExecutorRails() {
   // runBorrowedExecutor fail-closed: empty body → "", no network.
   const empty = await runBorrowedExecutor({ APP_ENV: "test" } as any, "docs", "");
   assert.strictEqual(empty, "", "empty body never executes");
+
+  // Evidence honesty (pure, deterministic): grounded output passes through
+  // untouched; ungrounded output is visibly labeled, never a confident ✅.
+  assert.strictEqual(borrowedRisetReport("jawaban ber-sumber", true), "jawaban ber-sumber",
+    "grounded riset report passes through");
+  const ung = borrowedRisetReport("jawaban model", false);
+  assert.ok(ung.includes("tidak ada hasil pencarian terverifikasi"),
+    "ungrounded report flags itself");
+  assert.ok(ung.endsWith("_"), "notice closes like an italic aside, not bold");
+  assert.ok(!borrowedRisetReport("x", false).startsWith("✅"),
+    "ungrounded report never presents a confident checkmark");
 }
 
 async function main() {

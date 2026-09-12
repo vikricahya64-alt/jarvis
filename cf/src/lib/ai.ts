@@ -1548,12 +1548,12 @@ export async function searchAndSynthesize(
   userText: string,
   topic: string,
   opts: { followupPrior?: string; replyLang?: string } = {},
-): Promise<{ reply: string; source: string }> {
+): Promise<{ reply: string; source: string; grounded?: boolean }> {
   // SELF-REFERENTIAL GUARD — if a self-referential question somehow reaches the
   // search path, answer directly from identity instead of searching/hallucinating.
   const selfRefText = (userText || "").trim().toLowerCase();
   if (SELF_REF_RE.test(selfRefText)) {
-    return { reply: JARVIS_IDENTITY.selfRefReply, source: "self_ref" };
+    return { reply: JARVIS_IDENTITY.selfRefReply, source: "self_ref", grounded: false };
   }
 
   // M8-v27 INSTITUTIONAL FRAME — "…menurut lembaga riset lokal" must not
@@ -1609,7 +1609,7 @@ export async function searchAndSynthesize(
     const sub = await orchestrateResearch(env, owner, userText, topic, followupAnchor, opts.replyLang ?? "");
     if (sub) {
       if (sub.length > 120) void reflectOnTurn(env, userText, sub, []).catch(() => {});
-      return { reply: sub, source: "subagents" };
+      return { reply: sub, source: "subagents", grounded: true };
     }
   }
   // Run all independent pre-LLM I/O in parallel: web search + conversation
@@ -1804,7 +1804,7 @@ export async function searchAndSynthesize(
     if (formatted.length > 120) {
       void reflectOnTurn(env, userText, formatted, []).catch(() => {});
     }
-    return { reply: formatted, source: `${g.source}+ddg` };
+    return { reply: formatted, source: `${g.source}+ddg`, grounded: searchResult !== null || hits.length > 0 };
   }
   if (searchResult) {
     // SELF-LEARNING: Store the new knowledge for future queries
@@ -1816,11 +1816,11 @@ export async function searchAndSynthesize(
       "research",
       topicSentiment.sentiment,
     );
-    return { reply: formatted, source: "ddg" };
+    return { reply: formatted, source: "ddg", grounded: true };
   }
   // Final fail-closed: canned reply.
   const canned = `Saya akan cari tentang *${topic}*, tapi belum bisa menghubungi mesin pencari saat ini. Coba lagi sebentar.`;
-  return { reply: canned, source: "canned" };
+  return { reply: canned, source: "canned", grounded: false };
 }
 
 // ============================================================================
