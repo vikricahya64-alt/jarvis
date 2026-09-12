@@ -16,6 +16,7 @@
 
 import { Env, logObedience, logViolation, getDmsConfig, writeDmsConfig } from "./db";
 import { validateAction, riskScore } from "./constitutional_guard";
+import { groqSingleShot } from "./ai";
 
 export const TIERS = {
   SYSTEM: 100, // override from cert/system
@@ -145,37 +146,23 @@ export async function groqClassify(
   env: Env,
   text: string,
 ): Promise<ClassifiedIntent | null> {
-  const key = env.GROQ_API_KEY;
-  if (!key) return null;
+  if (!env.GROQ_API_KEY || !text) return null;
   try {
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({
-        model: "openai/gpt-oss-120b",
-        temperature: 0,
-        messages: [
-          {
-            role: "system",
-            content:
-              "Classify the user's request for a sovereignty AI assistant. " +
-              "Return ONLY JSON: {priority:int, confidence:float, label:string, risk:low|medium|high}. " +
-              `Priority tiers: ${TIERS.SYSTEM}=cerondere/system override, ` +
-              `${TIERS.EMERGENCY}=emergency control (/stop /kill /override /resume), ` +
-              `${TIERS.DANGEROUS}=destructive/transfer action, ${TIERS.UTILITY}=status/query, ` +
-              `${TIERS.INFO}=informational/help.` +
-              "cap confidence at 1.0. Respond in one line only.",
-          },
-          { role: "user", content: text },
-        ],
-      }),
+    const raw = await groqSingleShot(env, {
+      label: "groq:classify",
+      user: text,
+      model: "openai/gpt-oss-120b",
+      temperature: 0,
+      system:
+        "Classify the user's request for a sovereignty AI assistant. " +
+        "Return ONLY JSON: {priority:int, confidence:float, label:string, risk:low|medium|high}. " +
+        `Priority tiers: ${TIERS.SYSTEM}=cerondere/system override, ` +
+        `${TIERS.EMERGENCY}=emergency control (/stop /kill /override /resume), ` +
+        `${TIERS.DANGEROUS}=destructive/transfer action, ${TIERS.UTILITY}=status/query, ` +
+        `${TIERS.INFO}=informational/help.` +
+        "cap confidence at 1.0. Respond in one line only.",
     });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const raw = data.choices?.[0]?.message?.content ?? "";
+    if (!raw) return null;
     const m = raw.match(/\{[\s\S]*\}/);
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as {

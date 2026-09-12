@@ -684,6 +684,79 @@ export async function trackTokenUsage(
   } catch { /* best-effort */ }
 }
 
+/** Groq "chat/completions" endpoint. System-module consumers (command
+ *  hierarchy, covenant, error-monitor, maestro) used to hardcode
+ *  api.groq.com directly — that bypassed the AI Gateway and hid the borrow.
+ *  This helper routes ALL groq egress through the gateway when configured
+ *  (identical default URL otherwise), so borrowed inference stays observable.
+ */
+export function groqChatCompletionsUrl(env: { AI_GATEWAY_URL?: string }): string {
+  return env.AI_GATEWAY_URL
+    ? `${env.AI_GATEWAY_URL}/groq/v1/chat/completions`
+    : "https://api.groq.com/openai/v1/chat/completions";
+}
+
+/** Single-shot Groq inference — THE one wire-contract owner for internal
+ *  system-module LLM borrows (mirrors groqRespond but without conversation
+ *  context). All system consumers (command hierarchy classification, covenant
+ *  validator, error diagnosis, maestro decomposition) go through here so that:
+ *   - egress ALWAYS routes via the AI Gateway when configured (observability
+ *     + cache); a hardcoded api.groq.com URL is no longer possible,
+ *   - every borrow is tallied in token accounting under a per-module label
+ *     (e.g. "groq:covenant") so hidden usage becomes DETECTED,
+ *   - the request is bounded (fetchWithTimeout) and fails CLOSED: any missing
+ *     key / network / shape error returns null, never throws.
+ * Returns the trimmed assistant content, or null on ANY failure. */
+export async function groqSingleShot(
+  env: Env,
+  opts: {
+    label: string;
+    system?: string;
+    user: string;
+    model?: string;
+    temperature?: number;
+    maxTokens?: number;
+    messages?: Array<{ role: string; content: string }>;
+  },
+): Promise<string | null> {
+  const key = env.GROQ_API_KEY;
+  if (!key || !opts.user) return null;
+  const messages = opts.messages ?? [
+    ...(opts.system ? [{ role: "system" as const, content: opts.system }] : []),
+    { role: "user" as const, content: opts.user },
+  ];
+  try {
+    const res = await fetchWithTimeout(groqChatCompletionsUrl(env), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model: opts.model ?? "openai/gpt-oss-120b",
+        temperature: opts.temperature ?? 0,
+        messages,
+        ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
+      }),
+    }, 15000);
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+    const content = data.choices?.[0]?.message?.content?.trim() ?? "";
+    if (!content) return null;
+    void trackTokenUsage(
+      env, opts.label,
+      data.usage?.prompt_tokens ?? 0,
+      data.usage?.completion_tokens ?? 0,
+    ).catch(() => {});
+    return content;
+  } catch {
+    return null;
+  }
+}
+
 /** Try to produce a generative assistant reply via Groq, using recent
  *  conversation context as memory. Returns null on any failure so the
  *  caller falls back to the canned reply (fail-closed). */

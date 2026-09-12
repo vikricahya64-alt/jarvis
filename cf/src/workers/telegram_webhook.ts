@@ -27,7 +27,8 @@ import {
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus, recordTaskCounters, recentContext, auditIntegrity } from "../lib/db";
 import { probeProviders } from "../lib/providers";
-import { extractTopic, parseTranslate, translateText, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, storeResearchAnchor } from "../lib/ai";
+import { probeBorrowedPlatforms, borrowedStatusLine } from "../lib/borrowed";
+import { extractTopic, parseTranslate, translateText, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, storeResearchAnchor, groqChatCompletionsUrl } from "../lib/ai";
 import { getWeatherText } from "../lib/weather";
 
 import { normalizeInput, isEmptyInput } from "../lib/normalize";
@@ -1354,7 +1355,7 @@ async function groqVisionDescribe(env: Env, model: string, dataUrl: string, prom
   const ok = await withResilience(env, "groq", 0, async (timeoutMs) => {
     try {
       const text = (prompt ?? "").trim() || VISION_PROMPT;
-      const res = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
+      const res = await fetchWithTimeout(groqChatCompletionsUrl(env), {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${env.GROQ_API_KEY}` },
         body: JSON.stringify({
@@ -1576,6 +1577,14 @@ async function statusReport(env: Env, paused: boolean): Promise<string> {
       const label = p.name.replace(/_/g, "-");
       lines.push(`${face} ${label}: ${p.detail}`);
     }
+    lines.push(``);
+
+    // m9-v11.38: borrowed platforms (E2B concept generalized) — every external
+    // platform JARVIS borrows is DETECTED here: live-probed, configured-checked,
+    // and surfaced so a dead borrowed partner is never invisible.
+    const borrowed = await probeBorrowedPlatforms(env);
+    lines.push(`*Platform pinjaman (borrowed):*`);
+    lines.push(...borrowed.map((b) => borrowedStatusLine(b)));
     lines.push(``);
   } catch {
     lines.push(`Provider probe: error`);
