@@ -1429,13 +1429,22 @@ export async function processIntelligence(
   // user. Kesimpulan: subjek boleh datang HANYA dari kata-kata user saat ini,
   // tidak pernah dari memori/konteks. Gate ini GLOBAL — berjalan SEBELUM
   // decide/act pada setiap strategi, sehingga routing apa pun tidak bisa
-  // menghindarinya. Satu-satunya pembeda sah adalah kontinuitas percakapan
-  // saat ini. Skipped pada resume parked, command, dan jalur deterministik.
+  // menghindarinya.
+  //
+  // live-veri 2026: gate SAMPAI lolos lagi — "saya sedang bingung" dijawab
+  // remote-work kembali karena `!perception.isContinuation` PALSU: isContinuation
+  // dihitung dari enrichedContext yg memuat MEMORI kerja-remote lama, dan
+  // overlap kata umum ("sedang"/"bingung") memberinya isContinuation=true →
+  // skip gate → LLM mengisi subjek dari memori. Jadi TIDAK ADA pengecualian
+  // lanjutan: "kontinuitas" ditentukan hanya oleh kata-kata user saat ini, yang
+  // justru TIDAK punya subjek. Pengecualian sah hanya untuk pesan yang operasi-
+  // deterministik (slashed commands), emergency, self-referential, dan resume
+  // yang TELAH dikonfirmasi (res.confirmed sudah menimpa effectiveText dgn
+  // subjek tertulis).
   const skipEmptySubject =
-    pending ||
     /^\//.test(text.trim()) ||
     /^(emergency|self_referential|translation|command|prompt_writer|context7)$/.test(perception.intent.type);
-  if (!skipEmptySubject && !perception.isContinuation && isVagueNoSubject(effectiveText)) {
+  if (!skipEmptySubject && isVagueNoSubject(effectiveText)) {
     return {
       text: CLARIFY_EMPTY_SUBJECT,
       perception,

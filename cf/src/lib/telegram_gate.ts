@@ -114,14 +114,25 @@ export function brainExitRail(text: string): string {
   //     sober opinion lead instead of a fabricated joint-recollection.
   //     Conservative: only rewrites the standalone claim opener, never the
   //     content after it.
+  //     live-veri 2026: juga jebak varian EMOSI ("Berdasarkan kebingungan yang
+  //     kamu rasakan tadi") — model mengarang rekam jejak perasaan user dari
+  //     memori, padahal subjeknya tak pernah disebut di pesan saat ini.
   if (
     /^berdasarkan catatan kita[,\s]*(?:kamu|anda|kita)?[,\s]*/i.test(t) ||
-    /^seperti yang kita sepakati[,\s]+/i.test(t)
+    /^seperti yang kita sepakati[,\s]+/i.test(t) ||
+    /^berdasarkan\s+(?:kebingungan|kekhawatiran|keraguan|kecemasan|perasaan|masalah|kesulitan|keluhan)\b[^.\n]*?\b(?:kamu|anda)\b/i.test(t) ||
+    /^seperti yang (?:kamu|anda)(?: rasakan)?\b[^.\n]*?\btadi\b/i.test(t)
   ) {
     return "Menurut ingatanku, " + t.replace(
       /^(?:berdasarkan catatan kita|seperti yang kita sepakati)\b[,\s]*/i,
       "",
-    );
+    ).replace(
+      /^berdasarkan\s+(?:kebingungan|kekhawatiran|keraguan|kecemasan|perasaan|masalah|kesulitan|keluhan)\b[^,\n]*?\b(?:kamu|anda)\b[^,\n]*[,\s]*/i,
+      "",
+    ).replace(
+      /^seperti yang (?:kamu|anda)(?: rasakan)?\b[^,\n]*?\btadi\b[,\s]*/i,
+      "",
+    ).trim();
   }
   return t;
 }

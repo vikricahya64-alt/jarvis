@@ -1075,10 +1075,16 @@ async function testComprehensionGate() {
   // fallback slice, dan blok memori malah menambah subjek tebakan. Gate kini
   // GLOBAL di processIntelligence (sebelum decide/act) sehingga routing apa
   // pun tidak bisa menghindarinya; kehadiran memori tidak menambah subjek.
+  // live-veri 2026 (kedua): gate SAMPAI lolos karena `!perception.isContinuation`
+  // PALSU — isContinuation dihitung dari enrichedContext yg memuat memori lama,
+  // overlap kata umum memberi isContinuation=true → skip. Gate TIDAK boleh
+  // membaca isContinuation: pesan vague selalu clarify walau konteks berisik.
   assert.ok(/EMPTY-SUBJECT GATE \(GLOBAL\)/.test(brainSrc),
     "brain must carry a global empty-subject gate in processIntelligence");
-  assert.ok(/!skipEmptySubject && !perception\.isContinuation && isVagueNoSubject\(effectiveText\)/.test(brainSrc),
-    "gate must fire on 'no continuation + vague subject-less' regardless of memory/recall");
+  assert.ok(/!skipEmptySubject && isVagueNoSubject\(effectiveText\)/.test(brainSrc),
+    "gate must fire on vague subject-less text regardless of memory/recall/continuation");
+  assert.ok(!/!skipEmptySubject && !perception\.isContinuation && isVagueNoSubject\(effectiveText\)/.test(brainSrc),
+    "obsolete isContinuation-skip variant must be gone (memory overlap gave false continuation)");
   assert.ok(!/!topic && !perception\.isContinuation && !hasRecall/.test(brainSrc),
     "obsolete topic/hasRecall-gated variant must be gone");
 

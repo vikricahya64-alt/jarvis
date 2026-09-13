@@ -2070,6 +2070,20 @@ async function testVagueNoSubject() {
   ]) {
     assert.strictEqual(isVagueNoSubject(t), false, `contentful must NOT be subject-less: "${t}"`);
   }
+  // live-veri 2026: kehadiran MEMORI ("kerja remote" lama) membuat
+  // detectTopicContinuity memberi isContinuation=true pada "saya sedang bingung"
+  // (overlap kata umum) — ini PERNAH mematikan gate via `!perception.isContinuation`
+  // dan JARVIS menjawab remotework dari memori. Sekarang gate TIDAK membaca
+  // isContinuation lagi; pastikan false-positive itu terekam sebagai pengingat.
+  const memoryBleed = detectTopicContinuity("saya sedang bingung", [
+    { role: "user", content: "tadi kita bahas bekerja remote dan saya sedang bingung soal itu" },
+    { role: "assistant", content: "Kebingungan kamu soal kerja remote itu wajar. Kerja remote memberi kebebasan atur waktu, tapi kadang sedang susah fokus di rumah. Berikut tipsnya: atur ruang kerja terpisah, minim gangguan, koneksi internet stabil." },
+  ]);
+  assert.strictEqual(memoryBleed.isContinuation, true,
+    "regression guard: memory overlap must still (correctly) say continuation — but gate must IGNORE it");
+  // ...dan gate memang harus mengabaikannya: bila gate ikut isContinuation maka
+  // text vague tetap lolos. Ikatan ini dijaga source-level di safety.test.ts
+  // (`isVagueNoSubject(effectiveText)` tanpa `!perception.isContinuation`).
 }
 
 // m9-v11.x BRAIN EXIT RAIL (telegram_gate): the single outbound door re-gates
@@ -2104,6 +2118,25 @@ async function testBrainExitRail() {
     brainExitRail("Seperti yang kita sepakati, minggu depan ada demo."),
     "Menurut ingatanku, minggu depan ada demo.",
     "sepakati-lead must be scrubbed",
+  );
+  // live-veri 2026: varian EMOSI — "Berdasarkan kebingungan yang kamu rasakan
+  // tadi" adalah kutipan rekam jejak perasaan yang dikarang dari memori (subjek
+  // tidak pernah ada di pesan saat ini). Harus diseret ke opini pribadi, isi
+  // SARAN setelahnya (coba mulai dengan mengatur ...) dipertahankan.
+  assert.strictEqual(
+    brainExitRail("Berdasarkan kebingungan yang kamu rasakan tadi, coba mulai dengan mengatur satu hari kerja penuh dari rumah dulu."),
+    "Menurut ingatanku, coba mulai dengan mengatur satu hari kerja penuh dari rumah dulu.",
+    "emoji-derived memory claim must be scrubbed",
+  );
+  assert.strictEqual(
+    brainExitRail("Seperti yang kamu rasakan tadi, kamu tampak ragu soal kariermu."),
+    "Menurut ingatanku, kamu tampak ragu soal kariermu.",
+    "seperti-yang-kamu-rasakan-tadi lead must be scrubbed",
+  );
+  assert.strictEqual(
+    brainExitRail("Berdasarkan keraguan yang kamu sampaikan, coba tulis pro-kontranya."),
+    "Menurut ingatanku, coba tulis pro-kontranya.",
+    "keraguan lead must be scrubbed",
   );
   // Contentful normal reply passes through untouched.
   const normal = "Menurutku bekerja remote memang nyaman, tapi lebih baik verifikasi dulu infrastrukturnya.";
