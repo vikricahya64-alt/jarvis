@@ -617,6 +617,77 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     });
     return new Response("ok", { status: 200 });
   }
+  if (trimmed.startsWith("/plan")) {
+    const sub = trimmed.replace(/^\/plan\s*/i, "").trim();
+    if (!sub || sub === "status" || sub === "list") {
+      // /plan status or /plan list — show active plans with steps
+      await safeDBReply(env, r, async () => {
+        const plans = await getPlans(env, r);
+        if (!plans.length) return "📋 *Rencana:* Belum ada rencana aktif.\nBuat: `/plan buat <tujuan>`";
+        const lines = ["📋 *Rencana Aktif:*"];
+        for (const p of plans.slice(0, 5)) {
+          const steps = await env.DB.prepare(
+            `SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY step_index`,
+          ).bind(p.id).all<{ id: number; goal: string; status: string; priority: number }>();
+          const stepLines = (steps.results ?? []).map((s) =>
+            `  ${s.status === "completed" ? "✅" : s.status === "pending" ? "⏳" : "❌"} #${s.id} [P${s.priority}] ${s.goal.slice(0, 35)}`
+          ).join("\n");
+          lines.push(`\n*${p.goal.slice(0, 40)}* (${p.status})`);
+          if (stepLines) lines.push(stepLines);
+        }
+        return lines.join("\n");
+      });
+      return new Response("ok", { status: 200 });
+    }
+    if (sub.startsWith("buat ") || sub.startsWith("create ")) {
+      const goal = sub.replace(/^(buat|create)\s+/i, "").trim();
+      if (!goal || goal.length < 3) {
+        await fire(sendMessage(env, r, "Format: `/plan buat <tujuan yang jelas>`"));
+        return new Response("ok", { status: 200 });
+      }
+      try {
+        const { decomposeGoal } = await import("../lib/maestro");
+        const result = await decomposeGoal(env, r, goal);
+        const stepLines = result.steps.map((s) =>
+          `  ${s.id}. [P${s.priority}] ${s.goal}`
+        ).join("\n");
+        await fire(sendMessage(env, r,
+          `🪝 *Rencana dibuat* (ID: ${result.planId})\n\n${stepLines}\n\n` +
+          `Otonomi akan menjalankan langkah prioritas rendah otomatis.\n` +
+          `Langkah prioritas tinggi (≥9) menunggu persetujuan: /plan approve <id>`
+        ));
+      } catch (e) {
+        await fire(sendMessage(env, r, `⚠️ Gagal membuat rencana: ${String(e).slice(0, 150)}`));
+      }
+      return new Response("ok", { status: 200 });
+    }
+    if (sub.startsWith("approve ")) {
+      const stepId = Number(sub.replace(/^approve\s+/i, "").trim());
+      if (!stepId) {
+        await fire(sendMessage(env, r, "Format: `/plan approve <step_id>` — lihat `/plan status` untuk daftar."));
+        return new Response("ok", { status: 200 });
+      }
+      try {
+        // Mark step as approved (change status from pending_consents to pending)
+        const rr = await env.DB.prepare(
+          `UPDATE plan_steps SET status = 'pending' WHERE id = ? AND status = 'pending_consents'`,
+        ).bind(stepId).run();
+        if (rr.meta.changes > 0) {
+          await fire(sendMessage(env, r, `✅ Step #${stepId} disetujui — akan dijalankan di tick berikutnya.`));
+        } else {
+          await fire(sendMessage(env, r, `Step #${stepId} tidak ditemukan atau bukan dalam status pending consent.`));
+        }
+      } catch {
+        await fire(sendMessage(env, r, "Gagal approve step."));
+      }
+      return new Response("ok", { status: 200 });
+    }
+    await fire(sendMessage(env, r,
+      "Gunakan:\n• `/plan buat <tujuan>` — buat rencana baru\n" +
+      "• `/plan status` — lihat rencana aktif\n" +
+      "• `/plan approve <step_id>` — setujui langkah prioritas tinggi"));
+    return new Response("ok", { status: 200 });
+  }
 
   // ------------------------------------------------------------------
   // Level 13 (Reflective Apprentice) — self-improvement surface.
