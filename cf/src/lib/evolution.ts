@@ -335,6 +335,18 @@ export async function generateMorningBriefing(env: Env, owner: number): Promise<
     const driftReport = await generateDriftReport(env);
     if (driftReport) lines.push(driftReport);
 
+    // Config optimizer suggestions (top 1 if any)
+    try {
+      const { readAppliedOptimizations } = await import("./config_optimizer");
+      const applied = await readAppliedOptimizations(env);
+      const keys = Object.keys(applied);
+      if (keys.length > 0) {
+        const top = keys[0];
+        const ago = Math.round((Date.now() - applied[top].appliedAt) / 3600_000);
+        lines.push(`⚙️ Config: \`${top}\` = ${applied[top].value} (${ago}h lalu)`);
+      }
+    } catch { /* best-effort */ }
+
     const exec = paused ? null : await statAgentTasksRecent(env, last24h);
     if (exec && (exec.done > 0 || exec.failed > 0)) {
       const bits = [];

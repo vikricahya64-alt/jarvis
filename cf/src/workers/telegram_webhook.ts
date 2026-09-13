@@ -681,6 +681,67 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     await fire(sendMessage(env, r, res.message));
     return new Response("ok", { status: 200 });
   }
+  if (trimmed === "/optimize" || trimmed.startsWith("/optimize ")) {
+    const sub = trimmed.replace(/^\/optimize\s*/i, "").trim();
+    if (!sub || sub === "status") {
+      // /optimize status — tampilkan metrics + suggestions + applied
+      const { runConfigOptimization, readAppliedOptimizations } = await import("../lib/config_optimizer");
+      const { metrics, suggestions, applied } = await runConfigOptimization(env);
+      const appliedCfg = await readAppliedOptimizations(env);
+      const lines = [
+        "*⚙️ Config Optimizer*",
+        "",
+        "*Metrics (24h):*",
+        `  Error rate: ${(metrics.errorRate * 100).toFixed(1)}%`,
+        `  Memory pressure: ${(metrics.memoryPressure * 100).toFixed(0)}%`,
+        `  Cron success: ${(metrics.cronSuccessRate * 100).toFixed(0)}%`,
+        "",
+      ];
+      if (suggestions.length) {
+        lines.push("*Suggestions:*");
+        suggestions.forEach((s, i) => {
+          lines.push(`  ${i + 1}. \`${s.key}\`: ${s.currentValue} → ${s.suggestedValue}`);
+          lines.push(`     ${s.reason}`);
+        });
+      } else {
+        lines.push("*Suggestions:* Tidak ada — sistem stabil.");
+      }
+      if (Object.keys(appliedCfg).length) {
+        lines.push("", "*Applied:*");
+        for (const [k, v] of Object.entries(appliedCfg)) {
+          const ago = Math.round((Date.now() - v.appliedAt) / 3600_000);
+          lines.push(`  \`${k}\` = ${v.value} (${ago}h lalu)`);
+        }
+      }
+      lines.push("", "Apply: `/optimize apply <nomor>`");
+      await fire(sendMessage(env, r, lines.join("\n")));
+      return new Response("ok", { status: 200 });
+    }
+    if (sub.startsWith("apply")) {
+      const id = Number(sub.replace(/^apply\s*/i, "").trim());
+      if (!id || id < 1) {
+        await fire(sendMessage(env, r, "Format: `/optimize apply <nomor>` — lihat `/optimize status` untuk daftar."));
+        return new Response("ok", { status: 200 });
+      }
+      const { analyzeOptimizations, collectMetrics, applyOptimizations } = await import("../lib/config_optimizer");
+      const metrics = await collectMetrics(env);
+      const suggestions = analyzeOptimizations(metrics);
+      const target = suggestions[id - 1];
+      if (!target) {
+        await fire(sendMessage(env, r, `Suggestion #${id} tidak ditemukan. Jalankan /optimize status dulu.`));
+        return new Response("ok", { status: 200 });
+      }
+      const applied = await applyOptimizations(env, [target]);
+      if (applied.length) {
+        await fire(sendMessage(env, r, `✅ Applied \`${target.key}\`: ${target.currentValue} → ${target.suggestedValue}`));
+      } else {
+        await fire(sendMessage(env, r, `⚠️ Gagal apply \`${target.key}\`. Mungkin auto-apply dinonaktifkan untuk pola ini.`));
+      }
+      return new Response("ok", { status: 200 });
+    }
+    await fire(sendMessage(env, r, "Gunakan: `/optimize status` atau `/optimize apply <nomor>`"));
+    return new Response("ok", { status: 200 });
+  }
   if (trimmed === "/audit-phantom") {
     await safeDBReply(env, r, async () => `🛡️ *Audit Phantom*\n${await auditPhantomRules(env)}`);
     return new Response("ok", { status: 200 });
