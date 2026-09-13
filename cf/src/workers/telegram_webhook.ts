@@ -650,6 +650,20 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     } catch { await fire(sendMessage(env, r, "Gagal menonaktifkan insight.")); }
     return new Response("ok", { status: 200 });
   }
+  if (trimmed.startsWith("/validate-insight")) {
+    const match = trimmed.match(/^\/validate-insight\s+(\d+)\s+(benar|salah|true|false)$/i);
+    if (!match) {
+      await fire(sendMessage(env, r,
+        "Format: `/validate-insight <id> <benar|salah>`\nLihat: /insights"));
+      return new Response("ok", { status: 200 });
+    }
+    const id = parseInt(match[1], 10);
+    const approved = /^(benar|true)$/i.test(match[2]);
+    const evo = await import("../lib/evolution");
+    const res = await evo.validateInsightManual(env, id, approved);
+    await fire(sendMessage(env, r, res.message));
+    return new Response("ok", { status: 200 });
+  }
   if (trimmed === "/audit-phantom") {
     await safeDBReply(env, r, async () => `🛡️ *Audit Phantom*\n${await auditPhantomRules(env)}`);
     return new Response("ok", { status: 200 });
