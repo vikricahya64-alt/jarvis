@@ -183,10 +183,12 @@ function getRiskLevel(desc: string): "low" | "medium" | "high" {
   return high ? "high" : low ? "medium" : "low";
 }
 
-/** Execute the next pending plan step (consented + safe). */
-export async function executePlanStep(env: Env, owner: number, planId: string): Promise<void> {
+/** Execute the next pending plan step (consented + safe).
+ *  Real effector: applies config changes if step description contains
+ *  "set <key>=<value>" pattern, storing in KV with 7-day TTL. */
+export async function executePlanStep(env: Env, owner: number, planId: string): Promise<{ executed: boolean; configApplied?: string }> {
   const step = await getNextPendingStep(env, owner, planId);
-  if (!step) return;
+  if (!step) return { executed: false };
 
   // Consent validation (covenant + consent gate)
   const covenantOk = await validateActionAgainstCovenant(env, owner, step.description);
@@ -198,7 +200,7 @@ export async function executePlanStep(env: Env, owner: number, planId: string): 
       commandHash: planId, blockingSource: "covenant_guard",
     });
     await setStepStatus(env, step.id, "blocked");
-    return;
+    return { executed: false };
   }
 
   // Global autonomy pause (/pause) menghentikan maestro sepenuhnya.
@@ -207,7 +209,7 @@ export async function executePlanStep(env: Env, owner: number, planId: string): 
     await logObedience(env, owner, "PLAN_STEP_PAUSED", step.priority, "BLOCK", "PAUSED", {
       commandHash: planId, evidence: { reason: "autonomy_paused" },
     });
-    return; // /pause aktif → seluruh eksekusi autonomous ditahan
+    return { executed: false };
   }
 
   // Safety guard: Priority 9+ -> require explicit user consent
@@ -215,7 +217,22 @@ export async function executePlanStep(env: Env, owner: number, planId: string): 
     await logObedience(env, owner, "PLAN_STEP_CONSENT_REQUIRED", step.priority, "CONSENT", "PENDING", {
       commandHash: planId, evidence: { priority: step.priority },
     });
-    return; // Menunggu pemilik memberikan persetujuan eksplisit
+    return { executed: false };
+  }
+
+  // Real effector: apply config changes if step description contains "set <key>=<value>"
+  let configApplied: string | undefined;
+  const configMatch = step.description.match(/\bset\s+(\w+)\s*=\s*(\S+)/i);
+  if (configMatch && env.CONFIG_KV) {
+    const [, key, value] = configMatch;
+    try {
+      await env.CONFIG_KV.put(
+        `maestro:config:${key}`,
+        JSON.stringify({ value, appliedAt: Date.now(), planId, stepId: step.id }),
+        { expirationTtl: 7 * 86400 },
+      );
+      configApplied = `${key}=${value}`;
+    } catch { /* best-effort */ }
   }
 
   // Execute the step (audit + logging)
@@ -225,11 +242,13 @@ export async function executePlanStep(env: Env, owner: number, planId: string): 
   ).bind(Date.now(), step.id).run();
 
   await logObedience(env, owner, `Step ${step.stepIndex} dari plan ${planId}`, step.priority, "EXECUTE", "COMPLIANT", {
-    commandHash: planId, evidence: { description: step.description, outcome: step.outcome },
+    commandHash: planId, evidence: { description: step.description, outcome: step.outcome, configApplied },
   });
 
   // Catatan aktivitas pemilik (meningkatkan DMS)
   await touchActivity(env, owner, "edge");
+
+  return { executed: true, configApplied };
 }
 
 /** Get the next pending step for a plan, respecting priority order. */
