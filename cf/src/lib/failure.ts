@@ -62,7 +62,9 @@ export interface RecoveryPlan {
 }
 
 /** Where a failure happens (tally path; matches registry metricsKey intent). */
-export type FailurePath = "search_synth" | "subagents" | "translate" | "understand" | "context7";
+export type FailurePath =
+  | "search_synth" | "subagents" | "translate" | "understand" | "context7"
+  | "borrowed" | "e2b";
 
 // ---------------------------------------------------------------------------
 // Failure classification (pure)
