@@ -2439,6 +2439,46 @@ async function testSourcingOrderIntent() {
   assert.strictEqual(isSourcingOrder("halo"), false, "greeting → not an order");
 }
 
+async function testConfigOptimizer() {
+  const { analyzeOptimizations, applyOptimizations, readAppliedOptimizations } = await import("../src/lib/config_optimizer");
+  // analyzeOptimizations: no suggestions for baseline metrics (errorRate=0.05, mem=0.5)
+  const healthy = analyzeOptimizations({ avgLatency: 100, errorRate: 0.05, memoryPressure: 0.5, cronSuccessRate: 0.99, sessionHitRate: 0.7 });
+  assert.strictEqual(healthy.length, 0, "baseline metrics → no suggestions");
+  // analyzeOptimizations: high error rate triggers suggestion
+  const highErr = analyzeOptimizations({ avgLatency: 500, errorRate: 0.15, memoryPressure: 0.5, cronSuccessRate: 0.95, sessionHitRate: 0.6 });
+  assert.ok(highErr.length >= 1, "high error rate → suggestion");
+  assert.strictEqual(highErr[0].key, "maxContextTurns", "high error → maxContextTurns suggestion");
+  // analyzeOptimizations: high memory pressure triggers suggestion
+  const highMem = analyzeOptimizations({ avgLatency: 200, errorRate: 0.01, memoryPressure: 0.9, cronSuccessRate: 0.95, sessionHitRate: 0.5 });
+  assert.ok(highMem.length >= 1, "high memory → suggestion");
+  assert.strictEqual(highMem[0].key, "memoryDecayHalfLife", "high memory → decay suggestion");
+  // analyzeOptimizations: low cron success triggers suggestion
+  const lowCron = analyzeOptimizations({ avgLatency: 200, errorRate: 0.01, memoryPressure: 0.3, cronSuccessRate: 0.7, sessionHitRate: 0.5 });
+  assert.ok(lowCron.length >= 1, "low cron → suggestion");
+  assert.strictEqual(lowCron[0].key, "cronMonitoring", "low cron → monitoring suggestion");
+  // applyOptimizations: no auto-apply when autoApply=false
+  const applied = await applyOptimizations({ CONFIG_KV: { put: async () => {} } } as any, [{ key: "test", currentValue: "a", suggestedValue: "b", reason: "test", autoApply: false }]);
+  assert.strictEqual(applied.length, 0, "autoApply=false → nothing applied");
+  // applyOptimizations: auto-apply when autoApply=true
+  const applied2 = await applyOptimizations({ CONFIG_KV: { put: async () => {} } } as any, [{ key: "test", currentValue: "a", suggestedValue: "b", reason: "test", autoApply: true }]);
+  assert.strictEqual(applied2.length, 1, "autoApply=true → applied");
+  assert.strictEqual(applied2[0], "test", "applied key matches");
+  // applyOptimizations: empty env → no crash
+  const applied3 = await applyOptimizations(undefined as any, []);
+  assert.strictEqual(applied3.length, 0, "empty → no crash");
+  // readAppliedOptimizations: empty KV → empty result
+  const empty = await readAppliedOptimizations({ CONFIG_KV: { list: async () => ({ keys: [] }) } } as any);
+  assert.deepStrictEqual(empty, {}, "empty KV → empty object");
+}
+
+async function testRecoveryLoop() {
+  const { getRecoveryPatterns } = await import("../src/lib/recovery_loop");
+  // getRecoveryPatterns with empty env → returns empty array
+  const patterns = await getRecoveryPatterns({ DB: { prepare: () => ({ bind: () => ({ all: async () => ({ results: [] }) }) }) } } as any);
+  assert.ok(Array.isArray(patterns), "returns array");
+  assert.strictEqual(patterns.length, 0, "empty DB → no patterns");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -2476,6 +2516,8 @@ async function main() {
   testGateNonAnswer();
   testGateRepetition();
   testCapabilityRegistry();
+  await testConfigOptimizer();
+  await testRecoveryLoop();
   testFailureTaxonomy();
   await testBudgetedRecovery();
   await testFailureRollup();
