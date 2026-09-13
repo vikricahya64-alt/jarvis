@@ -682,10 +682,33 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
       }
       return new Response("ok", { status: 200 });
     }
+    if (sub.startsWith("execute ")) {
+      const stepId = sub.replace(/^execute\s+/i, "").trim();
+      if (!stepId) {
+        await fire(sendMessage(env, r, "Format: `/plan execute <step_id>` — lihat `/plan status` untuk daftar."));
+        return new Response("ok", { status: 200 });
+      }
+      try {
+        const { executePlanStep } = await import("../lib/maestro");
+        const result = await executePlanStep(env, r, stepId);
+        if (result.executed) {
+          const msg = result.configApplied
+            ? `✅ Step ${stepId} dieksekusi + config diupdate: \`${result.configApplied}\``
+            : `✅ Step ${stepId} dieksekusi (logging only).`;
+          await fire(sendMessage(env, r, msg));
+        } else {
+          await fire(sendMessage(env, r, `Step ${stepId} tidak bisa dieksekusi (pause/consent/blocked).`));
+        }
+      } catch (e) {
+        await fire(sendMessage(env, r, `⚠️ Gagal eksekusi: ${String(e).slice(0, 150)}`));
+      }
+      return new Response("ok", { status: 200 });
+    }
     await fire(sendMessage(env, r,
       "Gunakan:\n• `/plan buat <tujuan>` — buat rencana baru\n" +
       "• `/plan status` — lihat rencana aktif\n" +
-      "• `/plan approve <step_id>` — setujui langkah prioritas tinggi"));
+      "• `/plan approve <step_id>` — setujui langkah prioritas tinggi\n" +
+      "• `/plan execute <step_id>` — jalankan langkah sekarang"));
     return new Response("ok", { status: 200 });
   }
 
