@@ -549,6 +549,41 @@ export async function listInsights(env: Env, includeDisabled = false): Promise<I
   }
 }
 
+/** Manually validate (approve) or reject an insight. Owner-only command.
+ *  Approve: bumps confidence, keeps it active. Reject: disables it.
+ *  Returns a user-facing message. Never throws. */
+export async function validateInsightManual(
+  env: Env, insightId: number, approved: boolean,
+): Promise<{ ok: boolean; message: string }> {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT id, rule_text, confidence FROM insights WHERE id = ? AND disabled = 0`,
+    ).bind(insightId).first<{ id: number; rule_text: string; confidence: number }>();
+    if (!row) return { ok: false, message: `Insight #${insightId} tidak ditemukan atau sudah nonaktif.` };
+
+    if (approved) {
+      await env.DB.prepare(
+        `UPDATE insights SET last_validated_at = ?, confidence = MIN(1.0, confidence + 0.15)
+         WHERE id = ?`,
+      ).bind(Date.now(), insightId).run();
+      return {
+        ok: true,
+        message: `✅ Insight #${insightId} divalidasi — confidence dinaikkan. Akan lebih sering disuntikkan ke konteks.`,
+      };
+    } else {
+      await env.DB.prepare(
+        `UPDATE insights SET disabled = 1 WHERE id = ?`,
+      ).bind(insightId).run();
+      return {
+        ok: true,
+        message: `🚫 Insight #${insightId} dinonaktifkan. Tidak akan disuntikkan ke konteks lagi.`,
+      };
+    }
+  } catch {
+    return { ok: false, message: "Gagal memvalidasi insight." };
+  }
+}
+
 /** Fetch the active, evidence-warranted lessons to inject into an LLM reply
  *  (so behavior drifts toward owner preference without rewriting any prompt). */
 export async function getBehaviorContext(env: Env, _topic: string | null): Promise<string> {
