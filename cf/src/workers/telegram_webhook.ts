@@ -668,10 +668,10 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
   if (trimmed.startsWith("/validate-insight")) {
-    const match = trimmed.match(/^\/validate-insight\s+(\d+)\s+(benar|salah|true|false)$/i);
+    const match = trimmed.match(/^\/validate-insight\s+[#<]?(\d+)[>]?\s+(benar|salah|true|false)$/i);
     if (!match) {
       await fire(sendMessage(env, r,
-        "Format: `/validate-insight <id> <benar|salah>`\nLihat: /insights"));
+        "Format: `/validate-insight 3 benar` atau `/validate-insight 3 salah`\nLihat: /insights"));
       return new Response("ok", { status: 200 });
     }
     const id = parseInt(match[1], 10);
