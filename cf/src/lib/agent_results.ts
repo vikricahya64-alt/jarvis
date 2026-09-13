@@ -7,13 +7,24 @@
 // Never throws anywhere.
 //=====================================================================
 
-import { Env, finishAgentTask, rememberMemory } from "./db";
+import { Env, finishAgentTask, rememberMemory, appendMemory } from "./db";
 import { emitText as sendMessage } from "./telegram_gate";
 import { gateVerdict } from "./verifier";
 import { budgetedRecovery, type FailurePath } from "./failure";
 
 const MAX_DM_DETAIL = 2800;
 const MAX_LAST_OUTPUT = 700;
+const MAX_EPISODIC_SUMMARY = 400;
+
+/** Build a condensed episodic-memory summary from executor output.
+ *  ~300 char core + metadata — enough for natural recall in the next turn
+ *  without flooding the context window (recentContext caps at 4 turns). */
+function buildExecutorSummary(result: string, task: string, label: string): string {
+  const clean = result.replace(/\s+/g, " ").trim();
+  const core = clean.slice(0, 300);
+  const tail = clean.length > 300 ? "…" : "";
+  return `[Eksekusi ${label}] Tugas: ${task.slice(0, 80)}. Hasil: ${core}${tail}`;
+}
 
 export type AgentResultOpts = {
   env: Env;
@@ -65,6 +76,14 @@ export async function finalizeAgentTask(o: AgentResultOpts): Promise<void> {
         }
         // tally already fired inside budgetedRecovery
       }
+    }
+
+    // EPISODIC MEMORY: persist a condensed summary so the next LLM turn can
+    // recall executor results via recentContext() — not just the 140-char
+    // headline in the memories table (which requires explicit searchMemory).
+    if (result) {
+      const summary = buildExecutorSummary(result, task, memoryLabel);
+      await appendMemory(env, o.owner, "assistant", summary, "").catch(() => {});
     }
   } else {
     await finishAgentTask(env, id, "failed", result, o.error, "");
