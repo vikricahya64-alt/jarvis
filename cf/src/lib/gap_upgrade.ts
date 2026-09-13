@@ -40,6 +40,7 @@ export interface GapProposal {
   windowStart: number;
   ts: number;
   fix: string;
+  fixDetail?: string;
   status: GapStatus;
 }
 
@@ -116,8 +117,13 @@ const GAP_FIX_HINTS: Record<string, string> = {
     "Output E2B terpotong — naikkan E2B_OUTPUT_LIMIT atau fragmentasi output.",
 };
 
-export function fixHintFor(path: FailurePath, cls: FailureClass): string {
-  return GAP_FIX_HINTS[`${path}:${cls}`] ?? `Gap berulang di ${path} (${cls}) — tinjau kontrak capability dan pipeline terkait.`;
+export function fixHintFor(path: FailurePath, cls: FailureClass, count = 1): string {
+  const base = GAP_FIX_HINTS[`${path}:${cls}`]
+    ?? `Gap berulang di ${path} (${cls}) — tinjau kontrak capability dan pipeline terkait.`;
+  if (count >= 10) return `[KRITIS ×${count}] ${base} — prioritas tinggi, perlu perbaikan segera.`;
+  if (count >= 5) return `[Signifikan ×${count}] ${base} — pola berulang, tinjau dalam sprint berikutnya.`;
+  if (count >= 3) return `[Observasi ×${count}] ${base}`;
+  return base;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +179,7 @@ export async function runGapUpgradeLoop(env: Env): Promise<GapUpgradeResult> {
         count: row.count,
         windowStart: anchor,
         ts: Date.now(),
-        fix: fixHintFor(row.path, cls),
+        fix: fixHintFor(row.path, cls, row.count),
         status: "open",
       };
       await env.CONFIG_KV?.put(openKey(cap, cls), JSON.stringify(proposal), { expirationTtl: 21 * 86400 }).catch(() => {});
