@@ -162,6 +162,7 @@ export async function pollE2bAgentRuns(env: Env): Promise<number> {
     const base = {
       env, id: t.id, owner: t.owner_id, task: t.task,
       outcomeLabel: "eksekutor E2B", memoryLabel: "E2B",
+      executorType: "e2b" as const,
     };
     const sid = t.run_id ?? "";
     if (!sid) {

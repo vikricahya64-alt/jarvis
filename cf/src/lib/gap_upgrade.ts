@@ -49,6 +49,8 @@ export function capIdForPath(path: FailurePath): string {
     case "translate": return "translate";
     case "understand": return "understand";
     case "context7": return "context7";
+    case "borrowed": return "search";
+    case "e2b": return "search";
     case "search_synth":
     case "subagents":
     default:
@@ -100,6 +102,18 @@ const GAP_FIX_HINTS: Record<string, string> = {
     "API context7 lambat — naikkan timeout atau tambah cache per library.",
   "context7:blocked":
     "context7.com menolak — kurangi frekuensi / pakai jalur cadangan.",
+  "borrowed:raw_dump":
+    "Output borrowed executor bocor markah — rapatkan sanitasi di runBorrowedExecutor.",
+  "borrowed:non_answer":
+    "Borrowed executor mengembalikan stub/error — perkuat penanganan error di pollBorrowedRuns.",
+  "borrowed:truncated":
+    "Output borrowed executor terpotong — naikkan batas output atau bagilah tugas.",
+  "e2b:raw_dump":
+    "Output E2B sandbox bocor JSON/code — perkuat filter di e2bOutcome.",
+  "e2b:non_answer":
+    "E2B mengembalikan error stub — periksa exit code sebelum persist.",
+  "e2b:truncated":
+    "Output E2B terpotong — naikkan E2B_OUTPUT_LIMIT atau fragmentasi output.",
 };
 
 export function fixHintFor(path: FailurePath, cls: FailureClass): string {

@@ -9,6 +9,8 @@
 
 import { Env, finishAgentTask, rememberMemory } from "./db";
 import { emitText as sendMessage } from "./telegram_gate";
+import { gateVerdict } from "./verifier";
+import { budgetedRecovery, type FailurePath } from "./failure";
 
 const MAX_DM_DETAIL = 2800;
 const MAX_LAST_OUTPUT = 700;
@@ -24,11 +26,13 @@ export type AgentResultOpts = {
   task: string;     // original task text (headline fallback when result empty)
   outcomeLabel: string; // executor label in the DM prefix, e.g. "eksekutor E2B"
   memoryLabel: string;  // memory subject, e.g. "E2B" / "pinjaman riset"
+  executorType: "github" | "e2b" | "borrowed"; // source executor for gate tally
 };
 
 /** Finalize a ledger row and DM the owner (never throws). */
 export async function finalizeAgentTask(o: AgentResultOpts): Promise<void> {
-  const { env, id, st, result, task, memoryLabel } = o;
+  const { env, id, st, result: rawResult, task, memoryLabel, executorType } = o;
+  let result = rawResult;
   if (st === "done") {
     await finishAgentTask(env, id, "done", result.slice(0, 60000), "", "");
     const headline = (result || task).replace(/\s+/g, " ").trim().slice(0, 140);
@@ -37,10 +41,35 @@ export async function finalizeAgentTask(o: AgentResultOpts): Promise<void> {
       `Eksekusi ${memoryLabel} #${id} berhasil: ${headline}`,
       { type: "fact", tags: ["agent_task", "executor", memoryLabel.toLowerCase()], importance: 3, source: "agent_task" },
     ).catch(() => {});
+
+    // OUTPUT GATE: verify executor output through the same deterministic rail
+    // as brain output. Catches raw_dump / non_answer / truncated from borrowed
+    // and E2B executors that previously passed unverified to the owner.
+    if (result) {
+      const verdict = gateVerdict(result);
+      if (verdict !== "ok") {
+        const path: FailurePath = executorType === "e2b" ? "e2b" : "borrowed";
+        const recovery = await budgetedRecovery(env, {
+          userText: task,
+          bad: result,
+          anchor: "",
+          verdict,
+          topic: task.slice(0, 100),
+          path,
+          llmBudget: 1,
+        });
+        if (recovery.recovered) {
+          result = recovery.text;
+          // Update ledger with recovered result
+          await finishAgentTask(env, id, "done", result.slice(0, 60000), "", "").catch(() => {});
+        }
+        // tally already fired inside budgetedRecovery
+      }
+    }
   } else {
     await finishAgentTask(env, id, "failed", result, o.error, "");
   }
-  await deliverAgentResult(o);
+  await deliverAgentResult({ ...o, result });
 }
 
 /** DM the owner a finished run (format mirrors /agent/done). Never throws. */

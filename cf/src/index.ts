@@ -387,10 +387,34 @@ ts: Date.now(),
       const artifact = sanitizeAgentReport(body?.artifact_url ?? "").slice(0, 400);
       const flagged = flagAgentReport(rawResult || rawError);
       await finishAgentTask(env, tid, st === "done" ? "done" : "failed", rawResult, rawError, artifact);
+      // OUTPUT GATE: verify executor output through the same deterministic rail
+      // as brain output. Catches raw_dump / non_answer / truncated from the
+      // GitHub Actions executor that previously passed unverified to the owner.
+      let gatedResult = rawResult;
+      if (st === "done" && rawResult) {
+        const { gateVerdict } = await import("./lib/verifier");
+        const { budgetedRecovery } = await import("./lib/failure");
+        const verdict = gateVerdict(rawResult);
+        if (verdict !== "ok") {
+          const recovery = await budgetedRecovery(env, {
+            userText: task.task,
+            bad: rawResult,
+            anchor: "",
+            verdict,
+            topic: (task.task ?? "").slice(0, 100),
+            path: "borrowed",
+            llmBudget: 1,
+          });
+          if (recovery.recovered) {
+            gatedResult = recovery.text;
+            await finishAgentTask(env, tid, "done", gatedResult.slice(0, 60000), "", "").catch(() => {});
+          }
+        }
+      }
       // Best-effort learning: a finished cloud task becomes an episodic memory
       // so the nightly dream cycle can generalize patterns from real outcomes.
       if (st === "done") {
-        const headline = (rawResult || task.task).replace(/\s+/g, " ").trim().slice(0, 140);
+        const headline = (gatedResult || task.task).replace(/\s+/g, " ").trim().slice(0, 140);
         await rememberMemory(env, `Eksekusi cloud #${tid} berhasil: ${headline}`, {
           type: "fact", tags: ["agent_task", "executor"], importance: 3, source: "agent_task",
         }).catch(() => {});
@@ -399,7 +423,7 @@ ts: Date.now(),
         ? `✅ Tugas *#${tid}* selesai (eksekutor cloud)`
         : `❌ Tugas *#${tid}* gagal di eksekutor cloud`;
       const detail = st === "done"
-        ? (rawResult || "(tanpa output)").slice(0, 2800)
+        ? (gatedResult || "(tanpa output)").slice(0, 2800)
         : (rawError || "-").slice(0, 300).replace(/\s+/g, " ");
       const artLine = artifact ? `\n📎 Artefak lengkap: ${artifact}` : "";
       const warnLine = flagged

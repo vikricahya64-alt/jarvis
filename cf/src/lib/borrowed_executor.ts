@@ -144,6 +144,7 @@ export async function pollBorrowedRuns(env: Env, limit = 6): Promise<number> {
     const base = {
       env, id: t.id, owner: t.owner_id, task: t.task, flagged,
       outcomeLabel: "eksekutor pinjaman", memoryLabel: `pinjaman ${id}`,
+      executorType: "borrowed" as const,
     };
     if (!raw) {
       await finalizeAgentTask({ ...base, st: "failed", result: "", error: `eksekutor ${id} tidak menghasilkan hasil` });
