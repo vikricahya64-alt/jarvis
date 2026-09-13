@@ -543,7 +543,7 @@ ts: Date.now(),
         console.log(`[cron] error_loop: scanned=${healResult.scanned} diagnosed=${healResult.diagnosed} fixes=${healResult.fixGenerated} (${Date.now() - start}ms)`);
         const safetyResult = await runDeploySafetyLoop(env);
         console.log(`[cron] deploy_safety: health=${safetyResult.health.healthScore} reverted=${safetyResult.autoReverted} patterns=${safetyResult.patternsDetected} (${Date.now() - start}ms)`);
-        const recoveryResult = await runRecoveryLoop(env);
+        const recoveryResult = await runRecoveryLoop(env, OWNER(env));
         console.log(`[cron] recovery: patterns=${recoveryResult.patternsDetected} auto_fixed=${recoveryResult.fixesApplied} manual=${recoveryResult.manualNeeded} (${Date.now() - start}ms)`);
       } else if (cron === "0 3 * * *") {
         const expired = await sweepExpiredProposals(env);

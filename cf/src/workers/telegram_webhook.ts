@@ -817,6 +817,23 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     await safeDBReply(env, r, async () => `🛡️ *Audit Phantom*\n${await auditPhantomRules(env)}`);
     return new Response("ok", { status: 200 });
   }
+  if (trimmed === "/recovery status" || trimmed === "/recovery") {
+    const { getRecoveryPatterns } = await import("../lib/recovery_loop");
+    const patterns = await getRecoveryPatterns(env);
+    if (patterns.length === 0) {
+      await fire(sendMessage(env, r, "✅ Tidak ada error pattern aktif."));
+    } else {
+      const lines = [
+        "🩺 *Recovery Patterns*",
+        "",
+        ...patterns.slice(0, 5).map((p, i) =>
+          `#${i + 1} *${p.category}* (×${p.occurrences}) — ${p.autoFixable ? "auto-fixable" : "manual"}\n  💡 ${p.suggestedFix.slice(0, 120)}`
+        ),
+      ];
+      await fire(sendMessage(env, r, lines.join("\n")));
+    }
+    return new Response("ok", { status: 200 });
+  }
   if (trimmed === "/audit-dispatch") {
     await safeDBReply(env, r, async () => {
       const list = await (env.CONFIG_KV?.list({ prefix: "dispatch:", limit: 10 }) ?? Promise.resolve({ keys: [] }));
