@@ -623,11 +623,28 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // Everything is append-only, evidence-warranted, and owner-overridable.
   // ------------------------------------------------------------------
   if (trimmed === "/reflect") {
-    await fire(sendMessage(env, r,
-      "🧠 *Refleksi*\nJ.A.R.V.I.S. merefleksikan output ~1 ronde setelah tugas kompleks, " +
-      "mencatat kritik + versi perbaikan di \`reflection_log\`, lalu mengonsolidasikan " +
-      "pola menjadi \`insights\` setiap pagi (cron 0 7).\n" +
-      "Lihat: /insights · /audit-phantom"));
+    const recent = await recentContext(env, r, 4);
+    const lastAssistant = [...recent].reverse().find((m) => m.role === "assistant");
+    const lastUser = [...recent].reverse().find((m) => m.role === "user");
+    if (!lastAssistant || !lastUser) {
+      await fire(sendMessage(env, r,
+        "🧠 Tidak ada output terakhir untuk direfleksikan. Kirim pesan substantif dulu, lalu `/reflect`."));
+      return new Response("ok", { status: 200 });
+    }
+    try {
+      const evo = await import("../lib/evolution");
+      const result = await evo.reflectOnTurn(env, lastUser.content, lastAssistant.content, [], "behavior");
+      const isSkipped = result.includes("Skipped:");
+      if (isSkipped) {
+        await fire(sendMessage(env, r,
+          "🧠 Output terakhir sudah optimal — tidak ada perbaikan yang diperlukan."));
+      } else {
+        await fire(sendMessage(env, r,
+          `🧠 *Refleksi manual*\n\n${result.slice(0, 1500)}`));
+      }
+    } catch {
+      await fire(sendMessage(env, r, "🧠 Gagal melakukan refleksi manual."));
+    }
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/insights") {
