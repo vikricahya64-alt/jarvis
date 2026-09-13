@@ -8,13 +8,57 @@ beban on-device (lihat `docs/level6-device-setup.md` DEPRECATED).
 ## Arsitektur satu-Worker
 
 ```
-Cron (3) ──► scheduled() ──► runDms()/value_alignment (D1)
-Telegram  ──► /webhook ──► handleUpdate() ──► routeCommand() (Groq klaifikasi + D1)
-Queues    ──► jarvis-tasks ──► queue() ──► processMessage()
+Telegram ──► /webhook ──► telegram_gate.handleIncoming ──► handleUpdate()
+                              │  (SATU pintu masuk, router disuntik
+                              │   oleh index.ts via registerUpdateRouter)
+                              │              │
+                              │              ▼
+Cron (3) ──► scheduled() ──► runDms()/value_alignment (D1)   processIntelligence()  (otak)
+Queues  ──► jarvis-tasks ──► queue() ──► processMessage()         │
+                                              │                  │ (gate anti-halusinasi input)
+                                              ▼                  ▼
+                              semua output Telegram LEBIH DULU lewat
+                              telegram_gate.emit* (SATU pintu keluar)
+                              ─ emitText / emitSmartReply (rail otak) /
+                                emitPhoto / emitVoice / emitAnswer /
+                                emitEditMarkup — semua teraudit
                                               │
+                                              ▼
                                   D1 (state, audit, consent, vault-meta + payload inline)
                                   KV (config/certs — bukan audit)
 ```
+
+### Prinsip pintu tunggal Telegram (satu pintu masuk + satu pintu keluar)
+
+Kemampuan **fondasi = otak**, kemampuan lain = **tangan/kaki**. Semua lalu
+lintas Telegram harus lewat **satu pintu**, jadi tidak ada output (percakapan
+maupun notifikasi deterministik cron/agent/DMS) yang bisa menyelinap keluar
+tanpa lewat otak.
+
+- `src/lib/telegram_gate.ts` adalah **satu-satunya modul** yang boleh memanggil
+  transport `src/lib/telegram.ts`. Modul lain di `src/` DILARANG mengimpor
+  transport; semuanya lewat gate (cek: `git grep -l 'from "\./lib/telegram"'`).
+- **Masuk (inbound)**: `handleIncoming()` menerima semua update Telegram.
+  Router di-suntik sekali di module-scope `index.ts` via
+  `registerUpdateRouter(handleUpdate)` (hindari siklus import; fail-closed 500
+  tanpa router). Idempotensi `update_id` tetap di dalam `handleUpdate`.
+- **Keluar (outbound)**: `emitText` / `emitSmartReply` / `emitPhoto` /
+  `emitVoice` / `emitAnswer` / `emitEditMarkup` adalah satu-satunya titik
+  keluar; semua tercatat `[telegram_gate] OUT kind=… chat=… src=… len=…`.
+- **Rail anti-halusinasi keluar** (`brainExitRail`) berlaku untuk teks ber-origin
+  otak (`emitSmartReply`), sebagai lapis KEDUA di luar gate di dalam
+  `processIntelligence`: (a) teks vague tanpa subjek → `CLARIFY_EMPTY_SUBJECT`
+  (byte-identical dengan gate input, idempotent), (b) kutipan memori tak
+  berjangkar ("berdasarkan catatan kita", "seperti yang kita sepakati",
+  "Berdasarkan kebingungan yang kamu rasakan tadi") → dibuka ulang menjadi
+  "Menurut ingatanku, …". Notifikasi deterministik (cron/agent/DMS) LULUS
+  tapi tetap teraudit lewat pintu yang sama.
+- **Gate anti-halusinasi input** (di `processIntelligence`) bersifat GLOBAL dan
+  HANYA melihat kata-kata user saat ini: `isVagueNoSubject(effectiveText)`
+  → pesan vague tanpa subjek ("saya sedang bingung", "bantu aku") selalu
+  diklarifikasi. Tidak membaca `isContinuation`/memori (live-veri: overlap
+  memori "kerja remote" membuat isContinuation palsu → gate pernah ter-skip
+  dan JARVIS menjawab remotework dari memori; goblok itu dihapus permanen).
 
 ## 1. Prasyarat
 
@@ -171,8 +215,10 @@ migrations/0006_resilience.sql circuit breaker, observability, FTS5 memory, cron
 migrations/0007_evolution.sql L13: reflection_log, insights, owner_preferences, dream_cycles
 src/index.ts             router + cron + queue (+ laporan Mingguan, identity epoch, quota, dream L13)
 src/workers/task_processor.ts      queue consumer
-src/workers/telegram_webhook.ts    webhook + consent/clarify + jalur AI + perintah L12/L13
-src/lib/ai.ts            groqRespond + ddgSearch + searchAndSynthesize (kognitif) + refleksi
+src/workers/telegram_webhook.ts    router inbound (disuntik ke gate) + consent/clarify + perintah L12/L13
+src/lib/telegram_gate.ts  ⭐ SATU PINTU Telegram (libat transport; handleIncoming + emit* + brainExitRail)
+src/lib/ai.ts            groqRespond + ddgSearch + searchAndSynthesize (kognitif) + refleksi + CLARIFY_EMPTY_SUBJECT/isVagueNoSubject
+src/lib/intelligence.ts  processIntelligence (otak) + gate input global anti-subjek-dari-memori
 src/lib/resilience.ts    circuit breaker, retry/timeout, observability, cron lock D1
 src/lib/evolution.ts     L13: refleksi, konsolidasi, insight, preferensi, sentinel, guardrail
 src/lib/command_hierarchy.ts       prioritas + clarity + consent + audit + pause
@@ -184,7 +230,7 @@ src/lib/degradation.ts             kuota free-tier → feature disable (non-esen
 src/lib/monitor.ts                 refresh kuota + status + alert degradasi
 src/lib/dead_mans_switch.ts        state machine D1 (stage transitions)
 src/lib/zero_trust.ts              mTLS/context
-src/lib/db.ts / telegram.ts        helper
+src/lib/db.ts / telegram.ts        helper (telegram.ts = transport KONSUMENNYA HANYA telegram_gate)
 .dev.vars.example        contoh secrets
 deploy.sh                wrapper perform setup/deploy/secrets/webhook
 test/safety.test.ts      uji keamanan kritis (npx tsx)
