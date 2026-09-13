@@ -1843,6 +1843,17 @@ async function statusReport(env: Env, paused: boolean): Promise<string> {
     ``,
   ];
   try {
+    // Daily request count (free-tier awareness)
+    const last24h = Date.now() - 24 * 3600_000;
+    const reqCount = await env.DB.prepare(
+      `SELECT COUNT(*) as count FROM request_log WHERE ts >= ?`,
+    ).bind(last24h).first<{ count: number }>();
+    if (reqCount?.count !== undefined) {
+      lines.push(`📈 *Requests (24h):* ${reqCount.count}`);
+      lines.push(``);
+    }
+  } catch { /* count optional */ }
+  try {
     const probe = await probeProviders(env);
     lines.push(`*Provider (live):*`);
     for (const p of probe) {
