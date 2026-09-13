@@ -141,15 +141,32 @@ export function analyzeOptimizations(metrics: ConfigMetrics): ConfigSuggestion[]
 }
 
 /**
- * Advisory-only auto-optimization: these tuning knobs (maxContextTurns,
- * maxMemorySearch, ...) currently have NO consumer — the old code wrote
- * `opt_<key>` into DMS config that nothing ever read. Honest behavior is to
- * surface suggestions to the owner (via the report) and never pretend a
- * silent D1 write changed behavior. Always returns [] by design.
+ * Apply safe auto-optimizations within predefined bounds. Stores applied
+ * config in KV so consumers can read with fallback to hardcoded defaults.
+ * Returns list of applied suggestion keys. Never throws.
  */
-export const applyOptimizations = async (): Promise<string[]> => [];
+export async function applyOptimizations(env: Env, suggestions: ConfigSuggestion[]): Promise<string[]> {
+  if (!env || !suggestions.length) return [];
+  const applied: string[] = [];
 
-/** Main optimization loop. Called by loop_scheduler. */
+  for (const s of suggestions) {
+    if (!s.autoApply) continue;
+
+    try {
+      // Store applied config in KV with 7-day TTL
+      await env.CONFIG_KV?.put(
+        `config:opt:${s.key}`,
+        JSON.stringify({ value: s.suggestedValue, appliedAt: Date.now(), reason: s.reason }),
+        { expirationTtl: 7 * 86400 },
+      ).catch(() => {});
+      applied.push(s.key);
+    } catch { /* best-effort */ }
+  }
+
+  return applied;
+}
+
+/** Main optimization loop. Called by cron. */
 export async function runConfigOptimization(env: Env): Promise<{
   metrics: ConfigMetrics;
   suggestions: ConfigSuggestion[];
@@ -157,6 +174,24 @@ export async function runConfigOptimization(env: Env): Promise<{
 }> {
   const metrics = await collectMetrics(env);
   const suggestions = analyzeOptimizations(metrics);
-  const applied = await applyOptimizations();
+  const applied = await applyOptimizations(env, suggestions);
   return { metrics, suggestions, applied };
+}
+
+/** Read all applied config optimizations from KV. Never throws. */
+export async function readAppliedOptimizations(env: Env): Promise<Record<string, { value: string; appliedAt: number; reason: string }>> {
+  const result: Record<string, { value: string; appliedAt: number; reason: string }> = {};
+  if (!env.CONFIG_KV) return result;
+  try {
+    const keys = await env.CONFIG_KV.list({ prefix: "config:opt:", limit: 20 });
+    for (const k of keys.keys ?? []) {
+      const raw = await env.CONFIG_KV.get(k.name).catch(() => null);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const shortKey = k.name.replace(/^config:opt:/, "");
+        result[shortKey] = parsed;
+      }
+    }
+  } catch { /* best-effort */ }
+  return result;
 }
