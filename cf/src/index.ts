@@ -8,7 +8,7 @@
 // the queue consumer, both bounded. All GOTCHA-free, no external SDK.
 //=====================================================================
 
-import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders, getAgentTask, finishAgentTask, listAgentTasks, failStaleAgentTasks, pruneOldAgentTasks, rememberMemory } from "./lib/db";
+import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders, getAgentTask, finishAgentTask, listAgentTasks, failStaleAgentTasks, pruneOldAgentTasks, rememberMemory, appendMemory } from "./lib/db";
 import { pollE2bAgentRuns } from "./lib/e2b_executor";
 import { pollBorrowedRuns } from "./lib/borrowed_executor";
 import { sanitizeAgentReport, flagAgentReport } from "./lib/agent_executor";
@@ -418,6 +418,12 @@ ts: Date.now(),
         await rememberMemory(env, `Eksekusi cloud #${tid} berhasil: ${headline}`, {
           type: "fact", tags: ["agent_task", "executor"], importance: 3, source: "agent_task",
         }).catch(() => {});
+        // EPISODIC MEMORY: condensed summary for recentContext() recall.
+        const core = (gatedResult || "").replace(/\s+/g, " ").trim().slice(0, 300);
+        if (core) {
+          const summary = `[Eksekusi cloud] Tugas: ${(task.task ?? "").slice(0, 80)}. Hasil: ${core}${(gatedResult || "").length > 300 ? "…" : ""}`;
+          await appendMemory(env, task.owner_id, "assistant", summary, "").catch(() => {});
+        }
       }
       const prefix = st === "done"
         ? `✅ Tugas *#${tid}* selesai (eksekutor cloud)`
