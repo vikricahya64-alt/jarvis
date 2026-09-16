@@ -2033,6 +2033,7 @@ const VAGUE_TAIL_FILLERS = new Set([
   "karena", "jadi", "dan", "nah", "eh", "kan", "deh", "aja", "juga", "saja",
   "saya", "aku", "gue", "gw", "kamu", "kamu", "lagi", "sedang", "adalah",
   "mau", "ingin", "tanya", "nanya", "pengen", "butuh", "minta", "tolong", "bantu",
+  "hanya", "cuma", "hari", "sekarang", "tadi", "kemarin", "barusan",
 ]);
 
 /** Single-source deterministic clarify reply for vague no-subject input. Shared
@@ -2053,8 +2054,17 @@ export function isVagueNoSubject(text: string): boolean {
   const low = (text ?? "").trim().toLowerCase().replace(/\s+/g, " ");
   if (low.length < 4 || low.length > 60) return false;
   const head = low
+    // Negasi topik: "bukan soal/tentang/untuk/perihal apa-apa" meniadakan
+    // subjek TANPA menambah subjek baru. Live failure: "...bukan soal apa-apa
+    // hanya hari ini sedang bingung" lolos gate dan dijawab halusinasi
+    // "echo hello".
+    .replace(/^bukan\s+(?:soal|tentang|untuk|perihal)\s+apa-apa[\s,]*/i, "")
+    // Kepala waktu/konteks non-subjek: "hanya/sekarang/tadi/kemarin/barusan"
+    // (+ "hari ini" opsional) tidak membawa subjek. Jaring pengaman ekor
+    // (VAGUE_TAIL_FILLERS) tetap memverifikasi tidak ada kata isi tersisa.
+    .replace(/^(?:hanya|cuma|sekarang|tadi|kemarin|barusan)?\s*(?:hari\s+ini)?\b[\s,]*/i, "")
     .replace(
-      /^(?:saya|aku|gue|gw)?[\s,]*(?:sedang|lagi|sangat|betul-betul|makin|semakin)?\s*(?:bingung|buntu|pusing|kurang jelas|tidak?\s+(?:paham|mengerti|ngerti)|nggak?\s+(?:paham|ngerti)|gak?\s+(?:paham|ngerti))\b/i,
+      /^(?:saya|aku|gue|gw)?[\s,]*(?:hanya|cuma|sedang|lagi|sangat|betul-betul|makin|semakin)?\s*(?:bingung|buntu|pusing|kurang jelas|tidak?\s+(?:paham|mengerti|ngerti)|nggak?\s+(?:paham|ngerti)|gak?\s+(?:paham|ngerti))\b/i,
       "",
     )
     .replace(/^(?:bantu|tolong)\s+(?:aku|saya)\b/i, "")

@@ -1035,54 +1035,39 @@ async function testComprehensionGate() {
   // hambar vs teks pada platform age" → fabricated "platform AGE").
   const brainSrc = readFileSync(new URL("../src/lib/intelligence.ts", import.meta.url), "utf-8");
   const aiSrc = readFileSync(new URL("../src/lib/ai.ts", import.meta.url), "utf-8");
+  const importSrc = readFileSync(new URL("../src/lib/confidence_router.ts", import.meta.url), "utf-8");
   const detectGarbledInputPresent = /detectGarbledInput/.test(aiSrc);
 
-  // The gate must exist and be wired: detectGarbledInput is called in the brain
-  // BEFORE act/execute, and returns a clarifying ask (source understand_clarify).
-  assert.ok(/detectGarbledInput/.test(brainSrc),
-    "brain must call detectGarbledInput (typo/garble gate)");
+  // The gate must exist and be wired: confidence router decides clarify/ask_search/direct
+  // in processIntelligence BEFORE act/execute, using deterministic scoring.
+  assert.ok(/decideAnswerMode/.test(brainSrc),
+    "brain must call decideAnswerMode (confidence router)");
+  assert.ok(/askSearchRespond/.test(brainSrc),
+    "brain must call askSearchRespond for low-confidence inputs");
   assert.ok(/understand_clarify/.test(brainSrc),
-    "brain must return source understand_clarify when garbled detected");
-  assert.ok(/clear === false/.test(brainSrc) || /garbled\.clear === false/.test(brainSrc),
-    "brain must short-circuit when garbled detected (no confident fake answer)");
+    "brain must return source understand_clarify when confidence low");
   assert.ok(detectGarbledInputPresent,
-    "ai must export detectGarbledInput");
-  assert.ok(/"clear": true\/false/.test(aiSrc),
-    "ai comprehension gate must ask for a clear true/false verdict");
+    "ai must still export detectGarbledInput (used by confidence_router indirectly)");
 
-  // m9-v11 FAIL-CLOSED COMPREHENSION: the gate must NOT treat a message as
-  // clear on low confidence — the live failure "platform age" was judged
-  // "clear" by the same model that then fabricated a whole "platform AGE"
-  // ecosystem. The gate must require a confidence ceiling and ASK below it.
-  assert.ok(/COMPREHENSION_MIN_CONFIDENCE/.test(aiSrc),
-    "ai must define a minimum confidence for the comprehension gate");
-  assert.ok(/conf >= COMPREHENSION_MIN_CONFIDENCE/.test(aiSrc),
-    "ai must demand confidence >= threshold before treating input as clear");
-  assert.ok(/jangan pernah menjawab dengan raguan tinggi/.test(aiSrc),
-    "ai gate must instruct the LLM to never answer at high doubt");
-  assert.ok(/TIDAK PERNAH muncul di konteks percakapan/.test(aiSrc),
-    "ai gate must check whether named platforms/terms are grounded in context");
+  // Confidence router threshold: deterministic scoring decides whether to
+  // ask+search or answer directly — no separate "probability" LLM call.
+  assert.ok(/UNDERSTAND_CONFIDENCE_HIGH/.test(brainSrc) || /UNDERSTAND_CONFIDENCE_HIGH/.test(importSrc),
+    "confidence router must define a threshold constant");
+  assert.ok(/computeUnderstandConfidence/.test(importSrc) || /computeUnderstandConfidence/.test(brainSrc),
+    "confidence router must compute deterministic confidence");
+  assert.ok(/mode === .clarify./.test(brainSrc) || /decideAnswerMode/.test(brainSrc),
+    "brain must route on clarify/ask_search/direct modes");
 
-  // m9-v11.x EMPTY-SUBJECT GATE: pesan vague tanpa subjek ("saya sedang
-  // bingung") tanpa topik aktif & tanpa riwayat → klarifikasi deterministik,
+  // m9-v11.x EMPTY-SUBJECT GATE → CONFIDENCE ROUTER: pesan vague tanpa subjek
+  // ("saya sedang bingung") tanpa topik aktif → klarifikasi deterministik,
   // bukan jawaban confident yang menebak topik (live failure: "kerja remote").
-  assert.ok(/isVagueNoSubject/.test(brainSrc),
-    "brain must call isVagueNoSubject (empty-subject gate)");
+  // Router menggabungkan isVagueNoSubject + computeUnderstandConfidence.
   assert.ok(/isVagueNoSubject/.test(aiSrc) && /VAGUE_TAIL_FILLERS/.test(aiSrc),
     "ai must export isVagueNoSubject with a deterministic filler set");
-  // Dua live failure: gate lama di dalam case understand_intent + bergantung
-  // pada `!topic` / `!hasRecall` tidak pernah menyala — topic selalu terisi
-  // fallback slice, dan blok memori malah menambah subjek tebakan. Gate kini
-  // GLOBAL di processIntelligence (sebelum decide/act) sehingga routing apa
-  // pun tidak bisa menghindarinya; kehadiran memori tidak menambah subjek.
-  // live-veri 2026 (kedua): gate SAMPAI lolos karena `!perception.isContinuation`
-  // PALSU — isContinuation dihitung dari enrichedContext yg memuat memori lama,
-  // overlap kata umum memberi isContinuation=true → skip. Gate TIDAK boleh
-  // membaca isContinuation: pesan vague selalu clarify walau konteks berisik.
-  assert.ok(/EMPTY-SUBJECT GATE \(GLOBAL\)/.test(brainSrc),
-    "brain must carry a global empty-subject gate in processIntelligence");
-  assert.ok(/!skipEmptySubject && isVagueNoSubject\(effectiveText\)/.test(brainSrc),
-    "gate must fire on vague subject-less text regardless of memory/recall/continuation");
+  assert.ok(/CONFIDENCE ROUTER/.test(brainSrc),
+    "brain must carry the confidence router in processIntelligence");
+  assert.ok(/decideAnswerMode/.test(brainSrc),
+    "brain must route on decideAnswerMode (clarify/ask_search/direct)");
   assert.ok(!/!skipEmptySubject && !perception\.isContinuation && isVagueNoSubject\(effectiveText\)/.test(brainSrc),
     "obsolete isContinuation-skip variant must be gone (memory overlap gave false continuation)");
   assert.ok(!/!topic && !perception\.isContinuation && !hasRecall/.test(brainSrc),
@@ -1105,10 +1090,10 @@ async function testComprehensionGate() {
 
   // The gate must be SKIPPED on deterministic low-risk paths (commands). A
   // slash command / emergency / self-ref must never be blocked by a gate.
-  assert.ok(/skipComprehension/.test(brainSrc),
-    "brain must have a skip list for the comprehension gate");
-  assert.ok(/^\^\\\//.test(brainSrc) || /^\^\\/.test(brainSrc) || /command|emergency|self_referential/.test(brainSrc),
-    "commands/emergency/self-ref must bypass the gate");
+  assert.ok(/skipRouter/.test(brainSrc),
+    "brain must have a skip list for the confidence router");
+  assert.ok(/emergency|self_referential|command/.test(brainSrc),
+    "commands/emergency/self-ref must bypass the router");
 }
 
 async function testHeavyCapabilityVerify() {

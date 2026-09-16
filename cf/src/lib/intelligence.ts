@@ -37,9 +37,6 @@ import {
   parseTranslate, translateText, understandUserWants,
   generateImagePrompt, generateImage, sniffImageMime,
   storeResearchAnchor,
-  detectGarbledInput,
-  unknownEntitySignal,
-  isVagueNoSubject,
   CLARIFY_EMPTY_SUBJECT,
 } from "./ai";
 import {
@@ -56,6 +53,12 @@ import {
 } from "./relevance";
 import { reflectOnTurn } from "./evolution";
 import { SELF_REF_RE } from "./identity";
+import {
+  decideAnswerMode,
+  askSearchRespond,
+  computeUnderstandConfidence,
+  UNDERSTAND_CONFIDENCE_HIGH,
+} from "./confidence_router";
 
 // ============================================================================
 // Types
@@ -1372,87 +1375,40 @@ export async function processIntelligence(
     }
   }
 
-  // m9-v11 COMPREHENSION GATE (typo/garble detection): an odd sentence that
-  // doesn't fit the ongoing topic should be ASKED ABOUT, not confidently
-  // answered (owner principle: "manusia bertanya saat tidak mengerti kalimat
-  // yang aneh, sebelum menjawabnya"). Live failures: "jelaskan bahasa mudah"
-  // → Malang; "generasi hambar vs teks pada platform age" → fabricated
-  // "platform AGE". Runs BEFORE decide/act so a garbled message never burns
-  // a search/design run on a misread topic. Skipped when we already resume a
-  // parked confirmation, and on commands/emergency/self-ref (deterministic,
-  // low-risk paths where a gate would just add noise).
-  const skipComprehension =
+  // ── CONFIDENCE ROUTER (Level 14): replaces comprehension gate + empty-subject
+  // gate dengan satu keputusan deterministik. Threshold 0.7: di atas → jawab
+  // langsung; di bawah → tanya+search paralel; emosi murni → klarifikasi.
+  // Menghindari double-spend: tidak ada panggilan LLM terpisah untuk "hitung
+  // probabilitas pemahaman" — probabilitas dihitung deterministik (0 token),
+  // hanya aktif saat confidence rendah (model + search paralel).
+  const skipRouter =
     pending ||
     /^\//.test(text.trim()) ||
     /^(emergency|self_referential|translation|command|prompt_writer|context7)$/.test(perception.intent.type);
-  if (!skipComprehension) {
-    // Anti-false-positive guard (m9-v11.1): a PURE continuation that only
-    // references what's already in the thread must be ANSWERED, not re-asked.
-    // Live over-fire: "4 konsep tersebut" / "kedua generasi tersebut" → JARVIS
-    // asked a clarifying question although the owner was clearly continuing.
-    // Only run the gate when the message actually INTRODUCES an unknown
-    // platform/product/term (deterministic red-flag) — then a garbled
-    // continuation like "generasi hambar pada platform age" still trips it.
-    const bareContinuation = perception.isContinuation && !unknownEntitySignal(effectiveText);
-    if (!bareContinuation) {
-      const garbled = await detectGarbledInput(env, effectiveText, perception.enrichedContext, perception.topic).catch(
-        () => ({ clear: true, uncertain: null }),
-      );
-      if (garbled.clear === false) {
-        const term = garbled.uncertain?.trim();
-        const clarifyBase =
-          term && term.length <= 60 && !/^[\s\W]+$/.test(term)
-            ? term.startsWith("platform")
-              ? `Sebelum kujawab: platform "${term.split(/\s+/)[1] || term}" yang kamu maksud itu apa ya? Aku belum paham istilah itu dalam konteks ini — boleh jelaskan sedikit?`
-              : `Sebelum kujawab: "${term}" yang kamu maksud itu apa ya? Aku belum paham istilah itu dalam konteks ini — boleh jelaskan sedikit?`
-            : `Sebelum kujawab, mau memastikan dulu: maksud pesanmu itu apa ya? Ada bagian yang belum kupahami — boleh dijelaskan ulang?`;
-        return {
-          text: clarifyBase,
-          perception,
-          strategy,
-          source: "understand_clarify",
-          latencyMs: Date.now() - start,
-          reflection: { shouldReflect: false, topic: perception.topic },
-        };
-      }
+  if (!skipRouter) {
+    const mode = decideAnswerMode(perception, effectiveText);
+    if (mode === "clarify") {
+      return {
+        text: CLARIFY_EMPTY_SUBJECT,
+        perception,
+        strategy,
+        source: "understand_clarify",
+        latencyMs: Date.now() - start,
+        reflection: { shouldReflect: false, topic: perception.topic },
+      };
     }
-  }
-
-  // m9-v11.x EMPTY-SUBJECT GATE (GLOBAL): pesan vague tanpa subjek ("saya
-  // sedang bingung", "bantu aku") → tanya klarifikasi singkat secara
-  // deterministik (nol panggilan LLM). PSA ATAS TIGA live failure berturut-
-  // turut: "Saya sedang bingung" dijawab PERCAYA DIRI soal "kerja remote" —
-  // model mengisi subjek dari MEMORI. Version pertama menaruh gate di dalam
-  // case understand_intent + syarat `!topic`/`!hasRecall`; (a) `topic` hampir
-  // selalu terisi fallback text.slice(0,80), dan (b) kehadiran blok memori
-  // ("kerja remote" di riwayat) MALAH menambah subjek yang tidak diucapkan
-  // user. Kesimpulan: subjek boleh datang HANYA dari kata-kata user saat ini,
-  // tidak pernah dari memori/konteks. Gate ini GLOBAL — berjalan SEBELUM
-  // decide/act pada setiap strategi, sehingga routing apa pun tidak bisa
-  // menghindarinya.
-  //
-  // live-veri 2026: gate SAMPAI lolos lagi — "saya sedang bingung" dijawab
-  // remote-work kembali karena `!perception.isContinuation` PALSU: isContinuation
-  // dihitung dari enrichedContext yg memuat MEMORI kerja-remote lama, dan
-  // overlap kata umum ("sedang"/"bingung") memberinya isContinuation=true →
-  // skip gate → LLM mengisi subjek dari memori. Jadi TIDAK ADA pengecualian
-  // lanjutan: "kontinuitas" ditentukan hanya oleh kata-kata user saat ini, yang
-  // justru TIDAK punya subjek. Pengecualian sah hanya untuk pesan yang operasi-
-  // deterministik (slashed commands), emergency, self-referential, dan resume
-  // yang TELAH dikonfirmasi (res.confirmed sudah menimpa effectiveText dgn
-  // subjek tertulis).
-  const skipEmptySubject =
-    /^\//.test(text.trim()) ||
-    /^(emergency|self_referential|translation|command|prompt_writer|context7)$/.test(perception.intent.type);
-  if (!skipEmptySubject && isVagueNoSubject(effectiveText)) {
-    return {
-      text: CLARIFY_EMPTY_SUBJECT,
-      perception,
-      strategy,
-      source: "understand_clarify",
-      latencyMs: Date.now() - start,
-      reflection: { shouldReflect: false, topic: perception.topic },
-    };
+    if (mode === "ask_search") {
+      const reply = await askSearchRespond(env, owner, effectiveText, perception);
+      return {
+        text: reply,
+        perception,
+        strategy,
+        source: "ask_search",
+        latencyMs: Date.now() - start,
+        reflection: { shouldReflect: false, topic: perception.topic },
+      };
+    }
+    // mode === "direct" → fall through to act() (conf ≥ 0.7, jawab langsung)
   }
 
   // Phase 3: ACT

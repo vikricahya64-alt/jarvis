@@ -72,6 +72,9 @@ const PLUTCHIK_LEXICON: Record<string, [PlutchikEmotion, number][]> = {
   // Surprise
   kaget: [["surprise", 0.8]], terkejut: [["surprise", 0.8]],
   "tidak menyangka": [["surprise", 0.7]], ternyata: [["surprise", 0.5]],
+  bingung: [["surprise", 0.5], ["fear", 0.4]],
+  pusing: [["fear", 0.6], ["sadness", 0.3]],
+  buntu: [["fear", 0.5], ["sadness", 0.4]],
   // Sadness
   sedih: [["sadness", 0.8]], kecewa: [["sadness", 0.8]],
   frustasi: [["sadness", 0.7], ["anger", 0.4]], galau: [["sadness", 0.7]],
@@ -166,6 +169,7 @@ const NEGATIVE_WORDS = new Set([
   "tidak mau", "gak mau", "benci", "muak", "capek", "lelah",
   "stres", "panik", "takut", "khawatir", "cemas", "risau",
   "mati", "hilang", "rugi", "dilarang", "bahaya", "ancaman", "risiko",
+  "bingung", "pusing", "buntu",
 ]);
 
 const INTENSIFIERS = new Set([
