@@ -2629,7 +2629,7 @@ async function testResponseHardCap() {
   const short = "Hai! Apa kabar?";
   assert.strictEqual(brainExitRail(short), short, "short response unchanged");
 
-  // Response > 800 char → truncated + "📌"
+  // Response > 700 char → truncated + "📌"
   const long = "A".repeat(1000);
   const result = brainExitRail(long);
   assert.ok(result.length < 1000, "long response truncated");
@@ -2637,9 +2637,9 @@ async function testResponseHardCap() {
   assert.ok(result.includes("lanjut"), "truncated response includes 'lanjut'");
 
   // Response at exact cap → unchanged
-  const exact = "A".repeat(800);
+  const exact = "A".repeat(700);
   const exactResult = brainExitRail(exact);
-  assert.ok(exactResult.length >= 800, "exact cap response not truncated");
+  assert.ok(exactResult.length >= 700, "exact cap response not truncated");
 }
 
 async function testEmotionDominant() {

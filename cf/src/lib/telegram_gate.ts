@@ -111,7 +111,7 @@ const OUTPUT_GATE_THRESHOLD = 0.6;
 /** Hard cap karakter output brain. Response lebih panjang dari ini dipotong
  *  di batas kalimat terakhir + catatan "ketik lanjut". 800 char ≈ 150 kata
  *  ≈ 3-5 kalimat pendek + pertanyaan lanjutan. Hemat ~60-70% output tokens. */
-const RESPONSE_HARD_CAP = 800;
+const RESPONSE_HARD_CAP = 700;
 
 /** Cari posisi karakter terakhir berupa titik/panic/tanda seru sebelum maxLen.
  *  Jika tidak ditemukan, potong di spasi terakhir sebelum maxLen. */
