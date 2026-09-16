@@ -53,6 +53,7 @@ import {
 } from "./relevance";
 import { reflectOnTurn } from "./evolution";
 import { SELF_REF_RE } from "./identity";
+import { gateVerdict } from "./verifier";
 import {
   decideAnswerMode,
   askSearchRespond,
@@ -1256,6 +1257,11 @@ export async function act(
               reply;
           }
         }
+        // GATE VERDICT — classify output quality. raw_dump/non_answer → strip URLs.
+        const verdict = gateVerdict(reply, undefined);
+        if (verdict === "raw_dump" || verdict === "non_answer") {
+          reply = reply.replace(/https?:\/\/[^\s)]+/g, "").replace(/\[([^\]]*)\]\(\s*https?:\/\/[^\s)]+\)/g, "$1").trim();
+        }
         return { reply, source: result.source ?? "llm" };
       }
       return { reply: "Maaf, saya sedang mengalami kendala teknis. Silakan coba lagi.", source: "fallback" };
@@ -1400,14 +1406,22 @@ export async function processIntelligence(
       };
     }
     if (mode === "ask_search") {
-      const reply = await askSearchRespond(env, owner, effectiveText, perception);
+      let reply = await askSearchRespond(env, owner, effectiveText, perception);
+      // URL STRIP + GLOBAL CHOKE POINT — ask_search harus tetap melewati
+      // pertahanan dasar: strip fabricated URLs, deteksi menu/echo/ack.
+      reply = reply.replace(/https?:\/\/[^\s)]+/g, "").replace(/\[([^\]]*)\]\(\s*https?:\/\/[^\s)]+\)/g, "$1").trim();
+      if (isMenuFirstLine(reply) || hasDegenerateEcho(reply) || isAcknowledgeOnly(reply)) {
+        reply = stripLeadingMenuSentences(reply) || reply;
+      }
+      // Reflect() untuk learning signal — ask_search sebelumnya skip reflect.
+      await reflect(env, owner, effectiveText, reply, perception, strategy);
       return {
         text: reply,
         perception,
         strategy,
         source: "ask_search",
         latencyMs: Date.now() - start,
-        reflection: { shouldReflect: false, topic: perception.topic },
+        reflection: { shouldReflect: true, topic: perception.topic },
       };
     }
     // mode === "direct" → fall through to act() (conf ≥ 0.7, jawab langsung)
@@ -1425,15 +1439,21 @@ export async function processIntelligence(
         ? "" : perception.comprehension.language.name;
       const result = await llmRespond(env, effectiveText, {
         topic: perception.topic ?? undefined,
-        ...(replyLang ? { systemOverride: `Jawab dalam bahasa: ${replyLang}.` } : {}),
+        ...(replyLang ? { systemOverride: `Jawab dalam bahasa: ${replyLang}. Jangan mengarang fakta, URL, atau data yang tidak ada. Jawab singkat dan langsung ke inti.` } : {}),
       }).catch(() => ({ reply: null as string | null, source: null as string | null }));
       const reply = result.reply ?? "";
       if (reply.length > 5) {
-        await appendMemory(env, owner, "assistant", reply.slice(0, 400), "").catch(() => {});
+        // URL STRIP + GLOBAL CHOKE POINT — skip_heavy harus tetap melewati
+        // pertahanan dasar: strip fabricated URLs, deteksi menu/echo/ack.
+        let safeReply = reply.replace(/https?:\/\/[^\s)]+/g, "").replace(/\[([^\]]*)\]\(\s*https?:\/\/[^\s)]+\)/g, "$1").trim();
+        if (isMenuFirstLine(safeReply) || hasDegenerateEcho(safeReply) || isAcknowledgeOnly(safeReply)) {
+          safeReply = stripLeadingMenuSentences(safeReply) || safeReply;
+        }
+        await appendMemory(env, owner, "assistant", safeReply.slice(0, 400), "").catch(() => {});
         const latencyMs = Date.now() - start;
         recordMetrics("simple_llm", latencyMs, result.source ?? "skip_heavy", true);
         return {
-          text: reply,
+          text: safeReply,
           perception,
           strategy,
           source: "skip_heavy",

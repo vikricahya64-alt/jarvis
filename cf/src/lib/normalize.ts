@@ -198,6 +198,9 @@ const LIBRARY_TOKEN_RE =
  * Mengembalikan string ternormalisasi (tidak pernah throw). */
 export function normalizeInput(raw: string): string {
   if (!raw) return "";
+  // Hard cap: 4000 char. Lebih dari ini = excessive token consumption.
+  const MAX_INPUT_LENGTH = 4000;
+  if (raw.length > MAX_INPUT_LENGTH) raw = raw.slice(0, MAX_INPUT_LENGTH);
   // Karantina span library (private-use placeholder immune to every rewrite
   // di bawah: bukan slash, tak ada digit, panjang 3 → lolos tanpa koreksi).
   const held = new Map<string, string>();

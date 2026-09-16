@@ -79,17 +79,33 @@ const PLUTCHIK_LEXICON: Record<string, [PlutchikEmotion, number][]> = {
   sedih: [["sadness", 0.8]], kecewa: [["sadness", 0.8]],
   frustasi: [["sadness", 0.7], ["anger", 0.4]], galau: [["sadness", 0.7]],
   hancur: [["sadness", 0.9]], kehilangan: [["sadness", 0.8]],
+  pilu: [["sadness", 0.7]], duka: [["sadness", 0.8]], nestapa: [["sadness", 0.8]],
+  murung: [["sadness", 0.6]], sengsara: [["sadness", 0.8]], derita: [["sadness", 0.8]],
+  sepi: [["sadness", 0.7]], kosong: [["sadness", 0.6]],
   // Disgust
   benci: [["disgust", 0.9]], muak: [["disgust", 0.8]],
   jelek: [["disgust", 0.6]], parah: [["disgust", 0.6]],
+  jijik: [["disgust", 0.8]], mual: [["disgust", 0.7]], menjijikkan: [["disgust", 0.8]],
+  hina: [["disgust", 0.7]],
   // Anger
   marah: [["anger", 0.9]], kesal: [["anger", 0.7]], jengkel: [["anger", 0.7]],
   gagal: [["anger", 0.5], ["sadness", 0.4]], error: [["anger", 0.4]],
   bug: [["anger", 0.4]], masalah: [["anger", 0.4]],
+  geram: [["anger", 0.8]], sebal: [["anger", 0.6]], dongkol: [["anger", 0.7]],
+  emosi: [["anger", 0.5]], dendam: [["anger", 0.7]], amuk: [["anger", 0.9]],
   // Anticipation
   penasaran: [["anticipation", 0.7]], menunggu: [["anticipation", 0.5]],
   tunggu: [["anticipation", 0.5]], upcoming: [["anticipation", 0.6]],
   rencana: [["anticipation", 0.5]], planning: [["anticipation", 0.5]],
+  // Joy tambahan
+  lega: [["joy", 0.7]], girang: [["joy", 0.8]], ceria: [["joy", 0.7]],
+  riang: [["joy", 0.7]], asyik: [["joy", 0.6]],
+  // Fear tambahan
+  ketakutan: [["fear", 0.9]], horor: [["fear", 0.8]], parno: [["fear", 0.7]],
+  // Trust tambahan
+  setia: [["trust", 0.7]], patuh: [["trust", 0.6]], jujur: [["trust", 0.7]],
+  // Surprise tambahan
+  terperanjat: [["surprise", 0.8]], melongo: [["surprise", 0.7]],
 };
 
 /** Emoji → Plutchik emotion mapping. */
@@ -170,6 +186,8 @@ const NEGATIVE_WORDS = new Set([
   "stres", "panik", "takut", "khawatir", "cemas", "risau",
   "mati", "hilang", "rugi", "dilarang", "bahaya", "ancaman", "risiko",
   "bingung", "pusing", "buntu",
+  "ambyar", "males", "stuck", "mentok", "sakit hati", "putus asa", "menyerah",
+  "geram", "jijik", "sebal", "dongkol", "pilu", "sepi", "kosong", "murung",
 ]);
 
 const INTENSIFIERS = new Set([
@@ -360,7 +378,7 @@ export function detectEmotion(text: string): EmotionSignal {
     else negativeScore += 0.5;
   }
   // All-caps check
-  if (/[A-Z]{3,}/.test(text) && text !== text.toUpperCase()) {
+  if (/[A-Z]{3,}/.test(text) && text !== text.toLowerCase()) {
     if (positiveScore > negativeScore) positiveScore += 0.3;
     else if (negativeScore > positiveScore) negativeScore += 0.3;
   }

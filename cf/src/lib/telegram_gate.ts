@@ -186,6 +186,27 @@ function computeOutputGateScore(output: string, inputTopic: string | null): numb
   return Math.min(1, Math.max(0, score));
 }
 
+// ============================================================================
+// INJECTION SCANNER (deterministik, 0 token)
+// ============================================================================
+
+/** Deteksi pola prompt injection di output. Jika LLM mengulang pola injection
+ *  dari input user (atau mengarang injection sendiri), output diblokir.
+ *  Regex-only, 0 token, <1ms. */
+function scanInjectionAttempt(text: string): boolean {
+  const t = (text ?? "").toLowerCase().trim();
+  const patterns = [
+    /(?:ignore|abaikan|skip|lewati)\s+(?:all|semua|seluruh)\s+(?:previous|sebelumnya|prior|lama)/i,
+    /(?:you\s+are\s+now|kamu\s+sekarang\s+adalah|kamu\s+adalah\s+sekarang)/i,
+    /(?:system\s+prompt|instruksi\s+sistem|perintah\s+sistem)/i,
+    /(?:DAN\s+mode|developer\s+mode|debug\s+mode|root\s+mode)/i,
+    /(?:reveal|tampilkan|keluarkan|show|output)\s+(?:your|system|semua)\s+(?:prompt|instruksi|perintah)/i,
+    /(?:pretend|aku\s+akan\s+menyamar|berpura-pura)\s+(?:you\s+are|kamu\s+adalah)/i,
+    /(?:jailbreak|bypass\s+safety|lewati\s+keamanan)/i,
+  ];
+  return patterns.some((p) => p.test(t));
+}
+
 /** Deterministic rail for brain-origin text leaving the door. Returns the
  *  possibly-rewritten text. Never throws. Fail-closed: a blind reply is
  *  replaced with the byte-identical clarify message used at the input gate
@@ -197,6 +218,9 @@ function computeOutputGateScore(output: string, inputTopic: string | null): numb
 export function brainExitRail(text: string, inputTopic?: string): string {
   const t = (text ?? "").trim();
   if (!t) return "";
+  // (x) Injection scan — block output yang mengandung pola prompt injection.
+  //     Jika LLM mengulang pola injection dari input, output diblokir.
+  if (scanInjectionAttempt(t)) return CLARIFY_EMPTY_SUBJECT;
   // (a) Empty-subject re-gate — belt-and-braces for a reply that slipped
   //     past the input gate (e.g. a future non-brain path feeds an LLM).
   if (isVagueNoSubject(t)) return CLARIFY_EMPTY_SUBJECT;
@@ -228,9 +252,10 @@ export function brainExitRail(text: string, inputTopic?: string): string {
   }
   // (c) GATED OUTPUT FILTER (Prinsip: SwiGLU Output Gate): skor output
   //     terhadap input. Score < 0.6 = output tidak match → block.
-  //     Deterministik, 0 token, <1ms. Hanya aktif jika inputTopic disediakan.
-  if (inputTopic) {
-    const gateScore = computeOutputGateScore(t, inputTopic);
+  //     Deterministik, 0 token, <1ms. Selalu jalan jika inputTopic disediakan;
+  //     skip jika null (deterministic paths tanpa topik).
+  if (inputTopic !== undefined) {
+    const gateScore = computeOutputGateScore(t, inputTopic ?? "general");
     if (gateScore < OUTPUT_GATE_THRESHOLD) {
       return CLARIFY_EMPTY_SUBJECT;
     }
@@ -253,15 +278,18 @@ type EnvLike = { TELEGRAM_TOKEN?: string };
 
 /** Single outbound door for deterministic text notifications (cron, agent,
  *  DMS, diagnostics, media captions, plain replies). Audited; no LLM rail
- *  (it isn't brain text). */
+ *  (it isn't brain text). Minimal content gate: strip very long fabricated URLs. */
 export async function emitText(
   env: EnvLike,
   chatId: number,
   text: string,
   extra: { replyMarkup?: { inline_keyboard: InlineButton[][] }; parseMode?: string } = {},
 ): Promise<unknown> {
-  auditOut("text", chatId, "deterministic", (text ?? "").length);
-  return transportSendMessage(env, chatId, text, extra);
+  let safe = (text ?? "").trim();
+  // Minimal gate: strip very long fabricated URLs (deterministic, 0 token)
+  safe = safe.replace(/https?:\/\/[^\s)]{80,}/g, "[link]").trim();
+  auditOut("text", chatId, "deterministic", safe.length);
+  return transportSendMessage(env, chatId, safe, extra);
 }
 
 /** Single outbound door for BRAIN-origin text. Applies the full exit rail
