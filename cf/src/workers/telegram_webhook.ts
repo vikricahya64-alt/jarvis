@@ -733,8 +733,8 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
         await fire(sendMessage(env, r,
           "🧠 Output terakhir sudah optimal — tidak ada perbaikan yang diperlukan."));
       } else {
-        await fire(sendMessage(env, r,
-          `🧠 *Refleksi manual*\n\n${result.slice(0, 1500)}`));
+        await fire(deliverSmartReply(env, r,
+          `🧠 *Refleksi manual*\n\n${result}`, 800, "refleksi"));
       }
     } catch {
       await fire(sendMessage(env, r, "🧠 Gagal melakukan refleksi manual."));
@@ -742,14 +742,21 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/insights") {
-    await safeDBReply(env, r, async () => {
+    let text: string;
+    try {
       const insights = await listInsights(env, false);
-      if (insights.length === 0) return "💡 Belum ada insight. J.A.R.V.I.S. masih belajar dari pengalaman Anda.";
-      const lines = insights.map((i) =>
-        `• #${i.id} [${i.category}] c=${i.confidence.toFixed(2)} bukti=${i.evidenceCount}\n  ${i.ruleText.slice(0, 120)}`,
-      ).join("\n");
-      return `💡 *Insights yang dipelajari* (${insights.length})\n${lines}\n\nNonaktifkan: /disable-insight <id>`;
-    });
+      if (insights.length === 0) {
+        text = "💡 Belum ada insight. J.A.R.V.I.S. masih belajar dari pengalaman Anda.";
+      } else {
+        const lines = insights.map((i) =>
+          `• #${i.id} [${i.category}] c=${i.confidence.toFixed(2)} bukti=${i.evidenceCount}\n  ${i.ruleText.slice(0, 120)}`,
+        ).join("\n");
+        text = `💡 *Insights yang dipelajari* (${insights.length})\n${lines}\n\nNonaktifkan: /disable-insight <id>`;
+      }
+    } catch {
+      text = "Terjadi kesalahan membaca data. Coba lagi sebentar.";
+    }
+    await fire(deliverSmartReply(env, r, text, 800, "insights"));
     return new Response("ok", { status: 200 });
   }
   if (trimmed.startsWith("/disable-insight")) {
@@ -772,7 +779,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     const approved = /^(benar|true)$/i.test(match[2]);
     const evo = await import("../lib/evolution");
     const res = await evo.validateInsightManual(env, id, approved);
-    await fire(sendMessage(env, r, res.message));
+    await fire(deliverSmartReply(env, r, res.message, 800, "validate-insight"));
     return new Response("ok", { status: 200 });
   }
   if (trimmed === "/optimize" || trimmed.startsWith("/optimize ")) {
@@ -2239,7 +2246,7 @@ async function handleConnectorCommand(env: Env, from: number, raw: string): Prom
           `⚠️ Tidak bisa membaca file Figma${reason}. Periksa bahwa kunci file benar atau file diizinkan untuk token.\n\nContoh: \`/figma wKRAemZY12e9VmgoOMDuOG\` atau tempel URL figma.com/design/...`));
         return;
       }
-      await fire(sendMessage(env, from, read.summary.slice(0, 3900)));
+      await fire(deliverSmartReply(env, from, read.summary, 800, "figma"));
       return;
     }
 
@@ -2256,8 +2263,8 @@ async function handleConnectorCommand(env: Env, from: number, raw: string): Prom
         const shortId = i.id.startsWith("3d") ? i.id.slice(0, 20) : i.id;
         return `• [${i.kind}] ${i.title}\n  \`${shortId}\``;
       });
-      await fire(sendMessage(env, from,
-        `🔍 *Notion — hasil pencarian "${q}"*\n\n${lines.join("\n")}\n\nGunakan \`/notion baca <id>\` untuk detail halaman.`));
+      await fire(deliverSmartReply(env, from,
+        `🔍 *Notion — hasil pencarian "${q}"*\n\n${lines.join("\n")}\n\nGunakan \`/notion baca <id>\` untuk detail halaman.`, 800, "notion search"));
       return;
     }
 
@@ -2279,7 +2286,7 @@ async function handleConnectorCommand(env: Env, from: number, raw: string): Prom
           `⚠️ Tidak bisa membaca objek Notion tersebut. Pastikan id benar dan database di-share ke integrasi.\n\nContoh: \`/notion baca <id halaman>\`, \`/notion search rapat\``));
         return;
       }
-      await fire(sendMessage(env, from, info.text.slice(0, 3800)));
+      await fire(deliverSmartReply(env, from, info.text, 800, "notion"));
       return;
     }
 
@@ -2337,7 +2344,7 @@ async function handleE2bCommand(env: Env, from: number, raw: string): Promise<vo
 
     await fire(sendMessage(env, from, `💻 Menjalankan di sandbox E2B: \`${task.slice(0, 70)}${task.length > 70 ? "…" : ""}\` …`));
     const res = await e2bRun(env, task, from);
-    await fire(sendMessage(env, from, e2bSummary(res, task)));
+    await fire(deliverSmartReply(env, from, e2bSummary(res, task), 800, "e2b"));
   } catch (e) {
     await fire(sendMessage(env, from, `⚠️ Perintah E2B gagal: ${String(e).slice(0, 200)}`));
   }
@@ -3087,7 +3094,7 @@ async function handleBacaCommand(env: Env, owner: number, raw: string): Promise<
   const reply = g.reply
     ? `${g.reply}\n\n🔗 Sumber: ${url.slice(0, 200)}`
     : `Halaman terbaca tapi tidak bisa saya ringkas sekarang. Isi utama:\n\n${page.slice(0, 1200)}`;
-  await fire(sendMessage(env, owner, reply));
+  await fire(deliverSmartReply(env, owner, reply, 800, "ringkasan halaman web"));
 }
 
 // ---------------------------------------------------------------------
