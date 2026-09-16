@@ -42,6 +42,12 @@ import { appendMemory } from "./db";
  *  "menghitung probabilitas" ≥0.7; di bawah → serahkan ke model + search. */
 export const UNDERSTAND_CONFIDENCE_HIGH = 0.7;
 
+/** Threshold di mana input sudah SANGAT jelas (subject + intent + bahasa
+ *  semua positif). Di atas threshold ini, JARVIS skip heavy processing
+ *  (act() pipeline) dan langsung ke llmRespond. Hemat 1-2 LLM calls
+ *  untuk pesan sederhana jelas (contoh: "apa kabar?", "siapa kamu?"). */
+export const SKIP_HEAVY_CONFIDENCE = 0.85;
+
 // ============================================================================
 // CONFIDENCE COMPUTATION (deterministik, 0 token, <1ms)
 // ============================================================================
@@ -108,6 +114,16 @@ export function decideAnswerMode(p: Perception, text: string): AnswerMode {
   if (isVagueNoSubject(text)) return "clarify";
   const conf = computeUnderstandConfidence(p, text);
   return conf >= UNDERSTAND_CONFIDENCE_HIGH ? "direct" : "ask_search";
+}
+
+/**
+ * Apakah input ini cukup jelas untuk skip heavy processing (act() pipeline)?
+ * Threshold 0.85: subject + intent + bahasa semua positif → langsung llmRespond.
+ * Mengembalikan { skip, conf } agar caller bisa memutuskan.
+ */
+export function shouldSkipHeavy(p: Perception, text: string): { skip: boolean; conf: number } {
+  const conf = computeUnderstandConfidence(p, text);
+  return { skip: conf >= SKIP_HEAVY_CONFIDENCE, conf };
 }
 
 // ============================================================================

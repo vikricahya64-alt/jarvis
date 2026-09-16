@@ -1228,7 +1228,7 @@ async function runBrain(env: Env, owner: number, text: string): Promise<boolean>
   try {
     const res = await processIntelligence(env, owner, text);
     if (res.text && res.text.trim().length > 0) {
-      await deliverSmartReply(env, owner, res.text);
+      await deliverSmartReply(env, owner, res.text, 800, res.perception?.topic ?? undefined);
       return true;
     }
   } catch (e) {
