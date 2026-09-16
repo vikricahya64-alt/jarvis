@@ -48,6 +48,11 @@ export const UNDERSTAND_CONFIDENCE_HIGH = 0.7;
  *  untuk pesan sederhana jelas (contoh: "apa kabar?", "siapa kamu?"). */
 export const SKIP_HEAVY_CONFIDENCE = 0.85;
 
+/** Threshold intensitas emosi di mana emosi dianggap DOMINAN. Di atas
+ *  threshold ini + intent chat/understand → force "clarify" (empati dulu,
+ *  bukan saran). Hemat token: clarify 50-100 token vs full response 500-1000. */
+export const EMOTION_DOMINANT_INTENSITY = 0.45;
+
 // ============================================================================
 // CONFIDENCE COMPUTATION (deterministik, 0 token, <1ms)
 // ============================================================================
@@ -107,11 +112,19 @@ export type AnswerMode = "direct" | "ask_search" | "clarify";
 /**
  * Putuskan mode jawab berdasarkan confidence deterministik:
  * - "clarify" = emosi murni tanpa subjek → CLARIFY_EMPTY_SUBJECT (0 token)
+ * - "clarify" = emosi dominan (intensity ≥ 0.45 + intent chat) → empati dulu
  * - "direct" = conf ≥ 0.7 → jawab langsung (0 search, 0 token probabilitas)
  * - "ask_search" = conf < 0.7 → tanya model + search paralel → merge
  */
 export function decideAnswerMode(p: Perception, text: string): AnswerMode {
   if (isVagueNoSubject(text)) return "clarify";
+  // Emosi dominan: user curhat/emosi → tanya empati dulu, bukan saran.
+  // Hemat token: clarify ~50-100 token vs full response ~500-1000 token.
+  const emotIntensity = p?.emotion?.intensity ?? 0;
+  const intentType = p?.intent?.type ?? "";
+  if (emotIntensity >= EMOTION_DOMINANT_INTENSITY && /^(chat|understand)$/.test(intentType)) {
+    return "clarify";
+  }
   const conf = computeUnderstandConfidence(p, text);
   return conf >= UNDERSTAND_CONFIDENCE_HIGH ? "direct" : "ask_search";
 }
@@ -124,6 +137,16 @@ export function decideAnswerMode(p: Perception, text: string): AnswerMode {
 export function shouldSkipHeavy(p: Perception, text: string): { skip: boolean; conf: number } {
   const conf = computeUnderstandConfidence(p, text);
   return { skip: conf >= SKIP_HEAVY_CONFIDENCE, conf };
+}
+
+/**
+ * Apakah emosi user dominan? (intensity ≥ threshold + intent chat/understand).
+ * Jika ya, JARVIS harus tanya empati dulu, bukan langsung kasih saran.
+ */
+export function isEmotionDominant(p: Perception): boolean {
+  const intensity = p?.emotion?.intensity ?? 0;
+  const intentType = p?.intent?.type ?? "";
+  return intensity >= EMOTION_DOMINANT_INTENSITY && /^(chat|understand)$/.test(intentType);
 }
 
 // ============================================================================

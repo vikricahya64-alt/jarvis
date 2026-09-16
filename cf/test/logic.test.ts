@@ -2622,6 +2622,57 @@ async function testContextCompression() {
   assert.ok(compShort.length <= shortTurns.length, "short turns filtered");
 }
 
+async function testResponseHardCap() {
+  const { brainExitRail } = await import("../src/lib/telegram_gate");
+
+  // Short response → unchanged
+  const short = "Hai! Apa kabar?";
+  assert.strictEqual(brainExitRail(short), short, "short response unchanged");
+
+  // Response > 800 char → truncated + "📌"
+  const long = "A".repeat(1000);
+  const result = brainExitRail(long);
+  assert.ok(result.length < 1000, "long response truncated");
+  assert.ok(result.includes("📌"), "truncated response includes marker");
+  assert.ok(result.includes("lanjut"), "truncated response includes 'lanjut'");
+
+  // Response at exact cap → unchanged
+  const exact = "A".repeat(800);
+  const exactResult = brainExitRail(exact);
+  assert.ok(exactResult.length >= 800, "exact cap response not truncated");
+}
+
+async function testEmotionDominant() {
+  const { isEmotionDominant, decideAnswerMode, EMOTION_DOMINANT_INTENSITY } = await import("../src/lib/confidence_router");
+
+  // Threshold is 0.45
+  assert.strictEqual(EMOTION_DOMINANT_INTENSITY, 0.45, "emotion dominant threshold is 0.45");
+
+  // High emotion + chat intent → dominant
+  const sadP = {
+    emotion: { sentiment: "negative" as const, intensity: 0.6, primary: "sadness", confidence: 0.8 },
+    intent: { type: "chat" as const, urgency: "low" as const, formality: "casual" as const, confidence: 0.7, entities: {} },
+  };
+  assert.strictEqual(isEmotionDominant(sadP), true, "sad + chat → dominant");
+
+  // High emotion + question intent → NOT dominant (user wants answer)
+  const questionP = {
+    emotion: { sentiment: "negative" as const, intensity: 0.6, primary: "sadness", confidence: 0.8 },
+    intent: { type: "question" as const, urgency: "low" as const, formality: "casual" as const, confidence: 0.7, entities: {} },
+  };
+  assert.strictEqual(isEmotionDominant(questionP), false, "sad + question → not dominant");
+
+  // Low emotion + chat intent → NOT dominant
+  const neutralP = {
+    emotion: { sentiment: "neutral" as const, intensity: 0.2, primary: null, confidence: 0.5 },
+    intent: { type: "chat" as const, urgency: "low" as const, formality: "casual" as const, confidence: 0.7, entities: {} },
+  };
+  assert.strictEqual(isEmotionDominant(neutralP), false, "neutral + chat → not dominant");
+
+  // decideAnswerMode: emotion dominant → clarify
+  assert.strictEqual(decideAnswerMode(sadP, "masalah saya kacau"), "clarify", "emotion dominant → clarify");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -2696,6 +2747,8 @@ async function main() {
   await testVagueNoSubject();
   await testConfidenceRouter();
   await testContextCompression();
+  await testResponseHardCap();
+  await testEmotionDominant();
   console.log("LOGIC TESTS PASSED");
 }
 

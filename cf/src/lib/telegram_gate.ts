@@ -108,6 +108,23 @@ export async function handleIncoming(env: Env, update: TelegramUpdate): Promise<
  *  signals (10%). */
 const OUTPUT_GATE_THRESHOLD = 0.6;
 
+/** Hard cap karakter output brain. Response lebih panjang dari ini dipotong
+ *  di batas kalimat terakhir + catatan "ketik lanjut". 800 char ≈ 150 kata
+ *  ≈ 3-5 kalimat pendek + pertanyaan lanjutan. Hemat ~60-70% output tokens. */
+const RESPONSE_HARD_CAP = 800;
+
+/** Cari posisi karakter terakhir berupa titik/panic/tanda seru sebelum maxLen.
+ *  Jika tidak ditemukan, potong di spasi terakhir sebelum maxLen. */
+function findLastSentenceBoundary(text: string, maxLen: number): number {
+  const slice = text.slice(0, maxLen);
+  // Cari titik/panic/tanda seru terakhir
+  const lastPeriod = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf(".\n"), slice.lastIndexOf("? "), slice.lastIndexOf("?\n"), slice.lastIndexOf("! "), slice.lastIndexOf("!\n"));
+  if (lastPeriod > maxLen * 0.5) return lastPeriod + 1;
+  // Fallback: spasi terakhir (potong di word boundary)
+  const lastSpace = slice.lastIndexOf(" ");
+  return lastSpace > maxLen * 0.5 ? lastSpace : maxLen;
+}
+
 /**
  * Hitung output gate score secara deterministik (0 token, <1ms).
  * Skor komposit dari 4 sinyal untuk mendeteksi output yang tidak match
@@ -152,12 +169,14 @@ function computeOutputGateScore(output: string, inputTopic: string | null): numb
   })();
   score += 0.2 * lengthScore;
 
-  // 4. No fabrication signals (10%): cek indikator halusinasi umum
+  // 4. No fabrication signals (10%): cek indikator halusinasi umum + template markdown
   const fabricationScore = (() => {
     const suspiciousPatterns = [
       /https?:\/\/[^\s)]{80,}/,
       /(\b\w+\b)\s+\1\s+\1\s+\1/,
       /(?:saya|aku) (?:tidak|tak) (?:tahu|paham|mengerti) (?:apa|siapa|dimana|kapan)/i,
+      /^#+\s+(Nama Lengkap|Ringkasan Profesional|Pengalaman Kerja|Pendidikan|Keterampilan)/i,
+      /^```(?:markdown|text)/i,
     ];
     const suspiciousCount = suspiciousPatterns.filter((p) => p.test(t)).length;
     return suspiciousCount === 0 ? 1.0 : 0.4;
@@ -215,6 +234,12 @@ export function brainExitRail(text: string, inputTopic?: string): string {
     if (gateScore < OUTPUT_GATE_THRESHOLD) {
       return CLARIFY_EMPTY_SUBJECT;
     }
+  }
+  // (d) RESPONSE LENGTH HARD CAP (800 char): pastikan output padat.
+  //     Cari batas kalimat terakhir sebelum cap, potong, tambah catatan.
+  if (t.length > RESPONSE_HARD_CAP) {
+    const cut = findLastSentenceBoundary(t, RESPONSE_HARD_CAP);
+    return t.slice(0, cut).trim() + "\n\n📌 Jawaban terpotong — ketik \"lanjut\" untuk bagian berikutnya.";
   }
   return t;
 }

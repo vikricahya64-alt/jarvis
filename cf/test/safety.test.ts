@@ -1127,6 +1127,26 @@ async function testOutputGateFilter() {
     "webhook must pass perception.topic to emitSmartReply");
 }
 
+async function testMarkdownTemplateDetection() {
+  // MARKDOWN TEMPLATE DETECTION: template markdown (# Nama Lengkap, ## Pengalaman Kerja)
+  // adalah halusinasi format yang harus diblokir oleh output gate.
+  const gateSrc = readFileSync(new URL("../src/lib/telegram_gate.ts", import.meta.url), "utf-8");
+
+  // Markdown template pattern must be in fabrication signals
+  assert.ok(/Nama Lengkap/.test(gateSrc),
+    "output gate must detect '# Nama Lengkap' markdown template");
+  assert.ok(/Ringkasan Profesional/.test(gateSrc),
+    "output gate must detect '# Ringkasan Profesional' markdown template");
+  assert.ok(/Pengalaman Kerja/.test(gateSrc),
+    "output gate must detect '# Pengalaman Kerja' markdown template");
+  assert.ok(/Pendidikan/.test(gateSrc),
+    "output gate must detect '# Pendidikan' markdown template");
+  assert.ok(/Keterampilan/.test(gateSrc),
+    "output gate must detect '# Keterampilan' markdown template");
+  assert.ok(/markdown\|text/.test(gateSrc),
+    "output gate must detect code block markdown template");
+}
+
 async function testHeavyCapabilityVerify() {
   // m9-v11.1 RESPOND-THEN-VERIFY: a heavy capability (design/search/code) whose
   // text intent is ambiguous ("cara buat poster?", "bagaimana cara riset X?")
@@ -1741,6 +1761,7 @@ async function main() {
   await testBehaviorAlignmentFailClosed();
   await testComprehensionGate();
   await testOutputGateFilter();
+  await testMarkdownTemplateDetection();
   await testHeavyCapabilityVerify();
   await testGlobalComprehension();
   await testWorkingMemoryLeaks();
