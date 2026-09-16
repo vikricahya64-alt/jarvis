@@ -870,6 +870,11 @@ export function buildUniversalFrame(opts: {
     `terlalu panjang akan dipotong sistem. Pertanyaan sederhana = 1-2 kalimat. ` +
     `Pertanyaan butuh penjelasan = 3-5 kalimat. JANGAN memberikan daftar panjang, ` +
     `banyak contoh, atau penjelasan berlapis — cukup inti yang paling berguna. ` +
+    `CONTOH JAWABAN BENAR: ` +
+    `"Apa itu Coursera" → "Coursera adalah platform belajar daring yang menawarkan ribuan kursus dari universitas terkemuka, bisa diakses gratis lewat ponsel." (1 kalimat, ~150 char). ` +
+    `"Saya tidak punya skill" → "Kamu bisa mulai dari YouTube atau Canva untuk belajar desain grafis dasar secara gratis. Fokus di satu bidang dulu, misalnya edit foto atau bikin poster." (2 kalimat, ~180 char). ` +
+    `"Cari platform remote work" → "Coba cek RemoteOK atau Fiverr — dua platform itu cocok untuk pemula dan bisa diakses dari ponsel." (1 kalimat, ~120 char). ` +
+    `CONTOH SALAH: "Berikut beberapa platform: 1) YouTube untuk belajar gratis, 2) Coursera untuk sertifikat, 3) Udemy untuk kursus promo, 4) Canva untuk desain..." — DAFTAR PANJANG = SALAH. ` +
     `JANGAN menyusun jawaban sebagai laporan — tanpa tabel, daftar bernomor, ` +
     `daftar berpoin panjang, atau judul seksi. ` +
     `Beri ISI jawaban SEKARANG; JANGAN membuka dengan pertanyaan pilihan atau ` +
