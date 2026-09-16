@@ -2102,7 +2102,7 @@ export const CLARIFY_EMPTY_SUBJECT =
  *  the remaining words to be filler only (no content noun). */
 export function isVagueNoSubject(text: string): boolean {
   const low = (text ?? "").trim().toLowerCase().replace(/\s+/g, " ");
-  if (low.length < 4 || low.length > 60) return false;
+  if (low.length < 4 || low.length > 200) return false;
   const head = low
     // Negasi topik: "bukan soal/tentang/untuk/perihal apa-apa" meniadakan
     // subjek TANPA menambah subjek baru. Live failure: "...bukan soal apa-apa

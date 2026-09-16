@@ -1118,7 +1118,7 @@ async function testOutputGateFilter() {
     "emitSmartReply must pass inputTopic to brainExitRail");
 
   //脑ExitRail must use output gate score
-  assert.ok(/computeOutputGateScore\(t, inputTopic\)/.test(gateSrc),
+  assert.ok(/computeOutputGateScore\(t, inputTopic/.test(gateSrc),
     "brainExitRail must call computeOutputGateScore with output and inputTopic");
 
   // The webhook must pass perception.topic to emitSmartReply

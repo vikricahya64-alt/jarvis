@@ -122,7 +122,7 @@ export function decideAnswerMode(p: Perception, text: string): AnswerMode {
   // Hemat token: clarify ~50-100 token vs full response ~500-1000 token.
   const emotIntensity = p?.emotion?.intensity ?? 0;
   const intentType = p?.intent?.type ?? "";
-  if (emotIntensity >= EMOTION_DOMINANT_INTENSITY && /^(chat|understand)$/.test(intentType)) {
+  if (emotIntensity >= EMOTION_DOMINANT_INTENSITY && /^(chat|understand|question|search)$/.test(intentType)) {
     return "clarify";
   }
   const conf = computeUnderstandConfidence(p, text);
