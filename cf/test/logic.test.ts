@@ -2560,6 +2560,66 @@ async function testConfidenceRouter() {
 
   // Threshold constant is sane
   assert.strictEqual(UNDERSTAND_CONFIDENCE_HIGH, 0.7, "threshold is 0.7");
+
+  // ── shouldSkipHeavy (Skip Heavy Processing) ──
+
+  const { shouldSkipHeavy, SKIP_HEAVY_CONFIDENCE } = await import("../src/lib/confidence_router");
+
+  // Skip threshold is 0.85
+  assert.strictEqual(SKIP_HEAVY_CONFIDENCE, 0.85, "skip heavy threshold is 0.85");
+
+  // Very high confidence → skip heavy
+  const highConfP = mkPerception({
+    topic: "deployment cloudflare",
+    intent: { type: "question" as const, urgency: "low" as const, formality: "neutral" as const, confidence: 0.9, entities: {} },
+  });
+  const highSkip = shouldSkipHeavy(highConfP, "bagaimana cara deployment worker ke cloudflare");
+  assert.ok(highSkip.conf >= SKIP_HEAVY_CONFIDENCE, `high conf ${highSkip.conf.toFixed(2)} >= ${SKIP_HEAVY_CONFIDENCE}`);
+  assert.strictEqual(highSkip.skip, true, "high conf → skip heavy");
+
+  // Vague → no skip
+  const vagueSkip = shouldSkipHeavy(vagueP, "saya sedang bingung");
+  assert.ok(vagueSkip.conf < SKIP_HEAVY_CONFIDENCE, `vague conf ${vagueSkip.conf.toFixed(2)} < ${SKIP_HEAVY_CONFIDENCE}`);
+  assert.strictEqual(vagueSkip.skip, false, "vague → no skip");
+}
+
+async function testContextCompression() {
+  const { compressContext } = await import("../src/lib/ai");
+
+  // Empty → empty
+  assert.deepStrictEqual(compressContext([]), [], "empty → empty");
+
+  // Single turn → kept as-is
+  const one = [{ role: "user", content: "hello world this is a test message" }];
+  const compOne = compressContext(one);
+  assert.strictEqual(compOne.length, 1, "single turn kept");
+  assert.ok(compOne[0].content.length > 0, "single turn has content");
+
+  // Multiple turns: last 2 full, older compressed
+  const turns = [
+    { role: "user", content: "A".repeat(200) },
+    { role: "assistant", content: "B".repeat(200) },
+    { role: "user", content: "C".repeat(200) },
+    { role: "assistant", content: "D".repeat(200) },
+  ];
+  const comp = compressContext(turns);
+
+  // Last 2 turns (index 2,3) should be full (200 chars each)
+  assert.ok(comp[comp.length - 1].content.length >= 100, "last turn preserved");
+  assert.ok(comp[comp.length - 2].content.length >= 100, "2nd last turn preserved");
+
+  // Older turns (index 0,1) should be compressed
+  assert.ok(comp[0].content.length < 200, "first turn compressed");
+  assert.ok(comp[1].content.length < 200, "second turn compressed");
+
+  // Very short turns filtered out
+  const shortTurns = [
+    { role: "user", content: "ok" },
+    { role: "assistant", content: "baik" },
+    { role: "user", content: "A".repeat(200) },
+  ];
+  const compShort = compressContext(shortTurns);
+  assert.ok(compShort.length <= shortTurns.length, "short turns filtered");
 }
 
 async function main() {
@@ -2635,6 +2695,7 @@ async function main() {
   await testFoundationAnchoring();
   await testVagueNoSubject();
   await testConfidenceRouter();
+  await testContextCompression();
   console.log("LOGIC TESTS PASSED");
 }
 

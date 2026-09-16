@@ -53,7 +53,7 @@ import {
   type InlineButton,
   type DownloadResult,
 } from "./telegram";
-import { isVagueNoSubject, CLARIFY_EMPTY_SUBJECT } from "./ai";
+import { isVagueNoSubject, CLARIFY_EMPTY_SUBJECT, extractTopic } from "./ai";
 
 export type {
   TelegramUpdate, TelegramMessage, TelegramPhotoSize, TelegramVoice,
@@ -98,11 +98,84 @@ export async function handleIncoming(env: Env, update: TelegramUpdate): Promise<
 // PINTU KELUAR (outbound) — audit + rail
 // ---------------------------------------------------------------------
 
+// ============================================================================
+// GATED OUTPUT FILTER (Prinsip: SwiGLU Output Gate)
+// ============================================================================
+
+/** Threshold output gate score. Di bawah threshold → block output (fail-closed).
+ *  Score ≥ 0.6 dianggap aman. Skor dihitung dari: subject match (40%),
+ *  memory citation validity (30%), output length sanity (20%), no fabrication
+ *  signals (10%). */
+const OUTPUT_GATE_THRESHOLD = 0.6;
+
+/**
+ * Hitung output gate score secara deterministik (0 token, <1ms).
+ * Skor komposit dari 4 sinyal untuk mendeteksi output yang tidak match
+ * dengan input (kasus halusinasi yang terlewat regex).
+ *
+ * Bobot: subjectMatch=40%, memoryCitation=30%, lengthSanity=20%, noFabrication=10%
+ */
+function computeOutputGateScore(output: string, inputTopic: string | null): number {
+  const t = (output ?? "").trim();
+  if (!t) return 0;
+
+  let score = 0;
+
+  // 1. Subject match (40%): apakah output menyebut/mengacu subjek dari input?
+  const subjectScore = (() => {
+    if (!inputTopic) return 0.5; // No topic → netral
+    const topicLower = inputTopic.toLowerCase();
+    const outputLower = t.toLowerCase();
+    const topicWords = topicLower.split(/\s+/).filter((w) => w.length > 3);
+    if (topicWords.length === 0) return 0.5;
+    const matches = topicWords.filter((w) => outputLower.includes(w)).length;
+    return matches / topicWords.length;
+  })();
+  score += 0.4 * subjectScore;
+
+  // 2. Memory citation validity (30%): "menurut ingatanku" harus diikuti fakta
+  const citationScore = (() => {
+    const hasCitation = /menurut ingatanku|berdasarkan catatan/i.test(t);
+    if (!hasCitation) return 1.0; // Tidak ada kutipan → aman
+    const afterCitation = t.replace(/^(?:menurut ingatanku|berdasarkan catatan)[^.]*\.\s*/i, "");
+    return afterCitation.length > 20 ? 1.0 : 0.3;
+  })();
+  score += 0.3 * citationScore;
+
+  // 3. Length sanity (20%): output terlalu pendek atau terlalu panjang = suspicious
+  const lengthScore = (() => {
+    const len = t.length;
+    if (len < 10) return 0.2;
+    if (len > 3000) return 0.4;
+    if (len < 30) return 0.6;
+    return 1.0;
+  })();
+  score += 0.2 * lengthScore;
+
+  // 4. No fabrication signals (10%): cek indikator halusinasi umum
+  const fabricationScore = (() => {
+    const suspiciousPatterns = [
+      /https?:\/\/[^\s)]{80,}/,
+      /(\b\w+\b)\s+\1\s+\1\s+\1/,
+      /(?:saya|aku) (?:tidak|tak) (?:tahu|paham|mengerti) (?:apa|siapa|dimana|kapan)/i,
+    ];
+    const suspiciousCount = suspiciousPatterns.filter((p) => p.test(t)).length;
+    return suspiciousCount === 0 ? 1.0 : 0.4;
+  })();
+  score += 0.1 * fabricationScore;
+
+  return Math.min(1, Math.max(0, score));
+}
+
 /** Deterministic rail for brain-origin text leaving the door. Returns the
  *  possibly-rewritten text. Never throws. Fail-closed: a blind reply is
  *  replaced with the byte-identical clarify message used at the input gate
- *  (idempotent — CLARIFY_EMPTY_SUBJECT is not itself vague). */
-export function brainExitRail(text: string): string {
+ *  (idempotent — CLARIFY_EMPTY_SUBJECT is not itself vague).
+ *
+ *  inputTopic: opsional, topik dari pesan input (untuk output gate scoring).
+ *  Jika disediakan, output gate score dihitung dan output yang score-nya
+ *  di bawah OUTPUT_GATE_THRESHOLD (0.6) diblokir. */
+export function brainExitRail(text: string, inputTopic?: string): string {
   const t = (text ?? "").trim();
   if (!t) return "";
   // (a) Empty-subject re-gate — belt-and-braces for a reply that slipped
@@ -134,6 +207,15 @@ export function brainExitRail(text: string): string {
       "",
     ).trim();
   }
+  // (c) GATED OUTPUT FILTER (Prinsip: SwiGLU Output Gate): skor output
+  //     terhadap input. Score < 0.6 = output tidak match → block.
+  //     Deterministik, 0 token, <1ms. Hanya aktif jika inputTopic disediakan.
+  if (inputTopic) {
+    const gateScore = computeOutputGateScore(t, inputTopic);
+    if (gateScore < OUTPUT_GATE_THRESHOLD) {
+      return CLARIFY_EMPTY_SUBJECT;
+    }
+  }
   return t;
 }
 
@@ -158,15 +240,17 @@ export async function emitText(
 }
 
 /** Single outbound door for BRAIN-origin text. Applies the full exit rail
- *  (empty-subject re-gate + memory-citation scrub) BEFORE the transport so
- *  a confirmation reply is never delivered by mistake. Audited. */
+ *  (empty-subject re-gate + memory-citation scrub + output gate scoring)
+ *  BEFORE the transport so a confirmation reply is never delivered by mistake.
+ *  inputTopic: opsional, topik dari pesan input (untuk output gate). */
 export async function emitSmartReply(
   env: EnvLike,
   chatId: number,
   text: string,
   retryDelayMs = 800,
+  inputTopic?: string,
 ): Promise<void> {
-  const safe = brainExitRail(text);
+  const safe = brainExitRail(text, inputTopic);
   auditOut("brain", chatId, "brain", (safe ?? "").length);
   await transportDeliverSmartReply(env, chatId, safe, retryDelayMs);
 }

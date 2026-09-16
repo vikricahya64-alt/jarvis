@@ -1096,6 +1096,37 @@ async function testComprehensionGate() {
     "commands/emergency/self-ref must bypass the router");
 }
 
+async function testOutputGateFilter() {
+  // GATED OUTPUT FILTER (Prinsip: SwiGLU Output Gate): output gate score
+  // menentukan apakah output aman atau perlu diblokir.
+  const gateSrc = readFileSync(new URL("../src/lib/telegram_gate.ts", import.meta.url), "utf-8");
+
+  // computeOutputGateScore must exist
+  assert.ok(/computeOutputGateScore/.test(gateSrc),
+    "telegram_gate must have computeOutputGateScore function");
+
+  // OUTPUT_GATE_THRESHOLD must be defined
+  assert.ok(/OUTPUT_GATE_THRESHOLD/.test(gateSrc),
+    "telegram_gate must define OUTPUT_GATE_THRESHOLD");
+
+  // brainExitRail must accept inputTopic parameter
+  assert.ok(/brainExitRail\(text.*inputTopic/.test(gateSrc),
+    "brainExitRail must accept inputTopic parameter");
+
+  // emitSmartReply must pass inputTopic to brainExitRail
+  assert.ok(/brainExitRail\(text, inputTopic\)/.test(gateSrc),
+    "emitSmartReply must pass inputTopic to brainExitRail");
+
+  //脑ExitRail must use output gate score
+  assert.ok(/computeOutputGateScore\(t, inputTopic\)/.test(gateSrc),
+    "brainExitRail must call computeOutputGateScore with output and inputTopic");
+
+  // The webhook must pass perception.topic to emitSmartReply
+  const hookSrc = readFileSync(new URL("../src/workers/telegram_webhook.ts", import.meta.url), "utf-8");
+  assert.ok(/deliverSmartReply.*perception\?\.topic/.test(hookSrc),
+    "webhook must pass perception.topic to emitSmartReply");
+}
+
 async function testHeavyCapabilityVerify() {
   // m9-v11.1 RESPOND-THEN-VERIFY: a heavy capability (design/search/code) whose
   // text intent is ambiguous ("cara buat poster?", "bagaimana cara riset X?")
@@ -1709,6 +1740,7 @@ async function main() {
   await testAnswerGrounding();
   await testBehaviorAlignmentFailClosed();
   await testComprehensionGate();
+  await testOutputGateFilter();
   await testHeavyCapabilityVerify();
   await testGlobalComprehension();
   await testWorkingMemoryLeaks();

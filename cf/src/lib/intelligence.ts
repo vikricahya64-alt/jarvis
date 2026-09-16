@@ -58,6 +58,8 @@ import {
   askSearchRespond,
   computeUnderstandConfidence,
   UNDERSTAND_CONFIDENCE_HIGH,
+  shouldSkipHeavy,
+  SKIP_HEAVY_CONFIDENCE,
 } from "./confidence_router";
 
 // ============================================================================
@@ -1409,6 +1411,38 @@ export async function processIntelligence(
       };
     }
     // mode === "direct" → fall through to act() (conf ≥ 0.7, jawab langsung)
+  }
+
+  // ── SKIP HEAVY PROCESSING (Prinsip: MoE Sparse Routing):
+  // Jika confidence ≥ 0.85 (sangat jelas), skip act() pipeline (switch/case
+  // berat) dan langsung ke llmRespond. Hemat 1-2 LLM calls untuk pesan
+  // sederhana jelas (contoh: "apa kabar?", "siapa kamu?", "apa itu X?").
+  // Hanya berlaku untuk approach simple_llm — research/design tetap lewat act().
+  if (strategy.approach === "simple_llm" && !skipRouter) {
+    const { skip, conf } = shouldSkipHeavy(perception, effectiveText);
+    if (skip) {
+      const replyLang = perception.comprehension.language.code === "unknown"
+        ? "" : perception.comprehension.language.name;
+      const result = await llmRespond(env, effectiveText, {
+        topic: perception.topic ?? undefined,
+        ...(replyLang ? { systemOverride: `Jawab dalam bahasa: ${replyLang}.` } : {}),
+      }).catch(() => ({ reply: null as string | null, source: null as string | null }));
+      const reply = result.reply ?? "";
+      if (reply.length > 5) {
+        await appendMemory(env, owner, "assistant", reply.slice(0, 400), "").catch(() => {});
+        const latencyMs = Date.now() - start;
+        recordMetrics("simple_llm", latencyMs, result.source ?? "skip_heavy", true);
+        return {
+          text: reply,
+          perception,
+          strategy,
+          source: "skip_heavy",
+          latencyMs,
+          reflection: { shouldReflect: false, topic: perception.topic },
+        };
+      }
+      // Fallback: reply terlalu pendek → fall through ke act() normal
+    }
   }
 
   // Phase 3: ACT
