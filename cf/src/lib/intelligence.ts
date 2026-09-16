@@ -874,6 +874,10 @@ export function buildUniversalFrame(opts: {
     `"Apa itu Coursera" → "Coursera adalah platform belajar daring yang menawarkan ribuan kursus dari universitas terkemuka, bisa diakses gratis lewat ponsel." (1 kalimat, ~150 char). ` +
     `"Saya tidak punya skill" → "Kamu bisa mulai dari YouTube atau Canva untuk belajar desain grafis dasar secara gratis. Fokus di satu bidang dulu, misalnya edit foto atau bikin poster." (2 kalimat, ~180 char). ` +
     `"Cari platform remote work" → "Coba cek RemoteOK atau Fiverr — dua platform itu cocok untuk pemula dan bisa diakses dari ponsel." (1 kalimat, ~120 char). ` +
+    `CONTOH LAIN: ` +
+    `"Saya butuh saran" → "Coba mulai dari Canva untuk desain atau Google Docs untuk menulis. Dua gratis dan bisa dipelajari dalam seminggu." (2 kalimat, ~130 char). ` +
+    `"Rekomendasi platform belajar" → "YouTube paling cocok untuk pemula — gratis, visual, dan ada di ponsel kamu. Kalau mau sertifikat, coba Coursera paket gratis." (2 kalimat, ~150 char). ` +
+    `"Bagaimana cara memulai" → "Langkah pertama: pilih satu bidang yang menarik, lalu tonton tutorial 15 menit di YouTube. Praktik kecil setiap hari lebih berguna dari kursus panjang." (2 kalimat, ~160 char). ` +
     `CONTOH SALAH: "Berikut beberapa platform: 1) YouTube untuk belajar gratis, 2) Coursera untuk sertifikat, 3) Udemy untuk kursus promo, 4) Canva untuk desain..." — DAFTAR PANJANG = SALAH. ` +
     `JANGAN menyusun jawaban sebagai laporan — tanpa tabel, daftar bernomor, ` +
     `daftar berpoin panjang, atau judul seksi. ` +
@@ -1254,7 +1258,7 @@ export async function act(
             // continuation is a recollection, not a continuation — content must
             // come from the LLM when at all possible).
             const retry2 = await llmRespond(env, d, {
-              topic: topic ?? undefined,
+      topic: perception.topic ?? undefined,
               context: task.payload,
               contextIsEnriched: true,
               systemOverride: frame() + RECALL_CONTENT_NUDGE,
@@ -1462,6 +1466,16 @@ export async function processIntelligence(
         if (isMenuFirstLine(safeReply) || hasDegenerateEcho(safeReply) || isAcknowledgeOnly(safeReply)) {
           safeReply = stripLeadingMenuSentences(safeReply) || safeReply;
         }
+        // CONDENSE for skip_heavy: if still too long, condense via LLM
+        if (safeReply.length > 600) {
+          const condensed = await llmRespond(env, safeReply, {
+            context: [{ role: "system", content: `Ringkas jawaban berikut menjadi 2-3 kalimat yang padat. Pertahankan informasi paling penting.` }],
+            topic: perception.topic ?? undefined,
+          }).catch(() => null);
+          if (condensed?.reply && condensed.reply.length < safeReply.length && condensed.reply.length >= 40) {
+            safeReply = condensed.reply;
+          }
+        }
         await appendMemory(env, owner, "assistant", safeReply.slice(0, 400), "").catch(() => {});
         const latencyMs = Date.now() - start;
         recordMetrics("simple_llm", latencyMs, result.source ?? "skip_heavy", true);
@@ -1525,6 +1539,19 @@ export async function processIntelligence(
       stripLeadingMenuSentences(deliverable) ||
       (recallBlock ? deterministicRecallContinuation(recallBlock) : "") ||
       deliverable;
+  }
+
+  // CONDENSE: if response still too long despite prompt, condense via LLM (1 call max).
+  // This is a safety net for when the model ignores ANTI-VERBOSE rules.
+  const CONDENSE_THRESHOLD = 600;
+  if (deliverable.length > CONDENSE_THRESHOLD && source !== "self_ref" && reply.length > 120) {
+    const condensed = await llmRespond(env, deliverable, {
+      context: [{ role: "system", content: `Ringkas jawaban berikut menjadi 2-3 kalimat yang padat. Pertahankan informasi paling penting. Hapus contoh, daftar, dan penjelasan berlapis. Jangan tambah informasi baru.` }],
+      topic: perception.topic ?? undefined,
+    }).catch(() => null);
+    if (condensed?.reply && condensed.reply.length < deliverable.length && condensed.reply.length >= 40) {
+      deliverable = condensed.reply;
+    }
   }
 
   return {
