@@ -2479,6 +2479,89 @@ async function testRecoveryLoop() {
   assert.strictEqual(patterns.length, 0, "empty DB → no patterns");
 }
 
+async function testConfidenceRouter() {
+  const {
+    computeUnderstandConfidence,
+    decideAnswerMode,
+    extractSearchKey,
+    UNDERSTAND_CONFIDENCE_HIGH,
+  } = await import("../src/lib/confidence_router");
+
+  // Mock Perception helpers
+  const mkPerception = (overrides: Record<string, unknown> = {}) => ({
+    language: { code: "id" as const, name: "Indonesia", script: "latin" as const, confidence: 0.9 },
+    literacy: { type: "sehari-hari" as const, confidence: 0.8 },
+    domain: { type: "umum" as const, confidence: 0.5 },
+    comprehension: {
+      language: { code: "id" as const, name: "Indonesia", script: "latin" as const, confidence: 0.9 },
+      literacy: { type: "sehari-hari" as const, confidence: 0.8 },
+      domain: { type: "umum" as const, confidence: 0.5 },
+      mixed: [],
+      adapt: { formality: "casual" as const, honorifics: false, tone: "santai" as const },
+    },
+    emotion: { sentiment: "neutral" as const, intensity: 0, primary: null as string | null, confidence: 0.5 },
+    mood: { current: "neutral" as const, intensity: 0, trajectory: "stable" as const, history: [], lastUpdate: 0 },
+    intent: { type: "chat" as const, urgency: "low" as const, formality: "casual" as const, confidence: 0.7, entities: {} },
+    topic: null as string | null,
+    mode: "ambiguous" as const,
+    isFollowUp: false,
+    isContinuation: false,
+    enrichedContext: [],
+    ...overrides,
+  });
+
+  // ── computeUnderstandConfidence ──
+
+  // Vague no-subject → low confidence
+  const vagueP = mkPerception({ topic: null, intent: { type: "understand" as const, urgency: "low" as const, formality: "neutral" as const, confidence: 0.5, entities: {} } });
+  const vagueConf = computeUnderstandConfidence(vagueP, "saya sedang bingung");
+  assert.ok(vagueConf < UNDERSTAND_CONFIDENCE_HIGH, `vague "${"saya sedang bingung"}" conf ${vagueConf.toFixed(2)} < ${UNDERSTAND_CONFIDENCE_HIGH}`);
+
+  // Subject present → higher confidence
+  const subjectP = mkPerception({ topic: "deployment worker", intent: { type: "question" as const, urgency: "low" as const, formality: "neutral" as const, confidence: 0.8, entities: {} } });
+  const subjectConf = computeUnderstandConfidence(subjectP, "bagaimana cara deployment worker");
+  assert.ok(subjectConf >= UNDERSTAND_CONFIDENCE_HIGH, `subject conf ${subjectConf.toFixed(2)} >= ${UNDERSTAND_CONFIDENCE_HIGH}`);
+
+  // Unknown entity → penalty (lower confidence than same text without entity)
+  const unknownP = mkPerception({ intent: { type: "search" as const, urgency: "medium" as const, formality: "neutral" as const, confidence: 0.85, entities: {} } });
+  const unknownConf = computeUnderstandConfidence(unknownP, "apa itu platform QuantumLeap software aneh");
+  const knownConf = computeUnderstandConfidence(unknownP, "bagaimana cara deploy worker ke cloudflare");
+  assert.ok(unknownConf < knownConf, `unknown entity ${unknownConf.toFixed(2)} < known ${knownConf.toFixed(2)}`);
+
+  // ── decideAnswerMode ──
+
+  // Vague → clarify
+  assert.strictEqual(decideAnswerMode(vagueP, "saya sedang bingung"), "clarify", "vague → clarify");
+  assert.strictEqual(decideAnswerMode(vagueP, "bukan soal apa-apa hanya hari ini sedang bingung"), "clarify", "negation vague → clarify");
+
+  // High confidence → direct
+  assert.strictEqual(decideAnswerMode(subjectP, "bagaimana cara deployment worker"), "direct", "subject present → direct");
+
+  // Low confidence but has some subject → ask_search
+  const lowConfP = mkPerception({
+    topic: "error ini",
+    intent: { type: "understand" as const, urgency: "low" as const, formality: "neutral" as const, confidence: 0.5, entities: {} },
+  });
+  const lowMode = decideAnswerMode(lowConfP, "aku bingung dengan error ini");
+  assert.ok(lowMode === "ask_search" || lowMode === "direct", `low conf mode: ${lowMode}`);
+
+  // ── extractSearchKey ──
+
+  // Real topic with question verb
+  const searchKey = extractSearchKey(subjectP, "cari artikel tentang AI");
+  assert.ok(searchKey && searchKey.includes("artikel") && searchKey.includes("ai"), `real topic extracted: ${searchKey}`);
+
+  // No topic → fallback keywords
+  const fallbackKey = extractSearchKey(vagueP, " deployment error crash");
+  assert.ok(fallbackKey === null || fallbackKey.includes("deployment") || fallbackKey.includes("error"), `fallback key: ${fallbackKey}`);
+
+  // Empty text → null
+  assert.strictEqual(extractSearchKey(vagueP, ""), null, "empty → null");
+
+  // Threshold constant is sane
+  assert.strictEqual(UNDERSTAND_CONFIDENCE_HIGH, 0.7, "threshold is 0.7");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -2551,6 +2634,7 @@ async function main() {
   await testCapabilityFoundation();
   await testFoundationAnchoring();
   await testVagueNoSubject();
+  await testConfidenceRouter();
   console.log("LOGIC TESTS PASSED");
 }
 
