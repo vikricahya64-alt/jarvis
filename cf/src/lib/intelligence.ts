@@ -686,6 +686,14 @@ const RECALL_CONTENT_NUDGE =
   `pembicaraan kita dulu", atau "intinya ...". Berhenti di konten. Jangan ` +
   `menyebut soal penulisan ulang ini.`;
 
+/** Shared condense prompt — used by ask_search, skip_heavy, and global choke
+ *  point post-processing. Instructs the LLM to condense verbose output into
+ *  2-3 tight sentences while preserving the most important information. */
+const CONDENSE_PROMPT =
+  `Ringkas jawaban berikut menjadi 2-3 kalimat yang padat. ` +
+  `Pertahankan informasi paling penting. Hapus contoh, daftar, dan penjelasan berlapis. ` +
+  `Jangan tambah informasi baru.`;
+
 /** True when the reply only ACKNOWLEDGES remembering + invites continuation
  *  without delivering any substance — the meta-stub "Soal itu — dari
  *  pembicaraan kita dulu, intinya X. Aku ingat konteks ini dan siap lanjut dari
@@ -1430,6 +1438,16 @@ export async function processIntelligence(
       if (isMenuFirstLine(reply) || hasDegenerateEcho(reply) || isAcknowledgeOnly(reply)) {
         reply = stripLeadingMenuSentences(reply) || reply;
       }
+      // CONDENSE for ask_search: if response too long, condense via LLM (1 call max)
+      if (reply.length > 600) {
+        const condensed = await llmRespond(env, reply, {
+          context: [{ role: "system", content: CONDENSE_PROMPT }],
+          topic: perception.topic ?? undefined,
+        }).catch((e) => { console.warn("[condense] ask_search failed:", (e as Error).message); return null; });
+        if (condensed?.reply && condensed.reply.length < reply.length && condensed.reply.length >= 40) {
+          reply = condensed.reply;
+        }
+      }
       // Reflect() untuk learning signal — ask_search sebelumnya skip reflect.
       await reflect(env, owner, effectiveText, reply, perception, strategy);
       return {
@@ -1469,9 +1487,9 @@ export async function processIntelligence(
         // CONDENSE for skip_heavy: if still too long, condense via LLM
         if (safeReply.length > 600) {
           const condensed = await llmRespond(env, safeReply, {
-            context: [{ role: "system", content: `Ringkas jawaban berikut menjadi 2-3 kalimat yang padat. Pertahankan informasi paling penting.` }],
+            context: [{ role: "system", content: CONDENSE_PROMPT }],
             topic: perception.topic ?? undefined,
-          }).catch(() => null);
+          }).catch((e) => { console.warn("[condense] skip_heavy failed:", (e as Error).message); return null; });
           if (condensed?.reply && condensed.reply.length < safeReply.length && condensed.reply.length >= 40) {
             safeReply = condensed.reply;
           }
@@ -1546,9 +1564,9 @@ export async function processIntelligence(
   const CONDENSE_THRESHOLD = 600;
   if (deliverable.length > CONDENSE_THRESHOLD && source !== "self_ref" && reply.length > 120) {
     const condensed = await llmRespond(env, deliverable, {
-      context: [{ role: "system", content: `Ringkas jawaban berikut menjadi 2-3 kalimat yang padat. Pertahankan informasi paling penting. Hapus contoh, daftar, dan penjelasan berlapis. Jangan tambah informasi baru.` }],
+      context: [{ role: "system", content: CONDENSE_PROMPT }],
       topic: perception.topic ?? undefined,
-    }).catch(() => null);
+    }).catch((e) => { console.warn("[condense] global choke failed:", (e as Error).message); return null; });
     if (condensed?.reply && condensed.reply.length < deliverable.length && condensed.reply.length >= 40) {
       deliverable = condensed.reply;
     }
