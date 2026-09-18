@@ -17,6 +17,7 @@
 import { Env, logObedience, logViolation, getDmsConfig, writeDmsConfig } from "./db";
 import { validateAction, riskScore } from "./constitutional_guard";
 import { groqSingleShot } from "./ai";
+import { type Gate, hierarchyActionToGate } from "./verdict";
 
 export const TIERS = {
   SYSTEM: 100, // override from cert/system
@@ -187,6 +188,14 @@ export interface HierarchyResult {
   decision: Decision;
   intent: ClassifiedIntent;
   cmdHash: string;
+  /** Tri-state turunan dari Decision.action: EXECUTE→allow, BLOCK/DEFER→deny,
+   *  CLARIFY/CONSENT→unknown. Additive — perilaku `.decision` tidak berubah. */
+  verdict: Gate;
+}
+
+/** Bangun HierarchyResult dengan verdict turunan aksi (satu titik, konsisten). */
+function toHierarchyResult(decision: Decision, intent: ClassifiedIntent, cmdHash: string): HierarchyResult {
+  return { decision, intent, cmdHash, verdict: hierarchyActionToGate(decision.action) };
 }
 
 /**
@@ -229,11 +238,11 @@ export async function routeCommand(
       commandHash: cmdHash,
       evidence: { via: "hierarchy", intent: "emergency_control" },
     });
-    return {
+    return toHierarchyResult(
       decision,
-      intent: { priority: TIERS.EMERGENCY, confidence: 1.0, label: "emergency_control", riskLevel: "high", riskScore: 0.9 },
+      { priority: TIERS.EMERGENCY, confidence: 1.0, label: "emergency_control", riskLevel: "high", riskScore: 0.9 },
       cmdHash,
-    };
+    );
   }
 
   // Otherwise classify via Groq first, fallback heuristics on miss.
@@ -259,7 +268,7 @@ export async function routeCommand(
       await logObedience(env, owner, "AUTONOMOUS_ACTION", pri0.priority, "DEFER", "PENDING", {
         commandHash: cmdHash, evidence: { source: pri0.source, label: intent.label },
       });
-      return { decision, intent, cmdHash };
+      return toHierarchyResult(decision, intent, cmdHash);
     }
   }
 
@@ -277,7 +286,7 @@ export async function routeCommand(
       commandHash: cmdHash,
       evidence: { paused: true, label: intent.label },
     });
-    return { decision, intent, cmdHash };
+    return toHierarchyResult(decision, intent, cmdHash);
   }
 
   // CONSTITUTIONAL GUARD (fail-closed) for actions that could act — applies to
@@ -308,7 +317,7 @@ export async function routeCommand(
       confidence: guard.confidence,
       originModule: "edge",
     });
-    return { decision, intent, cmdHash };
+    return toHierarchyResult(decision, intent, cmdHash);
   }
 
   // READ-ONLY TOPIC-QUERY PROMOTION: a free-text informational search that
@@ -333,7 +342,7 @@ export async function routeCommand(
       commandHash: cmdHash,
       evidence: { topicMarker: true, label: intent.label, confidence: intent.confidence },
     });
-    return { decision, intent, cmdHash };
+    return toHierarchyResult(decision, intent, cmdHash);
   }
 
   // Low clarity + meaningful priority + actual risk => ask for clarification
@@ -352,7 +361,7 @@ export async function routeCommand(
       commandHash: cmdHash,
       evidence: { confidence: intent.confidence, label: intent.label },
     });
-    return { decision, intent, cmdHash };
+    return toHierarchyResult(decision, intent, cmdHash);
   }
 
   // Consent gate for medium/high risk utilities (unless already unambiguous
@@ -373,7 +382,7 @@ export async function routeCommand(
       commandHash: cmdHash,
       evidence: { confidence: intent.confidence, risk: intent.riskLevel, label: intent.label },
     });
-    return { decision, intent, cmdHash };
+    return toHierarchyResult(decision, intent, cmdHash);
   }
 
   // Low-clarity terminal "restricted" utility that is otherwise safe.
@@ -391,7 +400,7 @@ export async function routeCommand(
       commandHash: cmdHash,
       evidence: { confidence: intent.confidence },
     });
-    return { decision, intent, cmdHash };
+    return toHierarchyResult(decision, intent, cmdHash);
   }
 
   const decision: Decision = {
@@ -405,7 +414,7 @@ export async function routeCommand(
     commandHash: cmdHash,
     evidence: { confidence: intent.confidence, label: intent.label, risk: intent.riskLevel },
   });
-  return { decision, intent, cmdHash };
+  return toHierarchyResult(decision, intent, cmdHash);
 }
 
 /**

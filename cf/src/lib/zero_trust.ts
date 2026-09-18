@@ -14,6 +14,8 @@
 //   Cloudflare-Client-Cert-Issuer
 //=====================================================================
 
+import { type Gate } from "./verdict";
+
 interface AuthContext {
   authenticated: boolean;
   ownerId: number | null;
@@ -35,13 +37,27 @@ export function isSystemOperator(request: Request): boolean {
   return subject.includes(`CN=${SYSADMIN_CN}`);
 }
 
-/** Enforce certificate caller on any privileged worker endpoint. */
-export function requireCert(request: Request): { ok: boolean; error?: string } {
-  if (!clientCertVerified(request)) {
-    return { ok: false, error: "mTLS not presented (see Cloudflare Access)" };
+/** Enforce certificate caller on any privileged worker endpoint.
+ *  Tri-state `verdict`: "allow" (SUCCESS + operator), "deny" (verified FAILED
+ *  atau CN bukan operator), "unknown" (header absent/malformed — audited
+ *  sebagai tidak-terverifikasi, `.ok` tetap false / fail-closed). */
+export function requireCert(request: Request): { ok: boolean; error?: string; verdict: Gate } {
+  const verified = request.headers.get("Cloudflare-Client-Cert-Verified") ?? "";
+  const subject = request.headers.get("Cloudflare-Client-Cert-Subject") ?? "";
+  const hasHeaders = verified !== "" || subject !== "";
+  if (!hasHeaders) {
+    return { ok: false, verdict: "unknown", error: "mTLS headers missing — tidak dapat diverifikasi" };
+  }
+  if (verified !== "SUCCESS") {
+    const malformed = verified !== "FAILED";
+    return {
+      ok: false,
+      verdict: malformed ? "unknown" : "deny",
+      error: malformed ? "mTLS status malformed" : "mTLS not presented (see Cloudflare Access)",
+    };
   }
   if (!isSystemOperator(request)) {
-    return { ok: false, error: "certificate CN is not the system operator" };
+    return { ok: false, verdict: "deny", error: "certificate CN is not the system operator" };
   }
-  return { ok: true };
+  return { ok: true, verdict: "allow" };
 }

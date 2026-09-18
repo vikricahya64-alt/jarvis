@@ -16,6 +16,7 @@
 
 import { Env } from "./db";
 import { detectConfusableTopic } from "./ai";
+import { type Gate } from "./verdict";
 
 // ====(A) m9-v9 relevance gate ==============================================
 
@@ -35,6 +36,9 @@ export interface RelevancePending {
 
 export interface RelevanceGate {
   ambiguous: boolean;
+  /** Tri-state: ambiguous=true → "unknown" (topik tidak bisa diverifikasi),
+   *  jelas → "allow". Consumer lama tetap memakai `.ambiguous`. */
+  verdict: Gate;
   pending?: Omit<RelevancePending, "ts">;
   question?: string;
 }
@@ -90,7 +94,7 @@ export function detectRelevanceAmbiguity(
   intentType: string,
 ): RelevanceGate {
   const t = (topic || text || "").trim().slice(0, 120);
-  if (t.length < 2) return { ambiguous: false };
+  if (t.length < 2) return { ambiguous: false, verdict: "unknown" };
   const ambitious = AMBITIOUS_INTENTS.has(intentType);
 
   // (1) Confusable dictionary pair — both readings are plausible.
@@ -105,6 +109,7 @@ export function detectRelevanceAmbiguity(
         : "";
     return {
       ambiguous: true,
+      verdict: "unknown",
       pending: {
         text: (text || "").trim(),
         topic: t,
@@ -125,6 +130,7 @@ export function detectRelevanceAmbiguity(
   if (ambitious && isThinTopic(t)) {
     return {
       ambiguous: true,
+      verdict: "unknown",
       pending: {
         text: (text || "").trim(),
         topic: t,
@@ -141,7 +147,7 @@ export function detectRelevanceAmbiguity(
     };
   }
 
-  return { ambiguous: false };
+  return { ambiguous: false, verdict: "allow" };
 }
 
 export async function parkPendingRelevance(
@@ -219,20 +225,22 @@ const EXEC_VERB_RE =
   /(ambil|ambilkan|buat|bikin|tulis|tuliskan|buatkan|generate|proses|parse|unduh|download|curl|scrape|fet[h]?|rangkum|ringkas|analisis|cari|riset|lapor|hitung|cek|periksa|jalankan|run|instal|setup|deploy|kemas|kirim|data|file|gambar|render|otomasi|script|skrip|regex|json|csv|api|endpoint)/i;
 
 /** PURE: apakah tujuan layak dibawa ke eksekutor eksternal (lingkungan +
- *  kemampuan)? Sapaan/obrolan/kata ambigu → false. Tugas konkret → true.
- *  Konservatif: tugas yang tidak jelas dikirim ke NEGOSIASI (bukan eksekusi),
- *  jadi kriteria ini TIDAK boleh menolak tujuan yang bertele-tele panjang berisi
- *  kata kerja eksekusi. Fail-closed ke FALSE untuk input kosong. */
-export function isRelevantExecutorTask(goal: string | null | undefined): boolean {
+ *  kemampuan)? Return { verdict, ready } — `ready` identik dengan boolean lama
+ *  (fail-closed, konservatif), `verdict` memberi tri-state:
+ *    - "allow"  : tujuan konkret layak dibawa.
+ *    - "deny"   : sapaan/obrolan/kata ambigu (bukan tugas eksekusi).
+ *    - "unknown": tujuan kosong/terlalu pendek — tak bisa dinilai; tidak
+ *                 dibawa (ready=false) dan pengalihan klarifikasi. */
+export function isRelevantExecutorTask(goal: string | null | undefined): { verdict: Gate; ready: boolean } {
   const g = (goal ?? "").trim();
-  if (g.length < 4) return false;
+  if (g.length < 4) return { verdict: "unknown", ready: false };
   if (EXEC_VAGUE_RE.test(g)) {
     // Kata ambigu tapi dengan isi eksekusi di belakangnya (mis. "lanjutkan riset AI")
     // → tetap layak; hanya kata ambigu TANPA isi yang ditolak.
-    if (!EXEC_VERB_RE.test(g)) return false;
+    if (!EXEC_VERB_RE.test(g)) return { verdict: "deny", ready: false };
   }
-  if (EXEC_CASUAL_RE.test(g) && !EXEC_VERB_RE.test(g)) return false;
-  return true;
+  if (EXEC_CASUAL_RE.test(g) && !EXEC_VERB_RE.test(g)) return { verdict: "deny", ready: false };
+  return { verdict: "allow", ready: true };
 }
 
 /** PURE: pesan bernuansa eksekusi langsung yang TIDAK pantas masuk jalur

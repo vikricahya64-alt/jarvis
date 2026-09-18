@@ -12,6 +12,7 @@
 
 import { Env, logViolation, getDmsConfig } from "./db";
 import { groqSingleShot } from "./ai";
+import { type Gate } from "./verdict";
 
 // ============ ORIGINAL INTERFACES (unchanged - backward compat) ============
 
@@ -30,6 +31,9 @@ export interface CovenantClause {
 
 export interface CovenantVerdict {
   allowed: boolean;
+  /** Tri-state: "allow" | "deny" | "unknown". allowed=true hanya saat
+   *  verdict==="allow". Validator tidak tersedia → unknown (bukan deny). */
+  verdict: Gate;
   violatedClauseId: string | null;
   reasoning: string;
   source: "groq" | "fail_closed" | "none";
@@ -117,10 +121,10 @@ export async function validateActionAgainstCovenant(
   const paused = cfg.autonomy_paused ?? false;
   // Absolute sovereignty: autonomy pause overrides everything.
   if (paused && !/^\/(covenant|identity|sunset|pause|resume|status)/.test(actionText.trim())) {
-    return { allowed: false, violatedClauseId: "autonomy_paused", reasoning: "Otonomi di-pause (/pause).", source: "fail_closed" };
+    return { allowed: false, verdict: "deny", violatedClauseId: "autonomy_paused", reasoning: "Otonomi di-pause (/pause).", source: "fail_closed" };
   }
   if (clauses.length === 0) {
-    return { allowed: true, violatedClauseId: null, reasoning: "Belum ada covenant aktif.", source: "none" };
+    return { allowed: true, verdict: "allow", violatedClauseId: null, reasoning: "Belum ada covenant aktif.", source: "none" };
   }
   // Build the clause list for Groq from the REAL clause text (post-0019).
   // Legacy rows without stored text fall back to a hash-only marker so the
@@ -138,6 +142,7 @@ export async function validateActionAgainstCovenant(
   if (!key) {
     return {
       allowed: false,
+      verdict: "unknown",
       violatedClauseId: "covenant_unverifiable",
       reasoning: "Covenant ada tapi validator (Groq) tidak tersedia; fail-closed BLOCK.",
       source: "fail_closed",
@@ -154,9 +159,9 @@ export async function validateActionAgainstCovenant(
         '\nApakah aksi di bawah MELANGGAR klausa apa pun? Balas HANYA JSON: ' +
         '{"allowed":bool,"reason":"penjelasan singkat"}. Jika ragu, allowed=false.',
     });
-    if (raw === null) return { allowed: false, violatedClauseId: "covenant_unverifiable", reasoning: "Validator gagal.", source: "fail_closed" };
+    if (raw === null) return { allowed: false, verdict: "unknown", violatedClauseId: "covenant_unverifiable", reasoning: "Validator gagal.", source: "fail_closed" };
     const m = raw.match(/\{[\s\S]*\}/);
-    if (!m) return { allowed: false, violatedClauseId: "covenant_unverifiable", reasoning: "Respons validator tidak valid.", source: "fail_closed" };
+    if (!m) return { allowed: false, verdict: "unknown", violatedClauseId: "covenant_unverifiable", reasoning: "Respons validator tidak valid.", source: "fail_closed" };
     const parsed = JSON.parse(m[0]) as { allowed?: boolean; reason?: string };
     const allowed = parsed.allowed === true;
     if (!allowed) {
@@ -168,12 +173,13 @@ export async function validateActionAgainstCovenant(
     }
     return {
       allowed,
+      verdict: allowed ? "allow" : "deny",
       violatedClauseId: allowed ? null : "covenant",
       reasoning: parsed.reason ?? "",
       source: "groq",
     };
   } catch {
-    return { allowed: false, violatedClauseId: "covenant_unverifiable", reasoning: "Validator error.", source: "fail_closed" };
+    return { allowed: false, verdict: "unknown", violatedClauseId: "covenant_unverifiable", reasoning: "Validator error.", source: "fail_closed" };
   }
 }
 

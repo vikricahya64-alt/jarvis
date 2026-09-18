@@ -18,6 +18,7 @@
 //=====================================================================
 
 import { Env } from "./db";
+import { type Gate } from "./verdict";
 
 /** Tracked deployment version. */
 export interface DeployVersion {
@@ -174,12 +175,18 @@ export async function getVersionHealth(env: Env): Promise<VersionHealth> {
 // Auto-Revert System
 // ---------------------------------------------------------------------
 
-/** Check if auto-revert is needed. Returns revert info or null. */
+/** Check if auto-revert is needed. Returns revert info or null.
+ *  Tri-state `verdict`:
+ *    "allow"   = versi sehat (tidak perlu revert).
+ *    "deny"    = error rate melebihi threshold → revert diperlukan.
+ *    "unknown" = data requestCount kurang — belum bisa dinilai.
+ *  `null` dikembalikan untuk kondisi non-verdict (no active version, cooldown). */
 export async function checkAutoRevert(env: Env): Promise<{
   shouldRevert: boolean;
   reason: string;
   currentVersion: string;
   errorRate: number;
+  verdict: Gate;
 } | null> {
   try {
     const health = await getVersionHealth(env);
@@ -189,11 +196,23 @@ export async function checkAutoRevert(env: Env): Promise<{
 
     // Check thresholds
     if (health.requestCount < AUTO_REVERT_THRESHOLDS.minRequests) {
-      return null; // not enough data yet
+      return {
+        shouldRevert: false,
+        verdict: "unknown",
+        reason: "Data kurang — belum bisa menilai kesehatan versi.",
+        currentVersion: active.version,
+        errorRate: health.errorRate,
+      };
     }
 
     if (health.errorRate <= AUTO_REVERT_THRESHOLDS.errorRateThreshold) {
-      return null; // healthy enough
+      return {
+        shouldRevert: false,
+        verdict: "allow",
+        reason: `Sehat — error ${(health.errorRate * 100).toFixed(1)}% ≤ ${(AUTO_REVERT_THRESHOLDS.errorRateThreshold * 100).toFixed(0)}%.`,
+        currentVersion: active.version,
+        errorRate: health.errorRate,
+      };
     }
 
     // Check cooldown (don't revert too frequently). Match both the legacy
@@ -211,6 +230,7 @@ export async function checkAutoRevert(env: Env): Promise<{
 
     return {
       shouldRevert: true,
+      verdict: "deny",
       reason: `Error rate ${(health.errorRate * 100).toFixed(1)}% > threshold ${(AUTO_REVERT_THRESHOLDS.errorRateThreshold * 100).toFixed(0)}%`,
       currentVersion: active.version,
       errorRate: health.errorRate,

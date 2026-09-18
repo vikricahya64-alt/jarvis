@@ -11,8 +11,14 @@
 // the action is BLOCKED (never silently approved).
 //=====================================================================
 
+import { type Gate } from "./verdict";
+
 export interface GuardResult {
   allowed: boolean;
+  /** Tri-state baru: "allow" | "deny" | "unknown". Fail-closed view memakai
+   *  `allowed` (kebalikan verdict untuk deny/unknown). allowed=true hanya
+   *  ketika verdict === "allow", jadi assertion lama `.allowed` tetap valid. */
+  verdict: Gate;
   violated_principle: string | null;
   reasoning: string;
   confidence: number;
@@ -89,11 +95,26 @@ export function validateAction(actionDesc: string, options: {
 } = {}): GuardResult {
   const risk = options.risk ?? riskScore(actionDesc);
 
+  // 0) Input tidak cukup untuk dinilai (kosong / terlalu pendek) → UNKNOWN.
+  //    Fail-closed: allowed=false (tidak pernah lolos), tapi dictunggal dari
+  //    deny sejati via verdict === "unknown" + violated_principle terpisah.
+  const t = String(actionDesc ?? "").trim();
+  if (t.length < 2) {
+    return {
+      allowed: false,
+      verdict: "unknown",
+      violated_principle: "input_insufficient",
+      reasoning: "Aksi kosong/terlalu pendek — tidak dapat diverifikasi konstitusional.",
+      confidence: 0.5,
+    };
+  }
+
   // 1) Stored explicit 'never/stop' rules (harder than built-ins).
   const explicitConflict = conflictScore(actionDesc, options.commandRules);
   if (explicitConflict >= 0.6) {
     return {
       allowed: false,
+      verdict: "deny",
       violated_principle: "command_hierarchy",
       reasoning: `Konflik eksplisit "never/stop" (score ${explicitConflict}).`,
       confidence: 1.0,
@@ -108,6 +129,7 @@ export function validateAction(actionDesc: string, options: {
     if (keys.some((k) => matchesKeyword(low, k.replace(/^\s+|\s+$/g, "")))) {
       return {
         allowed: false,
+        verdict: "deny",
         violated_principle: p.id,
         reasoning: p.reason,
         confidence: 1.0,
@@ -125,6 +147,7 @@ export function validateAction(actionDesc: string, options: {
       if (ck && low.includes(ck)) {
         return {
           allowed: false,
+          verdict: "deny",
           violated_principle: "custom_constitution",
           reasoning: `Kebijakan konstitusi khusus dilanggar: ${cr.slice(0, 80)}`,
           confidence: 1.0,
@@ -137,6 +160,7 @@ export function validateAction(actionDesc: string, options: {
   if (risk > Number(options.constitution?.risk_ceiling ?? 0.9)) {
     return {
       allowed: false,
+      verdict: "deny",
       violated_principle: "autonomy_risk",
       reasoning: `Autonomous risk ${risk.toFixed(2)} di atas batas konstitusi.`,
       confidence: 1.0,
@@ -146,6 +170,7 @@ export function validateAction(actionDesc: string, options: {
   // 5) All checks passed — allow.
   return {
     allowed: true,
+    verdict: "allow",
     violated_principle: null,
     reasoning: "Melewati konstitusi.",
     confidence: 1.0,

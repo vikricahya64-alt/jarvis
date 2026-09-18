@@ -27,6 +27,7 @@ import { Env } from "./db";
 import { e2bConfigured } from "./e2b";
 import { parkProjectPlan } from "./project_plan";
 import { negotiateGoalTranslate } from "./translator";
+import { type Gate } from "./verdict";
 
 /** Concept-system executors JARVIS can hand a task to as the THIRD PARTY
  *  (each implements the same delegation contract: ledger + detached run +
@@ -61,12 +62,16 @@ export type SynthesisEvidence = {
 
 /** PURE, deterministic judgment #1: only an UNAMBIGUOUSLY ungrounded synthesis
  *  (LLM answered with ZERO search evidence) deserves an executor switch.
- *  Canned / self-referential / grounded replies stay on their own paths. */
-export function shouldEscalateToConceptExecutor(res: SynthesisEvidence | null): boolean {
-  if (!res) return false;
-  if (!res.reply) return false;
-  if (res.source === "canned" || res.source === "self_ref") return false;
-  return res.grounded === false;
+ *  Canned / self-referential / grounded replies stay on their own paths.
+ *  Return { verdict, escalate } — `escalate` identik dengan boolean lama;
+ *  `verdict` tri-state: grounded=undefined / res kosong → "unknown" (evidence
+ *  tak lengkap, tidak di-eskalasi — fail-closed keep). */
+export function shouldEscalateToConceptExecutor(res: SynthesisEvidence | null): { verdict: Gate; escalate: boolean } {
+  if (!res || !res.reply) return { verdict: "unknown", escalate: false };
+  if (res.source === "canned" || res.source === "self_ref") return { verdict: "deny", escalate: false };
+  if (res.grounded === false) return { verdict: "allow", escalate: true };
+  if (res.grounded === undefined) return { verdict: "unknown", escalate: false };
+  return { verdict: "deny", escalate: false };
 }
 
 /** Permintaan riset yang MENUNTUT butir bersumber (angka/daftar/artikel/berita
@@ -92,14 +97,16 @@ const SOURCING_ASK_RE =
  *  (CNBC/The Verge/Reuters padahal tidak ditarik) lolos apa adanya. Sekarang:
  *  sourcing-ask + nol kutipan → eskalasi bila (a) hit benar-benar ada tapi
  *  tidak dikutip, ATAU (b) pencarian bahkan tidak dijalankan (searched=false). */
-export function shouldEscalateByAnswerEvidence(res: SynthesisEvidence | null, askText: string): boolean {
-  if (!res) return false;
-  if (!res.reply) return false;
-  if (res.source === "canned" || res.source === "self_ref") return false;
-  if (res.grounded === false) return true;
-  if (!isSourcingAsk(askText)) return false;
-  if ((res.citedSources ?? 0) > 0) return false;
-  return (res.hitsAvailable ?? 0) > 0 || res.searched === false;
+export function shouldEscalateByAnswerEvidence(res: SynthesisEvidence | null, askText: string): { verdict: Gate; escalate: boolean } {
+  if (!res || !res.reply) return { verdict: "unknown", escalate: false };
+  if (res.source === "canned" || res.source === "self_ref") return { verdict: "deny", escalate: false };
+  if (res.grounded === false) return { verdict: "allow", escalate: true };
+  if (!isSourcingAsk(askText)) return { verdict: "deny", escalate: false };
+  if ((res.citedSources ?? 0) > 0) return { verdict: "deny", escalate: false };
+  const evidence = (res.hitsAvailable ?? 0) > 0 || res.searched === false;
+  if (evidence) return { verdict: "allow", escalate: true };
+  if (res.hitsAvailable === undefined && res.searched === undefined) return { verdict: "unknown", escalate: false };
+  return { verdict: "deny", escalate: false };
 }
 
 /** Injectable side-effects for tests (defaults are the real implementations).
@@ -130,7 +137,7 @@ export async function maybeEscalateToE2b(
     const clean = (task ?? "").trim();
     if (!clean || clean.length < 3) return null;
     const should =
-      shouldEscalateToConceptExecutor(res) || shouldEscalateByAnswerEvidence(res, clean);
+      shouldEscalateToConceptExecutor(res).escalate || shouldEscalateByAnswerEvidence(res, clean).escalate;
     if (!should) return null;
 
     // JARVIS (negosiator): tanya penerjemah pihak ketiga atas nama pemilik.

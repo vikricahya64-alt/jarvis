@@ -54,6 +54,7 @@ import {
 import { reflectOnTurn } from "./evolution";
 import { SELF_REF_RE } from "./identity";
 import { gateVerdict } from "./verifier";
+import { verdictToGate, type Gate } from "./verdict";
 import {
   decideAnswerMode,
   askSearchRespond,
@@ -1077,7 +1078,7 @@ export async function act(
   text: string,
   perception: Perception,
   strategy: Strategy,
-): Promise<{ reply: string; source: string; image?: { bytes: Uint8Array; mime: string } }> {
+): Promise<{ reply: string; source: string; image?: { bytes: Uint8Array; mime: string }; gate?: Gate }> {
   // m9-v11.21: route through the INPUT DOOR FIRST — every module below receives
   // the translated directive/payload, never the raw natural sentence.
   const task = translateInput(text, perception, strategy);
@@ -1282,12 +1283,15 @@ export async function act(
               reply;
           }
         }
-        // GATE VERDICT — classify output quality. raw_dump/non_answer → strip URLs.
+        // GATE VERDICT → tri-state output gate. Pemetaan murni (verdictToGate)
+        // — strip-URL di bawah IDENTIK dengan lama (raw_dump/non_answer disunting),
+        // sementara `gate` memberi jalur komposisi tri-state bagi pemakai berikutnya.
         const verdict = gateVerdict(reply, undefined);
+        const outputGate = verdictToGate(verdict, reply.length);
         if (verdict === "raw_dump" || verdict === "non_answer") {
           reply = reply.replace(/https?:\/\/[^\s)]+/g, "").replace(/\[([^\]]*)\]\(\s*https?:\/\/[^\s)]+\)/g, "$1").trim();
         }
-        return { reply, source: result.source ?? "llm" };
+        return { reply, source: result.source ?? "llm", gate: outputGate };
       }
       return { reply: "Maaf, saya sedang mengalami kendala teknis. Silakan coba lagi.", source: "fallback" };
     }

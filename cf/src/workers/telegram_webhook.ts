@@ -2409,7 +2409,7 @@ async function handlePinjamCommand(env: Env, from: number, raw: string): Promise
     }
     // Relevance gate (v11.45): non-tasks (sapaan, kata ambigu) never reach a
     // borrowed executor — keputusan delegasi tetap memerlukan tugas yang relevan.
-    if (!isRelevantExecutorTask(body)) {
+    if (!isRelevantExecutorTask(body).ready) {
       await fire(sendMessage(env, from, "🤔 Itu bukan tugas untuk eksekutor pinjaman. Beri tugas yang konkret & bisa dikerjakan, mis. \"/pinjam riset berapa inflasi Indonesia 2026\"."));
       return;
     }
@@ -2587,7 +2587,7 @@ async function handleProyekCommand(env: Env, from: number, raw: string): Promise
     }
     // Relevance gate (v11.45): non-tasks (sapaan, kata ambigu) never reach an
     // external executor — JARVIS mengembalikan itu ke pemilik dengan ramah.
-    if (!isRelevantExecutorTask(goal)) {
+    if (!isRelevantExecutorTask(goal).ready) {
       await fire(sendMessage(env, from,
         "🤔 Itu bukan pekerjaan untuk eksekutor eksternal (sandbox E2B). Tuliskan tujuan yang benar-benar bisa dijalankan/dikomputasi — mis.\n" +
         "`/proyek ambil 3 artikel teratas AI dari Google News lalu rangkum`"));
@@ -2645,7 +2645,7 @@ async function handleE2bTaskCommand(env: Env, from: number, raw: string): Promis
     const riset = /--riset/i.test(rawTask);
     const goal = rawTask.replace(/--riset\b/i, "").trim();
     // Relevance gate (v11.45) — non-tasks never reach an external executor.
-    if (!isRelevantExecutorTask(goal)) {
+    if (!isRelevantExecutorTask(goal).ready) {
       await fire(sendMessage(env, from,
         "🤔 Itu bukan pekerjaan untuk eksekutor eksternal (sandbox E2B). Tuliskan tujuan yang benar-benar bisa dijalankan/dikomputasi."));
       return;
