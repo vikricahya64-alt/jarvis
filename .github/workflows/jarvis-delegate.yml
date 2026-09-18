@@ -118,14 +118,19 @@ jobs:
               base_url: https://api.groq.com/openai/v1
               key_env: GROQ_API_KEY
           CFG
-          if [ -n "$GROQ_API_KEY" ]; then
-            PROVIDER=groq; MODEL="$GROQ_MODEL"
-          elif [ -n "$OPENROUTER_API_KEY" ]; then
+          # Provider order matters: OPENROUTER first. Hermes' default context
+          # (system+tools+skills ≈ 13-14k tokens) EXCEEDS Groq's free-tier TPM
+          # cap (openai/gpt-oss-120b = 8000 tpm → HTTP 413). OpenRouter free
+          # models accept large contexts, so it carries the work. Groq stays
+          # as LAST resort (only if the OpenRouter key is missing entirely).
+          if [ -n "$OPENROUTER_API_KEY" ]; then
             PROVIDER=openrouter; MODEL="$OPENROUTER_MODEL"
+          elif [ -n "$GROQ_API_KEY" ]; then
+            PROVIDER=groq; MODEL="$GROQ_MODEL"
           else
-            echo "ERR: tidak ada LLM key (GROQ/OpenRouter) di repo secrets." > /tmp/jarvis-out.txt
+            echo "ERR: tidak ada LLM key (OpenRouter/Groq) di repo secrets." > /tmp/jarvis-out.txt
             code=1
-            PROVIDER=groq; MODEL=unset
+            PROVIDER=openrouter; MODEL=unset
           fi
           if [ "$PROVIDER" != "unset" ]; then
             # Transient upstream rate-limits possible on shared runner IPs →
