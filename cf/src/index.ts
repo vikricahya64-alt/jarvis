@@ -169,8 +169,14 @@ env: env.APP_ENV ?? "unknown",
     //------------------------------------------------------------------
     if (path === "/webhook") {
       if (method !== "POST") return respond(new Response("POST only", { status: 405 }));
-      // Verify Telegram's secret token header (if configured).
-      if (env.TELEGRAM_SECRET) {
+      // Fail-closed: if the Telegram secret token is not configured, refuse ALL
+      // webhook traffic instead of trusting forged updates (owner-gating by
+      // `from.id` alone is spoofable).
+      if (!env.TELEGRAM_SECRET) {
+        return respond(new Response("webhook secret not configured", { status: 503 }));
+      }
+      // Verify Telegram's secret token header.
+      {
         const got = request.headers.get("x-telegram-bot-api-secret-token");
         if (got !== env.TELEGRAM_SECRET) {
           return respond(new Response("unauthorized", { status: 401 }));
@@ -523,8 +529,8 @@ ts: Date.now(),
     const start = Date.now();
 
     const lockName = `cron:${cron}`;
-    const haveLock = await acquireCronLock(env, lockName);
-    if (!haveLock) {
+    const lockToken = await acquireCronLock(env, lockName);
+    if (!lockToken) {
       console.log(`[cron:${cron}] skipped (lock held) (${Date.now() - start}ms)`);
       return;
     }
@@ -631,7 +637,7 @@ ts: Date.now(),
       console.error(`[cron:${cron}] failed`, (e as Error).message);
     } finally {
       await new Promise((r) => setTimeout(r, 0));
-      await releaseCronLock(env, lockName);
+      await releaseCronLock(env, lockName, lockToken);
     }
   },
 } satisfies ExportedHandler<Env>;

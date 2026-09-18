@@ -35,6 +35,15 @@ interface DmsRow {
 }
 
 /**
+ * Parse a positive numeric env var with a safe fallback. A malformed value
+ * must NOT become NaN and silently arm an immediate false escalation.
+ */
+function positiveNum(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
  * Ensures the dms_state row exists (one per owner). Called on first interaction
  * and by cron so the state machine always has a seat.
  */
@@ -43,7 +52,7 @@ export async function ensureDms(env: Env, owner: number): Promise<void> {
     `INSERT INTO dms_state (owner_id, stage, last_interaction, last_heartbeat, grace_days, updated_at)
      VALUES (?, 'idle', ?, ?, ?, ?)
      ON CONFLICT(owner_id) DO NOTHING`,
-  ).bind(owner, Date.now(), 0, Number(env.DMS_GRACE_DAYS || "30"), Date.now()).run();
+  ).bind(owner, Date.now(), 0, positiveNum(env.DMS_GRACE_DAYS, 30), Date.now()).run();
 }
 
 /**
@@ -53,15 +62,17 @@ export async function ensureDms(env: Env, owner: number): Promise<void> {
 export async function runDms(env: Env, owner: number): Promise<string> {
   await ensureDms(env, owner);
   const now = Date.now();
-  const graceDays = Number(env.DMS_GRACE_DAYS || "30");
-  const stage1Hours = Number(env.DMS_STAGE1_HOURS || "24");
-  const stage2Hours = Number(env.DMS_STAGE2_HOURS || "48");
+  const graceDays = positiveNum(env.DMS_GRACE_DAYS, 30);
+  const stage1Hours = positiveNum(env.DMS_STAGE1_HOURS, 24);
+  const stage2Hours = positiveNum(env.DMS_STAGE2_HOURS, 48);
 
   const row = await getDmsState(env, owner) as unknown as DmsRow | null;
   if (!row) return "dms:no-row";
 
   const gd = row.grace_days || graceDays;
-  const lastInteraction = row.last_interaction || await getActivity(env, owner) || 0;
+  // Fail-safe: when no interaction is on record at all, treat "now" as the
+  // baseline instead of epoch 0 (which would arm an immediate false alarm).
+  const lastInteraction = row.last_interaction || await getActivity(env, owner) || now;
   const idleDeadline = lastInteraction + gd * 24 * HOUR;
 
   switch (row.stage) {

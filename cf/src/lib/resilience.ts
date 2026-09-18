@@ -146,40 +146,56 @@ export async function fetchWithTimeout(
 }
 
 /** D1 transactional lock for cron overlap prevention. KV locks are unsafe for
- *  this (eventual consistency). Returns true if this invocation acquired the
- *  lock (should run the job); false if another instance holds it (skip). */
-export async function acquireCronLock(env: Env, lockName: string, ttlMs = 55000): Promise<boolean> {
+ *  this (eventual consistency). Returns a lock TOKEN when this invocation
+ *  acquired the lock (pass it to releaseCronLock), or null if another instance
+ *  holds it (skip). The token scopes release so a slow/over-running invocation
+ *  can never unlock a newer invocation's lock.
+ *
+ *  Default TTL is 110s: comfortably above the per-minute cron cadence so a
+ *  normal over-run (the E2B/borrowed pollers can take ~90s worst case) cannot
+ *  let the next tick acquire concurrently. A crashed invocation only blocks
+ *  one extra tick — fail-closed, no duplicate side effects. */
+export async function acquireCronLock(env: Env, lockName: string, ttlMs = 110000): Promise<string | null> {
   const now = Date.now();
   const expires = now + ttlMs;
+  const token = `${now}-${Math.random().toString(36).slice(2, 10)}`;
   try {
     const res = await env.DB.prepare(
       `UPDATE cron_locks
        SET locked_by=?, locked_at=?, expires_at=?
        WHERE lock_name=? AND (expires_at=0 OR expires_at < ?)`,
-    ).bind("worker", now, expires, lockName, now).run();
-    if (res.meta.changes > 0) return true;
+    ).bind(token, now, expires, lockName, now).run();
+    if (res.meta.changes > 0) return token;
     // Rows absent? Insert (unless a concurrent insert already won).
     const ins = await env.DB.prepare(
       `INSERT INTO cron_locks (lock_name, locked_by, locked_at, expires_at)
        SELECT ?, ?, ?, ? WHERE NOT EXISTS (
          SELECT 1 FROM cron_locks WHERE lock_name=? AND expires_at >= ?
        )`,
-    ).bind(lockName, "worker", now, expires, lockName, now).run();
-    return ins.meta.changes > 0;
+    ).bind(lockName, token, now, expires, lockName, now).run();
+    return ins.meta.changes > 0 ? token : null;
   } catch (e) {
     // Fail CLOSED: if we cannot confirm exclusive ownership, the job must not
     // run twice (owner sovereignty: no duplicate/overlapping cron side effects).
     console.error("[cron_lock] acquire failed, refusing to run", (e as Error).message);
-    return false;
+    return null;
   }
 }
 
-/** Release a cron lock early (if the job finished well ahead of its TTL). */
-export async function releaseCronLock(env: Env, lockName: string): Promise<void> {
+/** Release a cron lock early (if the job finished well ahead of its TTL).
+ *  When `token` is supplied, the lock is only cleared if THIS invocation still
+ *  owns it — never blindly, so a slow run cannot unlock a newer run. */
+export async function releaseCronLock(env: Env, lockName: string, token?: string): Promise<void> {
   try {
-    await env.DB.prepare(
-      `UPDATE cron_locks SET expires_at=0 WHERE lock_name=?`,
-    ).bind(lockName).run();
+    if (token) {
+      await env.DB.prepare(
+        `UPDATE cron_locks SET expires_at=0 WHERE lock_name=? AND locked_by=?`,
+      ).bind(lockName, token).run();
+    } else {
+      await env.DB.prepare(
+        `UPDATE cron_locks SET expires_at=0 WHERE lock_name=?`,
+      ).bind(lockName).run();
+    }
   } catch {
     // best-effort; an un-released lock simply expires via TTL
   }

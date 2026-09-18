@@ -52,8 +52,10 @@ APP_ENV = "production"
 # AI Gateway (free): route Groq/OpenRouter/Gemini egress through Cloudflare's
 # gateway for logs + cache + rate-limit. Provisioned 2026-09-10 (jarvis-gw).
 AI_GATEWAY_URL = "https://gateway.ai.cloudflare.com/v1/019eb7798d76ffff19fe8f3527f39d47/jarvis-gw"
-# Telegram webhook secret (should be a secret, but kept here minimal for demo;
-# in production use `wrangler secret put TELEGRAM_SECRET`).
+# Telegram webhook secret token (x-telegram-bot-api-secret-token). PROPER
+# SECRET: set via `wrangler secret put TELEGRAM_SECRET` — NEVER as a [vars]
+# entry. The /webhook endpoint rejects any update without this header, so the
+# value must match what was passed to setWebhook when configuring the bot.
 CLARITY_GATE = "0.95"
 RISK_CONSENT_THRESHOLD = "0.3"
 CONSENT_TIMEOUT_S = "60"

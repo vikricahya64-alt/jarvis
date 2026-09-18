@@ -21,3 +21,6 @@ jobs:
         with:
           mode: autonomy
           message: "⚠️ Trigger otonom JARVIS gagal (repo workflow autonomy)."
+          agent-token: ${{ secrets.AGENT_TOKEN }}
+          telegram-token: ${{ secrets.TELEGRAM_TOKEN }}
+          owner-chat-id: ${{ secrets.OWNER_CHAT_ID }}

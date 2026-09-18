@@ -41,8 +41,19 @@ export async function getDegradationStatus(env: Env): Promise<{ remainingPct: nu
   }
   return {
     remainingPct: (row as { remaining_pct: number }).remaining_pct,
-    disabledFeatures: JSON.parse((row as { disabled_features: string }).disabled_features),
+    disabledFeatures: safeParseFeatures((row as { disabled_features: string }).disabled_features),
   };
+}
+
+/** JSON.parse with a degenerate-input fallback so a corrupt quota row can
+ *  never crash /status. */
+function safeParseFeatures(raw: string): string[] {
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? (v as string[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 /** Update quota snapshot dan perbarui daftar fitur yang dinonaktifkan */

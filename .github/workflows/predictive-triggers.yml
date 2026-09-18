@@ -21,3 +21,6 @@ jobs:
         with:
           mode: cleanup
           message: "⚠️ Predictive sweep JARVIS gagal (repo workflow predictive-triggers)."
+          agent-token: ${{ secrets.AGENT_TOKEN }}
+          telegram-token: ${{ secrets.TELEGRAM_TOKEN }}
+          owner-chat-id: ${{ secrets.OWNER_CHAT_ID }}

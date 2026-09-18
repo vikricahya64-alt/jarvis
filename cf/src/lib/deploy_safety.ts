@@ -196,9 +196,12 @@ export async function checkAutoRevert(env: Env): Promise<{
       return null; // healthy enough
     }
 
-    // Check cooldown (don't revert too frequently)
+    // Check cooldown (don't revert too frequently). Match both the legacy
+    // 'auto_revert' type and the honest 'revert_needed' type this module now
+    // writes — otherwise the cooldown never engages and the owner is
+    // re-alerted (and recovery_actions re-inserted) every cron tick.
     const lastRevert = await env.DB.prepare(
-      `SELECT timestamp FROM recovery_actions WHERE type = 'auto_revert'
+      `SELECT timestamp FROM recovery_actions WHERE type IN ('auto_revert', 'revert_needed')
        ORDER BY timestamp DESC LIMIT 1`,
     ).first<{ timestamp: number }>();
 

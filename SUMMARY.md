@@ -85,3 +85,49 @@ Perbaiki jawaban self-referential JARVIS ("apa yang bisa kamu lakukan") yang mas
 - `/workspace/jarvis/.vercelignore`: tambah `api/fly_app.py` → 12 fungsi (cap Hobby)
 - `/workspace/jarvis/Dockerfile`: CMD `uvicorn api.fly_app:app` (bukan webhook:app)
 - `/workspace/jarvis/utils/identity.py`: Python "uang" variant for Vercel parity
+
+## Sesi 2026-09-18 — Review + hardening (repo → source of truth)
+
+Lokasi kerja lokal dipindah ke `/root/jarvis` (clone GitHub). Repo = sumber
+otoritatif Worker CF (verifikasi: repo `m9-v11.51` == live `/healthz`; snapshot
+lokal `/tmp/opencode/live_vercel` STALE 2026-09-07 — jangan dipakai).
+
+### Fix yang dikerjakan
+- **Workflow otonom henti-gagal**: `.github/actions/worker-cron/action.yml`
+  memakai `secrets.*` di composite action (TIDAK valid di GH Actions) →
+  semua run `autonomy` & `predictive-triggers` failure 8s. Sekarang secret
+  di-pass sebagai inputs dari caller workflow.
+- **DMS dibekukan aktivitas otonom (BUG P1)**: `maestro.touchActivity` lokal
+  reset `dms_state` ke idle untuk source `edge`/`autonomous`, mengalahkan gate
+  M6 (`source==="telegram"` di db.ts). Fix: hapus helper lokal, pakai
+  `touchActivity` dari db.ts — hanya kehadiran pemilik via Telegram yang
+  menunda man-down.
+- **Webhook fail-open (P1)**: jika `TELEGRAM_SECRET` tidak ter-set, `/webhook`
+  melayani semua update untuk sekarang → 503 fail-closed.
+- **Self-ref "uang" di jalur media (P2)**: `understandMedia` melewati guard —
+  caption foto / transkrip voice "apa uang bisa kamu lakukan" diteruskan ke
+  vision/LLM. Fix: intercept `SELF_REF_RE` di awal `understandMedia` (caption +
+  transcript) → balas `JARVIS_IDENTITY.selfRefReply`.
+- **`groqSingleShot` tanpa guard self-ref (P2)**: intercept `SELF_REF_RE`
+  sebelum LLM untuk semua borrow internal (command hierarchy, covenant,
+  error diagnosis, maestro).
+- **Regression test self-ref**: `testSelfRefUangTypo()` di logic.test.ts
+  (positif: semua varian "apa uang/yang bisa kamu…", prefix grup, EN; negatif:
+  topik keuangan sah; BUG_PATTERNS).
+- **Robustness**: `JSON.parse` tak-terlindungi di `failure.ts` (tally/ledger)
+  & `degradation.ts`; DMS env `Number()` NaN→escalasi-dini (fallback positif);
+  cooldown `deploy_safety` query `type='auto_revert'` vs insert
+  `'revert_needed'` (cooldown tak pernah aktif → alert berulang); cron lock
+  kini token-scoped + TTL 110s (cakupan cadence per-menit; release tidak bisa
+  membuka kunci milik run lain).
+- **Auto-deploy GH**: `deploy.yml` berjalan pada push `cf/**` ke `main`
+  (masih ada `workflow_dispatch`). Tanpa `migrations apply` otomatis.
+- **wrangler.toml**: komentar `TELEGRAM_SECRET` dibersihkan; dipastikan live
+  menolak webhook tanpa header secret (401) — secret proper, bukan var.
+
+### Findings yang DIDOKUMENTASIKAN (belum difix — butuh migrasi/deploy besar)
+- `covenant_core.ts:112` validator buta terhadap isi klausa (hanya hash);
+  teks klausa tidak disimpan → "validasi covenant" tetap teater.
+- `error_monitor.storeError` tidak dipanggil siapapun → `system_errors` kosong
+  → loop error-heal/auto-revert tak pernah beraksi (desain advisory).
+- `/dl` secret dalam teks tugas yang dikirim ke repo PUBLIC (TTL 30m).
