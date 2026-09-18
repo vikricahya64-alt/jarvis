@@ -26,6 +26,11 @@ import { semanticSearchMemory, semanticUpsertMemory } from "../src/lib/memory_ve
 import { probeProviders } from "../src/lib/providers";
 import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation, translateInput, hasDegenerateEcho, isAcknowledgeOnly } from "../src/lib/intelligence";
 import { cleanRecallLine } from "../src/lib/context_manager";
+import {
+  andGates, orGates, verdictToGate, answerModeToGate, hierarchyActionToGate,
+} from "../src/lib/verdict";
+import { detectRelevanceAmbiguity, isRelevantExecutorTask } from "../src/lib/relevance";
+import { classifyInsightStability } from "../src/lib/evolution";
 
 const FAKE_ENV = {
   CLARITY_GATE: "0.95",
@@ -1754,6 +1759,78 @@ async function testDlSecretLeak() {
     "/dl handler must not gate on a query token");
 }
 
+async function testTriStateGates() {
+  // --- verdict.ts combinators: deny menang (fail-closed), unknown > deny di jalur pemahaman.
+  assert.strictEqual(andGates({ verdict: "allow", reason: "a" }, { verdict: "allow", reason: "b" }).verdict, "allow");
+  const conflict = andGates({ verdict: "deny", reason: "x" }, { verdict: "allow", reason: "y" });
+  assert.strictEqual(conflict.verdict, "deny", "andGates: deny menang atas allow");
+  assert.ok(conflict.reason.includes("gate_conflict"), "andGates: konflik deny/allow harus tercatat");
+  assert.strictEqual(andGates({ verdict: "unknown", reason: "u" }).verdict, "unknown", "andGates: unknown tidak pernah lolos");
+
+  assert.strictEqual(orGates({ verdict: "deny" }, { verdict: "unknown" }).verdict, "unknown", "orGates: unknown menang atas deny → klarifikasi");
+  assert.strictEqual(orGates({ verdict: "allow" }, { verdict: "deny" }).verdict, "allow", "orGates: satuan allow cukup");
+
+  // --- verdictToGate (output-quality verifier) — string-pinned mapper.
+  assert.strictEqual(verdictToGate("ok", 10), "allow");
+  assert.strictEqual(verdictToGate("ok", 2), "unknown", "ok tapi terlalu pendek → tidak bisa dinilai");
+  assert.strictEqual(verdictToGate("non_answer", 100), "deny");
+  assert.strictEqual(verdictToGate("raw_dump", 100), "deny");
+
+  assert.strictEqual(answerModeToGate("direct"), "allow");
+  assert.strictEqual(answerModeToGate("clarify"), "unknown", "mode klarifikasi → unknown");
+  assert.strictEqual(answerModeToGate("ask_search"), "unknown", "mode ask_search → unknown");
+
+  assert.strictEqual(hierarchyActionToGate("EXECUTE"), "allow");
+  assert.strictEqual(hierarchyActionToGate("BLOCK"), "deny");
+  assert.strictEqual(hierarchyActionToGate("DEFER"), "deny");
+  assert.strictEqual(hierarchyActionToGate("CLARIFY"), "unknown");
+  assert.strictEqual(hierarchyActionToGate("CONSENT"), "unknown");
+
+  // --- constitutional_guard: tri-state pada GuardResult.
+  const emptyAction = validateAction("", {});
+  assert.strictEqual(emptyAction.allowed, false, "aksi kosong → fail-closed deny");
+  assert.strictEqual(emptyAction.verdict, "unknown", "aksi kosong → verdict unknown (input_insufficient)");
+
+  const safeAction = validateAction("organize my whole drive into a new folder layout", { constitution: {} });
+  assert.strictEqual(safeAction.allowed, true, "aksi aman → allowed");
+  assert.strictEqual(safeAction.verdict, "allow", "aksi aman → verdict allow");
+
+  const riskyAction = validateAction("kill the process now", { constitution: {} });
+  assert.strictEqual(riskyAction.allowed, false, "aksi berbahaya → denied");
+  assert.strictEqual(riskyAction.verdict, "deny", "aksi berbahaya → verdict deny");
+
+  // --- routeCommand: verdict ikut action.
+  const exec = await routeCommand(FAKE_ENV, 1, "/help");
+  assert.strictEqual(exec.verdict, "allow", "/help (EXECUTE) → allow");
+  const denyAct = await routeCommand(FAKE_ENV, 1, "hapus semua file");
+  assert.strictEqual(denyAct.verdict, "deny", "hapus semua file (BLOCK) → deny");
+  const consentAct = await routeCommand(FAKE_ENV, 1, "tolong kirim email ke semua kontak");
+  assert.strictEqual(consentAct.verdict, "unknown", "konsen (CONSENT) → unknown");
+
+  // --- relevance: ambiguous → unknown; jelas → allow.
+  const emptyRelevance = detectRelevanceAmbiguity("", "", "search");
+  assert.strictEqual(emptyRelevance.ambiguous, false);
+  assert.strictEqual(emptyRelevance.verdict, "unknown", "input kosong → relevance unknown");
+  const clearRelevance = detectRelevanceAmbiguity("mesin scramjet", "", "search");
+  assert.strictEqual(clearRelevance.ambiguous, false);
+  assert.strictEqual(clearRelevance.verdict, "allow", "topik jelas → relevance allow");
+
+  // --- isRelevantExecutorTask: { verdict, ready }, ready sesuai boolean lama.
+  const emptyExec = isRelevantExecutorTask("");
+  assert.strictEqual(emptyExec.ready, false, "kosong → tidak dibawa eksekutor");
+  assert.strictEqual(emptyExec.verdict, "unknown", "kosong → executor verdict unknown");
+  const taskExec = isRelevantExecutorTask("cari data weather Jakarta hari ini");
+  assert.strictEqual(taskExec.ready, true, "tugas konkret → dibawa");
+  assert.strictEqual(taskExec.verdict, "allow", "tugas konkret → executor verdict allow");
+
+  // --- classifyInsightStability: threshold pipeline (promosi ≥0.75, sweep <0.3).
+  assert.strictEqual(classifyInsightStability(0.8), "allow");
+  assert.strictEqual(classifyInsightStability(0.2), "deny");
+  assert.strictEqual(classifyInsightStability(0.5), "unknown", "zona tengah → tunggu bukti");
+
+  console.log("  tri-state gate contract OK");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -1793,6 +1870,7 @@ async function main() {
   await testFreeServiceLayers();
   await testAdminChaff();
   await testRootComprehension();
+  await testTriStateGates();
   console.log("SAFETY TESTS PASSED");
 }
 

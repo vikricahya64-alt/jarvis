@@ -1854,19 +1854,23 @@ async function testExecutorSelectionRails() {
   assert.strictEqual(pickEscalationExecutor({}), null, "no key → no escalation target (fail-closed)");
   assert.strictEqual(pickEscalationExecutor({ E2B_API_KEY: "e2b_x" }), "e2b", "key wired → E2B selected");
 
-  assert.strictEqual(shouldEscalateToConceptExecutor(null), false, "null result never escalates");
-  assert.strictEqual(shouldEscalateToConceptExecutor({ reply: "" }), false, "empty reply never escalates");
+  const s1 = shouldEscalateToConceptExecutor(null);
+  assert.strictEqual(s1.escalate, false, "null result never escalates");
+  assert.strictEqual(s1.verdict, "unknown", "null result → unknowable");
+  const s2 = shouldEscalateToConceptExecutor({ reply: "" });
+  assert.strictEqual(s2.escalate, false, "empty reply never escalates");
+  assert.strictEqual(s2.verdict, "unknown", "empty reply → unknowable");
   assert.strictEqual(
-    shouldEscalateToConceptExecutor({ reply: "x", source: "canned", grounded: false }), false,
+    shouldEscalateToConceptExecutor({ reply: "x", source: "canned", grounded: false }).escalate, false,
     "canned reply stays on its graceful path (never escalates)");
   assert.strictEqual(
-    shouldEscalateToConceptExecutor({ reply: "x", source: "self_ref", grounded: false }), false,
+    shouldEscalateToConceptExecutor({ reply: "x", source: "self_ref", grounded: false }).escalate, false,
     "identity answers never escalate to a sandbox");
   assert.strictEqual(
-    shouldEscalateToConceptExecutor({ reply: "x", source: "groq+ddg", grounded: true }), false,
+    shouldEscalateToConceptExecutor({ reply: "x", source: "groq+ddg", grounded: true }).escalate, false,
     "grounded output keeps the cheap path");
   assert.strictEqual(
-    shouldEscalateToConceptExecutor({ reply: "x", source: "groq+ddg", grounded: false }), true,
+    shouldEscalateToConceptExecutor({ reply: "x", source: "groq+ddg", grounded: false }).escalate, true,
     "unambiguously ungrounded research output selects the better executor");
 }
 
@@ -2016,17 +2020,19 @@ async function testEscalationOrdering() {
   // (F) Gerbang bukti-jawaban (v11.45): pencarian MEMBERI hits tapi jawaban
   //     mengutip NOL sumber pada permintaan yang menuntut butir → model
   //     knowledge, bukan riset. Tapi permintaan non-butir tidak di-gate.
-  assert.ok(shouldEscalateByAnswerEvidence(
+  const escEvA = shouldEscalateByAnswerEvidence(
     { reply: "x", source: "groq+ddg", citedSources: 0, hitsAvailable: 5 },
-    "ambil 3 artikel teratas AI lalu rangkum"),
-    "sourcing ask + 0 cited sources escalates");
-  assert.ok(!shouldEscalateByAnswerEvidence(
+    "ambil 3 artikel teratas AI lalu rangkum");
+  assert.ok(escEvA.escalate, "sourcing ask + 0 cited sources escalates");
+  assert.strictEqual(escEvA.verdict, "allow", "0 cited sources on sourcing ask → allow escalate");
+  const escEvB = shouldEscalateByAnswerEvidence(
     { reply: "x", source: "groq+ddg", citedSources: 1, hitsAvailable: 5 },
-    "ambil 3 artikel teratas AI lalu rangkum"),
-    "a cited answer stays on the cheap path");
+    "ambil 3 artikel teratas AI lalu rangkum");
+  assert.ok(!escEvB.escalate, "a cited answer stays on the cheap path");
+  assert.strictEqual(escEvB.verdict, "deny", "cited answer → deny escalate");
   assert.ok(!shouldEscalateByAnswerEvidence(
     { reply: "x", source: "groq+ddg", citedSources: 0, hitsAvailable: 5 },
-    "apa itu AI?"),
+    "apa itu AI?").escalate,
     "non-sourcing ask with no cites does NOT escalate");
 
   // (F2) v11.49 KASUS LIVE (kemampuan cabang pemilik): topik 'AI' sudah
@@ -2036,23 +2042,23 @@ async function testEscalationOrdering() {
   //     sourcing ask + nol kutipan + pencarian tidak berjalan → ESKALASI.
   assert.ok(shouldEscalateByAnswerEvidence(
     { reply: "x", source: "groq+ddg", citedSources: 0, hitsAvailable: 0, searched: false },
-    "ambil 3 artikel teratas AI dari Google News lalu rangkum"),
+    "ambil 3 artikel teratas AI dari Google News lalu rangkum").escalate,
     "memory-only answer (no search) on a sourcing ask escalates — THE live fix");
   assert.ok(shouldEscalateByAnswerEvidence(
     { reply: "x", source: "groq+ddg", citedSources: 0, hitsAvailable: 0, searched: false },
-    "cari daftar 10 artikel terbaru tentang kripto"),
+    "cari daftar 10 artikel terbaru tentang kripto").escalate,
     "skip-search sourcing ask escalates regardless of hits");
   assert.ok(!shouldEscalateByAnswerEvidence(
     { reply: "x", source: "groq+ddg", citedSources: 1, hitsAvailable: 0, searched: false },
-    "ambil 3 artikel teratas AI lalu rangkum"),
+    "ambil 3 artikel teratas AI lalu rangkum").escalate,
     "search skipped but the answer DID cite → no escalation");
   assert.ok(!shouldEscalateByAnswerEvidence(
     { reply: "x", source: "groq+ddg", citedSources: 0, hitsAvailable: 0, searched: true },
-    "ambil 3 artikel teratas AI lalu rangkum"),
+    "ambil 3 artikel teratas AI lalu rangkum").escalate,
     "searched but zero hits → not judged memory-only (no evidence, but honest)");
   assert.ok(!shouldEscalateByAnswerEvidence(
     { reply: "x", source: "groq+ddg", citedSources: 0, hitsAvailable: 0, searched: false },
-    "ceritakan cara kerja lampu"),
+    "ceritakan cara kerja lampu").escalate,
     "non-sourcing ask never escalates even with skipped search");
 
   // (G) parseGoalNegotiation — kontrak hop penerjemah (klarifikasi ATAU rencana).
@@ -2068,12 +2074,18 @@ async function testEscalationOrdering() {
     "mixed negotiate+plan rejected (single-contract fail-closed)");
 
   // (H) Predikat relevansi eksekutor eksternal (v11.45) — murni & deterministik.
-  assert.strictEqual(isRelevantExecutorTask(null), false, "null goal not executor-worthy");
-  assert.strictEqual(isRelevantExecutorTask("halo"), false, "greeting not executor-worthy");
-  assert.strictEqual(isRelevantExecutorTask("lanjut"), false, "bare ambiguous word not executor-worthy");
-  assert.ok(isRelevantExecutorTask("ambil 3 artikel teratas AI dari Google News lalu rangkum"),
+  const n1 = isRelevantExecutorTask(null);
+  assert.strictEqual(n1.ready, false, "null goal not executor-worthy");
+  assert.strictEqual(n1.verdict, "unknown", "null → unknowable (fail-closed)");
+  const n2 = isRelevantExecutorTask("halo");
+  assert.strictEqual(n2.ready, false, "greeting not executor-worthy");
+  assert.strictEqual(n2.verdict, "deny", "greeting → deny");
+  const n3 = isRelevantExecutorTask("lanjut");
+  assert.strictEqual(n3.ready, false, "bare ambiguous word not executor-worthy");
+  assert.strictEqual(n3.verdict, "deny", "bare ambiguous word → deny");
+  assert.ok(isRelevantExecutorTask("ambil 3 artikel teratas AI dari Google News lalu rangkum").ready,
     "concrete sourcing task is executor-worthy");
-  assert.ok(isRelevantExecutorTask("buat skrip laporan penjualan harian dari API innerx"),
+  assert.ok(isRelevantExecutorTask("buat skrip laporan penjualan harian dari API innerx").ready,
     "script-building task is executor-worthy");
   assert.strictEqual(isCasualOnly("halo"), true, "greeting detected as casual-only");
   assert.strictEqual(isCasualOnly("ambil 3 artikel"), false, "execution task NOT casual-only");

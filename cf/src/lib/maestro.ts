@@ -195,6 +195,7 @@ export async function executePlanStep(env: Env, owner: number, planId: string): 
   if (!covenantOk.allowed) {
     await logObedience(env, owner, "PLAN_STEP_BLOCKED", step.priority, "BLOCK", "BLOCKED", {
       commandHash: planId, blockingSource: covenantOk.violatedClauseId ?? "covenant",
+      evidence: { verdict: covenantOk.verdict, covenantReason: covenantOk.reasoning },
     });
     await logObedience(env, owner, step.description, step.priority, "BLOCK", "BLOCKED", {
       commandHash: planId, blockingSource: "covenant_guard",
@@ -207,7 +208,7 @@ export async function executePlanStep(env: Env, owner: number, planId: string): 
   const cfg = await getDmsConfig(env, owner);
   if (cfg.autonomy_paused) {
     await logObedience(env, owner, "PLAN_STEP_PAUSED", step.priority, "BLOCK", "PAUSED", {
-      commandHash: planId, evidence: { reason: "autonomy_paused" },
+      commandHash: planId, evidence: { reason: "autonomy_paused", verdict: "deny" },
     });
     return { executed: false };
   }

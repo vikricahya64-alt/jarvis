@@ -29,6 +29,7 @@ import { Env, statAgentTasksRecent } from "./db";
 import { llmRespond } from "./ai";
 import { isAutonomyPaused } from "./command_hierarchy";
 import { BUG_PATTERNS } from "./identity";
+import { type Gate } from "./verdict";
 
 // Evidence-warrant gate: an insight must rest on at least this many supporting
 // episodic memories before the agent may act on it (phantom-guardrail guard).
@@ -444,6 +445,19 @@ async function categoryReflectionSignals(
  *  shows stability (>=2 approvals, zero corrections) in the last 14 days —
  *  the ed-to-correct negative signal would otherwise decay them. Returns how
  *  many insights got validated. */
+
+/** PURE: klasifikasi kestabilan sebuah insight dari confidence-nya, sesuai
+ *  threshold yang dipakai pipeline (promosi ≥ 0.75, sweep < 0.3):
+ *    "allow"   → layak dipromosikan (high confidence).
+ *    "deny"    → layak dinonaktifkan (sweep; confidence sangat rendah).
+ *    "unknown" → zona tengah: bukti belum cukup — jangan dipromosikan ATAU
+ *                dinonaktifkan; biarkan menunggu validasi tambahan. */
+export function classifyInsightStability(confidence: number): Gate {
+  if (confidence >= 0.75) return "allow";
+  if (confidence < 0.3) return "deny";
+  return "unknown";
+}
+
 export async function validateInsightsViaStability(env: Env, now = Date.now()): Promise<number> {
   try {
     const signals = await categoryReflectionSignals(env, now);
