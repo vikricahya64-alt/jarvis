@@ -18,7 +18,7 @@ name: Deploy Worker to Cloudflare
 # worker (verified byte-consistent with live 2026-09-17, version m9-v11.51).
 # Auto-deploy fires on push to main that touches cf/** (or this workflow), so a
 # README/SUMMARY-only commit never deploys a stale worker. The D1 "migrations
-# apply" step is intentionally absent: migrations 0001–0018 are applied live
+# apply" step is intentionally absent: migrations 0001–0019 are applied live
 # via `wrangler d1 execute --file`, and `migrations apply` would try to
 # CREATE_EXISTING tables and fail. Manual `workflow_dispatch` still available
 # for emergency/diagnostic deploys.

@@ -27,7 +27,7 @@ import { generateMorningBriefing, runEvolutionLoop, runInsightLifecycle } from "
 import { runGapUpgradeLoop } from "./lib/gap_upgrade";
 import { tickAutonomy } from "./lib/maestro";
 import { syncAllSessions } from "./lib/context_manager";
-import { runErrorHealLoop } from "./lib/error_monitor";
+import { runErrorHealLoop, recordError } from "./lib/error_monitor";
 import { runConfigOptimization } from "./lib/config_optimizer";
 import { runDeploySafetyLoop } from "./lib/deploy_safety";
 import { runRecoveryLoop } from "./lib/recovery_loop";
@@ -200,6 +200,15 @@ env: env.APP_ENV ?? "unknown",
         // NEVER silent: any internal exception still tells the owner what
         // happened instead of dropping their message without a trace.
         await notifyOwnerFailure(env, update);
+        // Feed the heal loop: an incident worth storing is an incident that
+        // gets scanned by runErrorHealLoop (PENDING_FIX) and counted in the
+        // deploy-safety pattern analysis.
+        await recordError(env, {
+          category: "handler_error",
+          message: (e as Error).message,
+          stackTrace: (e as Error).stack,
+          path: url.pathname,
+        });
         res = new Response("ok", { status: 200 }); // always 200 to prevent Telegram retry storm
       }
       return respond(res);
@@ -495,16 +504,16 @@ ts: Date.now(),
     // /dl/:uuid — one-time-ish temp file for the executor (B1 document
     // analysis). The webhook stores the (≤15 MiB) document under a random
     // uuid in CONFIG_KV with a 30-min TTL; the runner downloads it here.
-    // Unguessable uuid + short TTL is the free-tier-safe trade-off.
+    // Access control = unguessable uuid + short TTL (v11.52: no per-file
+    // `s=` secret anymore — it used to ship inside the task text that is
+    // dispatched verbatim to the PUBLIC executor repo).
     if (path.startsWith("/dl/")) {
       const uuid = decodeURIComponent(path.slice(4));
       const stored = await env.CONFIG_KV.get(`dl:${uuid}`).catch(() => null);
       if (!stored) return respond(new Response("not found", { status: 404 }));
       try {
-        const rec = JSON.parse(stored) as { mime?: string; b64?: string; s?: string };
+        const rec = JSON.parse(stored) as { mime?: string; b64?: string };
         if (!rec.b64) return respond(new Response("not found", { status: 404 }));
-        const q = new URL(url).searchParams;
-        if (rec.s && q.get("s") !== rec.s) return respond(new Response("forbidden", { status: 403 }));
         const bytes = Uint8Array.from(atob(rec.b64), (c) => c.charCodeAt(0));
         return respond(new Response(bytes, {
           headers: { "Content-Type": rec.mime ?? "application/octet-stream" },
@@ -635,6 +644,12 @@ ts: Date.now(),
       }
     } catch (e) {
       console.error(`[cron:${cron}] failed`, (e as Error).message);
+      await recordError(env, {
+        category: "cron_error",
+        message: (e as Error).message,
+        stackTrace: (e as Error).stack,
+        path: `cron:${cron}`,
+      });
     } finally {
       await new Promise((r) => setTimeout(r, 0));
       await releaseCronLock(env, lockName, lockToken);

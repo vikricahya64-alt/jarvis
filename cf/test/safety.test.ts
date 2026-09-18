@@ -369,6 +369,11 @@ async function testLevel12Integrity() {
   const ccSrc = readFileSync(new URL("../src/lib/covenant_core.ts", import.meta.url), "utf-8");
   assert.ok(/INSERT INTO covenant_clauses/.test(ccSrc), "signClause must INSERT into covenant_clauses");
   assert.ok(!/UPDATE covenant_clauses/.test(ccSrc), "covenant_clauses must NEVER be UPDATEd");
+  // (3b) Migration 0019 must add clause TEXT storage so the validator judges
+  //     real content, not just a digest; and signClause must store it.
+  const sql19 = readFileSync(new URL("../migrations/0019_covenant_text.sql", import.meta.url), "utf-8");
+  assert.ok(/ADD COLUMN content_text/i.test(sql19), "0019 must add content_text column");
+  assert.ok(/content_text/.test(ccSrc), "covenant_core must reference content_text");
 
   // (4) Identity anchor: epoch-chain helpers exported; continuity is enforced.
   const ia = await import("../src/lib/identity_anchor");
@@ -1735,6 +1740,20 @@ async function testRootComprehension() {
   assert.doesNotThrow(() => comprehend("asdfzxcv qqqqq 12345 !!! 🔥🔥🔥"));
 }
 
+async function testDlSecretLeak() {
+  // (/dl) The per-file download URL is embedded in the dispatched task text,
+  // which lands verbatim in the PUBLIC executor repo. No secret may ride in
+  // that URL, and the /dl endpoint must not depend on a query token.
+  const wh = readFileSync(new URL("../src/workers/telegram_webhook.ts", import.meta.url), "utf-8");
+  assert.ok(/\/dl\/\$\{uuid\}(?![\?&\s])/.test(wh),
+    "dlurl must be the bare uuid with NO ?s= secret");
+  assert.ok(!/dlSecret|\?s=\$\{.*dl/i.test(wh),
+    "telegram_webhook must not craft a secret-bearing dlurl");
+  const idx = readFileSync(new URL("../src/index.ts", import.meta.url), "utf-8");
+  assert.ok(!/rec\.s|q\.get\("s"\)/.test(idx),
+    "/dl handler must not gate on a query token");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -1749,6 +1768,7 @@ async function main() {
   await testUpgradeMigration();
   await testAiFailClosed();
   await testLevel12Integrity();
+  await testDlSecretLeak();
   await testResilienceLayer();
   await testLevel13Evolution();
   await testLevel14Subagents();

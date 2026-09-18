@@ -132,24 +132,24 @@ export async function getVersionHealth(env: Env): Promise<VersionHealth> {
     const active = await getActiveVersion(env);
     if (!active) return defaultHealth;
 
-    // Error count in window
-    const errors = await env.DB.prepare(
-      `SELECT COUNT(*) as count FROM system_errors WHERE timestamp >= ?`,
-    ).bind(windowStart).first<{ count: number }>();
+    // Request + failure counts in window — BOTH from request_log so the
+    // numerator and denominator come from the same sampled population.
+    // (Previously errors came from system_errors while successes were sampled
+    // 1-in-10 from request_log, inflating the perceived rate ~10x and making
+    // the auto-revert advisory fire on healthy traffic.)
+    const reqs = await env.DB.prepare(
+      `SELECT
+         COUNT(*) AS count,
+         SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) AS fails
+       FROM request_log WHERE ts >= ?`,
+    ).bind(windowStart).first<{ count: number; fails: number | null }>();
 
-    // Request count in window (from request_log if exists, else estimate)
-    let requestCount = 0;
-    try {
-      const reqs = await env.DB.prepare(
-        `SELECT COUNT(*) as count FROM request_log WHERE ts >= ?`,
-      ).bind(windowStart).first<{ count: number }>();
-      requestCount = reqs?.count ?? 0;
-    } catch {
-      // request_log might not exist, estimate from errors
-      requestCount = Math.max(10, (errors?.count ?? 0) * 10);
-    }
+    // request_log might not exist (or be empty this early): fall back to a
+    // neutral estimate instead of a fabricated nonzero error rate.
+    const hasData = (reqs?.count ?? 0) > 0;
+    const requestCount = hasData ? (reqs?.count ?? 0) : 0;
+    const errorCount = hasData ? (reqs?.fails ?? 0) : 0;
 
-    const errorCount = errors?.count ?? 0;
     const errorRate = requestCount > 0 ? errorCount / requestCount : 0;
 
     // Average latency (estimate from error timestamps if available)

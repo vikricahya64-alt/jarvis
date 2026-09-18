@@ -1,0 +1,33 @@
+#=============================================================================
+# J.A.R.V.I.S. — Cloudflare Workers global presence + Tailscale Funnel proxy
+#
+# Free tier (no credit card): 100,000 requests/day, 10ms CPU / request.
+# This Worker is intentionally a THIN REVERSE PROXY:
+#   * Detects the user's region via request.cf (country / colo).
+#   * Maps region -> nearest alive Tailscale Funnel node (configured below).
+#   * Proxies the request to that node's public HTTPS funnel host.
+#   * Adds a small circuit-breaker: unhealthy nodes are skipped.
+#
+# Because Cloudflare Workers is request-driven (not a daemon) this is used for
+# PUBLIC access to per-node services (health endpoints, edge APIs), NOT as the
+# dead-man's-switch heartbeat source (the Realme Termux daemon owns that).
+#
+# Deploy:
+#   wrangler deploy                    # after editing wrangler.toml
+#=============================================================================
+name = "jarvis-global-proxy"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# Latency-based routing table. Each node = PUBLIC Funnel HTTPS host for the
+# Tailscale machine serving this region. Add your own funnel hosts here.
+[vars]
+FUNNEL_HOSTS_JSON = "[{\"region\":\"ID\",\"colo\":[\"CGK\",\"SIN\"],\"host\":\"https://your-cgk-funnel-addr.ts.net\"},{\"region\":\"US\",\"colo\":[\"JFK\",\"LAX\",\"IAD\"],\"host\":\"https://your-us-funnel-addr.ts.net\"},{\"region\":\"EU\",\"colo\":[\"FRA\",\"LHR\",\"CDG\"],\"host\":\"https://your-eu-funnel-addr.ts.net\"}]"
+# Global fallback node if no region matches.
+FUNNEL_FALLBACK = "https://your-default-funnel-addr.ts.net"
+# How many consecutive fails before a node is skipped (circuit breaker).
+CBURNS = "3"
+
+[[routes]]
+pattern = "yourdomain.com/*"
+zone_name = "yourdomain.com"
