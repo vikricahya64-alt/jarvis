@@ -208,6 +208,17 @@ export async function tallyFailure(env: Env, path: FailurePath, cls: Operational
   } catch { /* best-effort */ }
 }
 
+/** Parse a KV tally JSON defensively — a corrupt/partial value must never
+ *  crash /status or the ledger. */
+function safeTally(raw: string | null): Record<string, Record<string, number>> {
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Record<string, Record<string, number>>;
+  } catch {
+    return {};
+  }
+}
+
 /** Compact 24h failure roll-up (gate + operational) — feed for the
  *  gap→upgrade loop and the /status diagnostic. Read-only, never throws. */
 export async function readFailureTally(env: Env): Promise<string> {
@@ -217,8 +228,8 @@ export async function readFailureTally(env: Env): Promise<string> {
     env.CONFIG_KV?.get(`gate:${day}`).catch(() => null),
     env.CONFIG_KV?.get(`fail:${day}`).catch(() => null),
   ]);
-  const gate = (gateRaw ? JSON.parse(gateRaw) : {}) as Record<string, Record<string, number>>;
-  const fail = (failRaw ? JSON.parse(failRaw) : {}) as Record<string, Record<string, number>>;
+  const gate = safeTally(gateRaw);
+  const fail = safeTally(failRaw);
   const total = (m: Record<string, Record<string, number>>) =>
     Object.values(m).reduce((a, v) => a + Object.values(v).reduce((x, y) => x + y, 0), 0);
   const gateTotal = total(gate);
@@ -275,8 +286,8 @@ export async function readFailureLedger(env: Env, days = 7): Promise<FailureLedg
       env.CONFIG_KV?.get(`gate:${day}`).catch(() => null),
       env.CONFIG_KV?.get(`fail:${day}`).catch(() => null),
     ]);
-    const gate = (gateRaw ? JSON.parse(gateRaw) : {}) as Record<string, Record<string, number>>;
-    const fail = (failRaw ? JSON.parse(failRaw) : {}) as Record<string, Record<string, number>>;
+    const gate = safeTally(gateRaw);
+    const fail = safeTally(failRaw);
     for (const [path, byClass] of Object.entries(gate)) {
       for (const [cls, n] of Object.entries(byClass)) add(path, cls, n);
     }

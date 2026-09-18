@@ -10,6 +10,17 @@ inputs:
   message:
     description: Telegram failure text (includes workflow label)
     required: true
+  agent-token:
+    description: AGENT_TOKEN repo secret (must be passed by the caller — composite actions cannot read secrets directly)
+    required: true
+  telegram-token:
+    description: TELEGRAM_TOKEN repo secret used only to notify the owner on failure
+    required: false
+    default: ""
+  owner-chat-id:
+    description: OWNER_CHAT_ID repo secret used only to notify the owner on failure
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -19,7 +30,7 @@ runs:
         for i in 1 2 3; do
           status=$(curl -s -o /tmp/cron_body.json -w "%{http_code}" \
             -X POST "https://jarvis-sovereign.vikricahya64.workers.dev/cron/trigger?mode=${{ inputs.mode }}" \
-            -H "x-agent-token: ${{ secrets.AGENT_TOKEN }}" \
+            -H "x-agent-token: ${{ inputs.agent-token }}" \
             -H "Content-Type: application/json" \
             -d '{}')
           if [ "$status" -eq 200 ]; then
@@ -36,8 +47,8 @@ runs:
       if: failure()
       shell: bash
       env:
-        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-        OWNER_CHAT_ID: ${{ secrets.OWNER_CHAT_ID }}
+        TELEGRAM_TOKEN: ${{ inputs.telegram-token }}
+        OWNER_CHAT_ID: ${{ inputs.owner-chat-id }}
       run: |
         if [ -n "$TELEGRAM_TOKEN" ] && [ -n "$OWNER_CHAT_ID" ]; then
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \

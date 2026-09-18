@@ -32,6 +32,7 @@ import {
 import {
   e2bRun, e2bConfigured, e2bStateHint, e2bDecodeConnectFrames, e2bSummary,
 } from "../src/lib/e2b";
+import { SELF_REF_RE, BUG_PATTERNS } from "../src/lib/identity";
 
 async function testE2bRails() {
   // m9-v11.34 PINJAMAN: second borrowed external executor next to opencode
@@ -226,6 +227,52 @@ function testTypoTolerance() {
   assert.ok(GREETING_RE.test(normalizeInput("halooo")), "'halooo' must collapse to 'halo' for greeting");
   assert.ok(GREETING_RE.test(normalizeInput("hellooo pak")), "'hellooo' collapses to 'hello' for greeting");
   assert.ok(GREETING_RE.test(normalizeInput("pagi")), "plain greeting still matches");
+}
+
+function testSelfRefUangTypo() {
+  // REGRESSION (m9-v11.36): "apa uang bisa kamu lakukan" (typo of "yang") was
+  // slipping past SELF_REF_RE and reaching the LLM, which then answered ABOUT
+  // MONEY. Every self-ref variant below must be caught by the single source of
+  // truth regex — including with group "Username:" prefixes and filler words.
+  const catchAll = [
+    "apa yang bisa kamu lakukan",
+    "apa yang bisa kamu bantu",
+    "apa yang bisa kamu buat",
+    "apa uang bisa kamu lakukan",   // typo: uang -> yang (the original bug)
+    "apa uang bisa kamu bantu",
+    "apa uang bisa kamu buat",
+    "apa ya yang bisa kamu lakukan",
+    "apa sih yang bisa kamu lakukan",
+    "apa yang bisa kamu lakukan?",
+    "siapa kamu",
+    "siapa kamu ini",
+    "apa kemampuanmu",
+    "apa fungsi kamu",
+    "what can you do",
+    "who are you",
+    "kamu bisa apa",
+    "kamu bisa ngapain",
+  ];
+  for (const q of catchAll) {
+    assert.ok(SELF_REF_RE.test(q), `SELF_REF_RE must catch: "${q}"`);
+  }
+  // Group-chat "Username:" prefix: the ^-less regex works with or without it,
+  // but the webhook strips the prefix before testing, so this must pass too.
+  assert.ok(SELF_REF_RE.test("Joko: apa uang bisa kamu lakukan"), "group prefix + uang typo must be caught");
+
+  // Negative: legitimate money/business topics must NOT be misrouted to the
+  // hardcoded self-ref reply and must NOT trip the poisoning filter.
+  const legit = [
+    "peluang usaha dari kota kecil dengan modal minim",
+    "cara transfer uang ke orang lain",
+    "strategi investasi saham dan keuangan",
+    "berapa uang yang dibutuhkan untuk memulai bisnis",
+  ];
+  for (const q of legit) {
+    assert.ok(!SELF_REF_RE.test(q), `SELF_REF_RE must NOT catch: "${q}"`);
+  }
+  assert.ok(BUG_PATTERNS.test("apa uang bisa kamu lakukan"), "BUG_PATTERNS flags the classic uang->yang typo for memory poisoning");
+  assert.ok(!BUG_PATTERNS.test("apa yang bisa kamu lakukan"), "BUG_PATTERNS must not flag clean text");
 }
 
 function testCommandWhitespace() {
@@ -2676,6 +2723,7 @@ async function testEmotionDominant() {
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
+  testSelfRefUangTypo();
   testCommandWhitespace();
   testRawCommandArgsPreserved();
   testGroupPrefixStripping();

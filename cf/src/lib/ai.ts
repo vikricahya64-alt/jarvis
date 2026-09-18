@@ -691,6 +691,10 @@ export async function groqSingleShot(
 ): Promise<string | null> {
   const key = env.GROQ_API_KEY;
   if (!key || !opts.user) return null;
+  // Self-referential questions are answered from IDENTITY, never by an LLM.
+  // Keeps every internal borrow (command hierarchy, covenant validator, error
+  // diagnosis, maestro) consistent with llmRespond/searchAndSynthesize.
+  if (SELF_REF_RE.test(opts.user.trim())) return null;
   const messages = opts.messages ?? [
     ...(opts.system ? [{ role: "system" as const, content: opts.system }] : []),
     { role: "user" as const, content: opts.user },

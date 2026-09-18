@@ -14,7 +14,7 @@
 // 5. Kewenangan **covenant** (misalnya: consent, pause) selalu menang
 //=====================================================================
 
-import { Env, getDmsConfig, logObedience } from "./db";
+import { Env, getDmsConfig, logObedience, touchActivity } from "./db";
 import { validateActionAgainstCovenant } from "./covenant_core";
 import { groqSingleShot } from "./ai";
 
@@ -264,24 +264,6 @@ async function setStepStatus(env: Env, stepId: string, status: string): Promise<
   await env.DB.prepare(
     `UPDATE plan_steps SET status = ?, executed_at = CASE WHEN ? = 'completed' THEN ${Date.now()} ELSE NULL END WHERE id = ?`,
   ).bind(status, status, stepId).run();
-}
-
-/** Touch activity (D1 helper untuk DMS dan logging). */
-async function touchActivity(env: Env, owner: number, source: string): Promise<void> {
-  const now = Date.now();
-  await env.DB.prepare(
-    `INSERT INTO user_activity (owner_id, last_interaction, last_heartbeat, source, updated_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(owner_id) DO UPDATE SET
-       last_interaction = excluded.last_interaction,
-       last_heartbeat = excluded.last_heartbeat,
-       source = excluded.source,
-       updated_at = excluded.updated_at`,
-  ).bind(owner, now, now, source, now).run();
-
-  await env.DB.prepare(
-    `UPDATE dms_state SET stage='idle', last_interaction=?, updated_at=? WHERE owner_id=?`,
-  ).bind(now, now, owner).run();
 }
 
 /** Ambil semua rencana milik pemilik (untuk respons /plan_status). */

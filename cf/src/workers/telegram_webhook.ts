@@ -1781,16 +1781,21 @@ async function delegateNow(env: Env, from: number, text: string): Promise<string
  *  Photos with a non-command caption are ANSWERED from the image itself;
  *  voice notes are transcribed and, when they carry task intent, delegated. */
 async function understandMedia(env: Env, owner: number, msg: TelegramMessage): Promise<string | null> {
-  const caption = (msg.caption ?? "").trim();
+   const caption = (msg.caption ?? "").trim();
+   // Self-referential captions/photos are answered from IDENTITY (never from a
+   // vision LLM, which would fabricate an identity) — same single source of
+   // truth as the text intercept in handleUpdate.
+   if (caption && SELF_REF_RE.test(caption)) return JARVIS_IDENTITY.selfRefReply;
 
-  if (msg.voice) {
-    const dl = await downloadTelegramFile(env, msg.voice!.file_id);
-    if (dl && "tooLarge" in dl) {
-      return `⚠️ Voice note melebihi batas ${dl.limitMb} MB — kirim versi lebih pendek, atau ketik pesannya.`;
-    }
-    const transcript = dl && "bytes" in dl ? await transcribeVoiceWithWorkersAi(env, bytesToBase64(dl.bytes)) : null;
-    if (!transcript) return null;
-    if (mediaIsTaskIntent(transcript)) return delegateNow(env, owner, transcript);
+   if (msg.voice) {
+     const dl = await downloadTelegramFile(env, msg.voice!.file_id);
+     if (dl && "tooLarge" in dl) {
+       return `⚠️ Voice note melebihi batas ${dl.limitMb} MB — kirim versi lebih pendek, atau ketik pesannya.`;
+     }
+     const transcript = dl && "bytes" in dl ? await transcribeVoiceWithWorkersAi(env, bytesToBase64(dl.bytes)) : null;
+     if (!transcript) return null;
+     if (SELF_REF_RE.test(transcript.trim())) return JARVIS_IDENTITY.selfRefReply;
+     if (mediaIsTaskIntent(transcript)) return delegateNow(env, owner, transcript);
     const ctx: MessageContext = { owner, text: transcript, source: "telegram" };
     const gl = await processIntelligence(env, ctx.owner, ctx.text);
     return gl.text && gl.text.length > 5 ? gl.text : null;
