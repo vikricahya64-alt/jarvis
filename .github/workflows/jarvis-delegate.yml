@@ -3,9 +3,18 @@
 #
 # JARVIS (Cloudflare free tier) can't run arbitrary processes, so heavy
 # digital-work tasks are delegated here: an EPHEMERAL GitHub VM (repo is
-# PUBLIC → Actions minutes UNLIMITED & FREE) installs `opencode` headless
-# and runs it against the SAME OpenRouter provider JARVIS already uses
-# (zero extra cost). Results POST back to /agent/done, which DMs the owner.
+# PUBLIC → Actions minutes UNLIMITED & FREE) installs `hermes-agent`
+# (Nous Research — the self-improving AI agent) headless and runs it
+# against the SAME LLM keys JARVIS already uses (zero extra cost).
+# Results POST back to /agent/done, which DMs the owner.
+#
+# PERSISTENCE (no VPS needed): ~/.hermes — Hermes' memory, sessions and
+# auto-created skills — is cached between runs via actions/cache (private
+# per repo, NOT public git content). Each /tugas run restores the latest
+# state, works, then saves a new state under a fresh run key. This is the
+# difference vs the old `opencode` runner: memory & skills ACCUMULATE
+# across tasks. Guard: never let Hermes persist secrets into memory — the
+# repo artifacts are public and the cache must stay scrubbed anyway.
 #
 # Triggered by the worker via GitHub repository_dispatch ("jarvis-task").
 # Auth: AGENT_TOKEN repo secret (same value as the worker's secret).
@@ -18,7 +27,8 @@ on:
   repository_dispatch:
     types: [jarvis-task]
 
-# Public repo → unlimited minutes; still serialize to avoid resource fights.
+# Public repo → unlimited minutes; still serialize to avoid resource fights
+# (also keeps the Hermes state cache single-writer / coherent).
 concurrency:
   group: jarvis-agent
   cancel-in-progress: false
@@ -26,20 +36,34 @@ concurrency:
 jobs:
   execute:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      # Restore Hermes memory/skills from the previous run (private cache).
+      # Per-run key + restore-keys prefix → always the latest saved state.
+      - name: Restore Hermes state (~/.hermes)
+        id: hermes-cache
+        uses: actions/cache/restore@v4
         with:
-          node-version: 20
+          path: ~/.hermes
+          key: hermes-state-${{ github.run_id }}
+          restore-keys: |
+            hermes-state-
 
-      - name: Install opencode (headless)
+      # Hermes install: non-interactive, no setup wizard, no browser/CUA.
+      # --dir keeps the CODE tree outside ~/.hermes so the cached directory
+      # stays pure DATA (memory/skills/sessions) and never conflicts with a
+      # `git pull` during reinstall. The hermes command lands in ~/.local/bin.
+      - name: Install Hermes Agent (headless)
         run: |
-          npm install -g opencode-ai
-          opencode --version
+          curl -fsSL https://hermes-agent.nousresearch.com/install.sh \
+            | bash -s -- --non-interactive --skip-setup --skip-browser \
+                         --skip-computer-use --dir "$HOME/hermes-agent"
+          export PATH="$HOME/.local/bin:$PATH"
+          hermes --version
 
       # Task text is passed via env var (never glued into a shell string),
       # so owner input can't inject shell commands into the runner.
@@ -52,7 +76,7 @@ jobs:
       # file is pulled down into /tmp (Cloudflare's sandbox can't parse
       # xlsx/pdf/docx well; the ephemeral VM can). The marker is stripped so
       # its per-file secret never reaches prompts/logs, and the resolved path
-      # is appended so opencode knows exactly what to read.
+      # is appended so hermes knows exactly what to read.
       - name: Download lampiran (if any)
         run: |
           URI="$(grep -o '<dlurl:[^>]*>' /tmp/task.txt | head -1 || true)"
@@ -72,7 +96,7 @@ jobs:
             echo "lampiran: none"
           fi
 
-      - name: Run opencode agent
+      - name: Run Hermes agent
         id: exec
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -81,6 +105,7 @@ jobs:
           OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free' }}
         run: |
           set +e
+          export PATH="$HOME/.local/bin:$PATH"
           if [ -n "$GROQ_API_KEY" ]; then
             PROVIDER=groq; MODEL="$GROQ_MODEL"
           elif [ -n "$OPENROUTER_API_KEY" ]; then
@@ -93,12 +118,12 @@ jobs:
           if [ "$PROVIDER" != "unset" ]; then
             # Transient upstream rate-limits possible on shared runner IPs →
             # retry with backoff before giving up. Groq (per-key) is primary.
-            # opencode headless mem-BLOKIR tool-call tanpa persetujuan interaktif.
-            # --dangerously-skip-permissions: input task CUMAN dari owner
+            # hermes chat -q headless mem-BLOKIR tool-call tanpa persetujuan
+            # interaktif → --yolo (auto-approve). Input task CUMAN dari owner
             # (owner_id dicek worker), VM ephemeral & dibuang tiap run → aman.
             code=1
             for attempt in 1 2 3; do
-              opencode run --dangerously-skip-permissions --model "$PROVIDER/$MODEL" "$(cat /tmp/task.txt)" > /tmp/jarvis-out.txt 2>&1
+              hermes chat -q "$(cat /tmp/task.txt)" --yolo --provider "$PROVIDER" -m "$MODEL" > /tmp/jarvis-out.txt 2>&1
               code=$?
               if [ "$code" = "0" ]; then break; fi
               echo "attempt $attempt: $PROVIDER/$MODEL exit=$code -> retry" >&2
@@ -107,6 +132,17 @@ jobs:
           fi
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
+
+      # Save memory/skills back even when the run failed so partial progress
+      # is never lost. continue-on-error: re-running the same run_id would
+      # restore a key that save() then refuses to overwrite — non-fatal.
+      - name: Save Hermes state (~/.hermes)
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.hermes
+          key: hermes-state-${{ github.run_id }}
 
       - name: Archive artifact (commit to repo, public = free)
         id: archive
@@ -118,7 +154,7 @@ jobs:
           mkdir -p artifacts
           cp /tmp/jarvis-artifact.md "artifacts/task_${TASK_ID}.md"
           git add "artifacts/task_${TASK_ID}.md"
-          git -c user.name="${{ github.actor }}" -c user.email="${{ github.actor }}@users.noreply.github.com" commit -q -m "artifact(task_$TASK_ID): opencode execution output" || true
+          git -c user.name="${{ github.actor }}" -c user.email="${{ github.actor }}@users.noreply.github.com" commit -q -m "artifact(task_$TASK_ID): hermes execution output" || true
           git push -q || true
           echo "artifact_url=https://github.com/${{ github.repository }}/blob/main/artifacts/task_${TASK_ID}.md" >> "$GITHUB_OUTPUT"
 
