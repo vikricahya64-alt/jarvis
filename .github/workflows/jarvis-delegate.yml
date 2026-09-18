@@ -106,6 +106,18 @@ jobs:
         run: |
           set +e
           export PATH="$HOME/.local/bin:$PATH"
+          # Hermes ships NO built-in "groq" provider → declare it as a user
+          # provider in ~/.hermes/config.yaml so `--provider groq` resolves
+          # (key read from $GROQ_API_KEY). Replaced each run: Hermes config
+          # prefs are NOT part of the persisted memory/skills state.
+          mkdir -p "$HOME/.hermes"
+          cat > "$HOME/.hermes/config.yaml" <<'CFG'
+          providers:
+            groq:
+              name: groq
+              base_url: https://api.groq.com/openai/v1
+              key_env: GROQ_API_KEY
+          CFG
           if [ -n "$GROQ_API_KEY" ]; then
             PROVIDER=groq; MODEL="$GROQ_MODEL"
           elif [ -n "$OPENROUTER_API_KEY" ]; then
