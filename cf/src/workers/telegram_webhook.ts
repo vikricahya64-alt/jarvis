@@ -338,14 +338,18 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     }
     const base64 = bytesToBase64(dl.bytes);
     const uuid = crypto.randomUUID().replace(/-/g, "");
-    const dlSecret = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+    // v11.52: the URL carries NO secret — a per-file `s=` token used to ship
+    // alongside the URL inside the dispatched task text (which lands in the
+    // PUBLIC executor repo), so it provided zero secrecy while littering a
+    // capability token into public git-backed payloads. Access control is the
+    // unguessable 128-bit uuid + the 30-min KV TTL (single short window).
     try {
-      await env.CONFIG_KV.put(`dl:${uuid}`, JSON.stringify({ mime: dl.mime, b64: base64, s: dlSecret }), { expirationTtl: 1800 });
+      await env.CONFIG_KV.put(`dl:${uuid}`, JSON.stringify({ mime: dl.mime, b64: base64 }), { expirationTtl: 1800 });
     } catch {
       await fire(sendMessage(env, from, "⚠️ Penyimpanan lampiran gagal (KV). Coba lagi."));
       return new Response("ok", { status: 200 });
     }
-    const dlUrl = `${env.WORKER_URL ?? "https://jarvis-sovereign.vikricahya64.workers.dev"}/dl/${uuid}?s=${dlSecret}`;
+    const dlUrl = `${env.WORKER_URL ?? "https://jarvis-sovereign.vikricahya64.workers.dev"}/dl/${uuid}`;
     const text = `Analisis lampiran "${label}". ${instruction} <dlurl:${dlUrl}>`;
     const id = await addAgentTask(env, from, text);
     if (!id) {

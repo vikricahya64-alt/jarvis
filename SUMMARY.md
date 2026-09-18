@@ -125,9 +125,42 @@ lokal `/tmp/opencode/live_vercel` STALE 2026-09-07 — jangan dipakai).
 - **wrangler.toml**: komentar `TELEGRAM_SECRET` dibersihkan; dipastikan live
   menolak webhook tanpa header secret (401) — secret proper, bukan var.
 
+### Sesi 2026-09-18 — Loop self-healing benar-benar beraksi + sekret /dl dihapus + covenant membaca teks
+- **Covenant validator berbasis teks (item 1)**: migrasi `0019_covenant_text.sql`
+  (`ALTER TABLE covenant_clauses ADD COLUMN content_text`) DITERAPKAN ke D1 live
+  (`changed_db:true`). `covenant_core.ts`: `getActiveClauses` kini SELECT
+  alias eksplisit snake_case→camelCase (fix latent: `SELECT *` mengembalikan
+  kolom raw jadi `c.contentHash`/`signedByUser` `undefined` di runtime);
+  `signClause` INSERT menyimpan `content_text`; `validateActionAgainstCovenant`
+  memberi Groq teks klausa asli (fallback digest `id:hash` untuk baris pra-0019
+  agar fail-closed terjaga); `covenantStatusText` menampilkan preview teks.
+  Tes: asersi 0019 + `content_text` di `safety.test.ts` (L12 tetap no-UPDATE).
+- **Loop error-heal hidup (item 2)**: `recordError` (redact PII + klasifikasi +
+  INSERT `system_errors`, tidak pernah throw) dipanggil di catch `/webhook`
+  (`handler_error`) dan catch `scheduled` (`cron_error`) → `runErrorHealLoop`
+  kini punya baris PENDING_FIX untuk diskr, dan `deploy_safety` dapat pola.
+  `getVersionHealth` diperbaiki: errorCount & requestCount sama-sama dari
+  `request_log` (sebelumnya pembilang `system_errors` vs penyebut sample 1/10
+  → rate ~10x ter-inflasi, advisory auto-revert bisa menyala di trafik sehat).
+- **Sekret `/dl` dihapus (item 3)**: URL unduhan tidak lagi membawa `?s=`
+  (token ikut terkirim verbatim ke repo PUBLIC lewat task text).
+  Akses = UUID 128-bit + TTL 30 menit; handler `/dl` tanpa token query.
+  Tes `testDlSecretLeak` (webhook tak boleh membuat URL ber-secret; index tak
+  bergantung token).
+- **Vercel Python leg masuk repo (item 4)**: snapshot `vercel-leg/`
+  (api/utils/scripts/tests/tools/data/deploy/supabase/termux + Dockerfile,
+  vercel.json, requirements.txt, fly configs) di-copy dari sandbox (STALE
+  set 2026-09-07 — referensi; deploy live tidak di sini). `cf/` STALE di
+  sandbox TIDAK ikut (worker hidup = `/root/jarvis/cf`). py_compile OK,
+  scan secret bersih (hanya env var). Runtime Vercel paralel jangan diganggu.
+- Status semua 4 item ARGUMENTED teliti di log sesi; typecheck + safety +
+  logic PASS.
+
 ### Findings yang DIDOKUMENTASIKAN (belum difix — butuh migrasi/deploy besar)
-- `covenant_core.ts:112` validator buta terhadap isi klausa (hanya hash);
-  teks klausa tidak disimpan → "validasi covenant" tetap teater.
-- `error_monitor.storeError` tidak dipanggil siapapun → `system_errors` kosong
-  → loop error-heal/auto-revert tak pernah beraksi (desain advisory).
-- `/dl` secret dalam teks tugas yang dikirim ke repo PUBLIC (TTL 30m).
+- ~~`covenant_core.ts:112` validator buta~~ → **FIXED** 2026-09-18 (migrasi 0019
+  + teks disimpan & dibaca; klausa pra-0019 memakai fallback digest).
+- ~~`error_monitor.storeError` tidak dipanggil siapapun~~ → **FIXED** 2026-09-18
+  (`recordError` di-wire ke catch webhook & cron; metrik auto-revert
+  dikonsistensikan dari `request_log`).
+- ~~`/dl` secret dalam teks tugas PUBLIC~~ → **FIXED** 2026-09-18 (URL tanpa
+  token; UUID+TTL 30m; test regresi ditambah).

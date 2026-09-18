@@ -19,6 +19,9 @@ export interface CovenantClause {
   id: string;
   version: number;
   contentHash: string;
+  /** Full clause text stored at signing time (migration 0019). Empty for
+   *  clauses signed before 0019 — validator then falls back to hash-only. */
+  contentText?: string;
   signedByUser: number;
   signedAt: number;
   isActive: number;
@@ -41,11 +44,20 @@ export async function sha256(text: string): Promise<string> {
     .join("");
 }
 
-/** Resolve currently-active covenants = highest version per clause id. */
+/** Resolve currently-active covenants = highest version per clause id. Maps
+ *  D1 snake_case columns to the camelCase interface explicitly — `SELECT *`
+ *  returns raw column names, so unaliased `contentHash`/`signedByUser` would
+ *  be `undefined` at runtime. */
 export async function getActiveClauses(env: Env): Promise<CovenantClause[]> {
   try {
     const { results } = await env.DB.prepare(
-      `SELECT *
+      `SELECT id, version,
+              content_hash  AS contentHash,
+              content_text  AS contentText,
+              signed_by_user AS signedByUser,
+              signed_at     AS signedAt,
+              is_active     AS isActive,
+              created_at    AS createdAt
        FROM covenant_clauses c
        WHERE version = (SELECT COALESCE(MAX(version),0) FROM covenant_clauses c2 WHERE c2.id = c.id)
          AND signed_by_user = 1`,
@@ -56,7 +68,9 @@ export async function getActiveClauses(env: Env): Promise<CovenantClause[]> {
   }
 }
 
-/** Insert a NEW signed covenant version (append-only). Returns version. */
+/** Insert a NEW signed covenant version (append-only). Returns version. The
+ *  clause TEXT is stored (migration 0019) so the validator can judge the real
+ *  content, not just a digest. */
 export async function signClause(env: Env, clauseId: string, clauseText: string): Promise<number | null> {
   try {
     const contentHash = await sha256(clauseText);
@@ -66,9 +80,9 @@ export async function signClause(env: Env, clauseId: string, clauseText: string)
     const version = (existing?.v ?? 0) + 1;
     const res = await env.DB.prepare(
       `INSERT INTO covenant_clauses
-       (id, version, content_hash, signed_by_user, signed_at, is_active, created_at)
-       VALUES (?, ?, ?, 1, ?, 1, ?)`,
-    ).bind(clauseId, version, contentHash, Date.now(), Date.now()).run();
+       (id, version, content_hash, content_text, signed_by_user, signed_at, is_active, created_at)
+       VALUES (?, ?, ?, ?, 1, ?, 1, ?)`,
+    ).bind(clauseId, version, contentHash, clauseText, Date.now(), Date.now()).run();
     return res.meta.last_row_id != null ? version : null;
   } catch (e) {
     console.error("[covenant] signClause failed", (e as Error).message);
@@ -108,8 +122,17 @@ export async function validateActionAgainstCovenant(
   if (clauses.length === 0) {
     return { allowed: true, violatedClauseId: null, reasoning: "Belum ada covenant aktif.", source: "none" };
   }
-  // Build a short clause summary for Groq.
-  const clauseText = clauses.map((c) => `${c.id}:${c.contentHash}`).join("\n");
+  // Build the clause list for Groq from the REAL clause text (post-0019).
+  // Legacy rows without stored text fall back to a hash-only marker so the
+  // validator never silently sees an empty rule list (fail-closed stays on).
+  const clauseText = clauses
+    .map((c) => {
+      const txt = (c.contentText ?? "").trim();
+      return txt
+        ? `- [${c.id}] ${txt}`
+        : `- [${c.id}] (teks tidak tersimpan; digest ${c.contentHash.slice(0, 8)}…)`;
+    })
+    .join("\n");
 
   const key = env.GROQ_API_KEY;
   if (!key) {
@@ -160,8 +183,10 @@ export async function covenantStatusText(env: Env): Promise<string> {
   if (clauses.length === 0) {
     return "📜 *Covenant*: belum ada klausa aktif. Profil masih tanpa ikatan memberi — J.A.R.V.I.S. tetap fail-closed terhadap aksi non-whitelist.";
   }
-  const lines = clauses.map((c) =>
-    `• \`${c.id}\` v${c.version} · SHA256:${c.contentHash.slice(0, 8)}… · ditandatangani ${new Date(c.signedAt).toISOString()}`,
-  );
+  const lines = clauses.map((c) => {
+    const txt = (c.contentText ?? "").trim();
+    const preview = txt ? txt.slice(0, 60) + (txt.length > 60 ? "…" : "") : "(teks lama, tanpa isi tersimpan)";
+    return `• \`${c.id}\` v${c.version} · ${preview.replace(/\s+/g, " ")} · SHA256:${c.contentHash.slice(0, 8)}…`;
+  });
   return `📜 *Covenant aktif* (${clauses.length})\n\n${lines.join("\n")}`;
 }

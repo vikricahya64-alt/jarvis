@@ -187,7 +187,7 @@ async function diagnoseWithGroq(
 /** Store error record in D1. */
 async function storeError(
   env: Env,
-  error: Omit<SystemError, "id" | "createdAt" | "updatedAt">,
+  error: Omit<SystemError, "id" | "timestamp" | "createdAt" | "updatedAt">,
 ): Promise<string> {
   const id = `err_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const now = Date.now();
@@ -203,6 +203,35 @@ async function storeError(
     ).run();
   } catch { /* availability */ }
   return id;
+}
+
+/**
+ * Public ingestion point for the error-heal/deploy-safety loops. PII-redacts,
+ * classifies, and stores an incident in system_errors. Best-effort, never
+ * throws. Wired into the worker's top-level catch paths (webhook handler,
+ * cron dispatch) so the heal loop actually has rows to scan.
+ */
+export async function recordError(
+  env: Env,
+  opts: {
+    category: string;
+    message: string;
+    stackTrace?: string;
+    path?: string;
+    severity?: SystemError["severity"];
+  },
+): Promise<string> {
+  const message = redactPII(String(opts.message ?? "").slice(0, 800));
+  const stackTrace = redactPII(String(opts.stackTrace ?? "").slice(0, 2000));
+  const context = redactPII(String(opts.path ?? "").slice(0, 400));
+  return storeError(env, {
+    severity: opts.severity ?? classifySeverity(message, context),
+    category: opts.category,
+    message,
+    stackTrace,
+    status: "PENDING_FIX",
+    context,
+  });
 }
 
 /** Update error status after fix attempt. */
