@@ -58,6 +58,24 @@ const OPENROUTER_DEEP_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
 const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models/";
 const GEMINI_FREE_MODEL = "gemma-4-31b-it";
 
+// Google Antigravity — managed agent (last-resort tier). Not a chat model: one
+// Interactions API call spins up an agentic loop (reasoning → tool/sandbox use)
+// inside Google's sandbox, so it can carry its OWN web-coded grounding even
+// when every plain-text provider is down. It rides the free Gemini API key.
+//   1. Agent/model/budget are overridable via env (defaults pinned to free
+//      preview forms; verified 2026-09-25 on ai.google.dev).
+//   2. Deliberately LAST in the cascade: an agentic run is slow + token-hungry
+//      (100k–3M tokens), so it must never front-run cheap single-shot tiers.
+//   3. ALWAYS the direct Google endpoint — the Cloudflare AI Gateway's
+//      google-ai-studio route does not expose /v1beta/interactions, so routing
+//      Antigravity through the gateway would kill the fallback.
+//   4. Fail-closed: timeout under the worker budget, single attempt, null on
+//      any error so the caller degrades to its graceful canned reply.
+const ANTIGRAVITY_API = "https://generativelanguage.googleapis.com/v1beta";
+const ANTIGRAVITY_AGENT = "antigravity-preview-09-2026";
+const ANTIGRAVITY_MODEL = "gemini-3.8-flash";
+const ANTIGRAVITY_MAX_TOKENS = 12000;
+
 // Shared fallback system prompt when buildConversationMessages fails (used by all providers).
 // Uses the single source of truth from identity.ts.
 const FALLBACK_SYS = JARVIS_IDENTITY.fallbackPrompt;
@@ -942,6 +960,148 @@ export async function geminiRespond(
   return null;
 }
 
+/** Defensive text extraction from an Interactions API response (the
+ *  `Interaction` object for an agent run). Accepted shapes (confirmed on
+ *  ai.google.dev 2026-09-25):
+ *   - `outputText` (modern SDK convenience field, REST camelCase)
+ *   - `output` → Content (`{ parts:[{ text }] }` or legacy `{ text }`)
+ *   - `outputs[]` (deprecated Content array) — last non-empty wins
+ *   - last `steps[]` entry's `outputText` / `modelOutput` / `text`
+ *  Status-gated fail-closed: explicit `failed`/`cancelled`/`error` → null so a
+ *  dead agent can never leak an error blob to the owner; `completed`/
+ *  `incomplete`/absent status still yields the (possibly partial) answer,
+ *  which the caller's truncation repair tidies. Pure + deterministic, tested
+ *  without any network. */
+export function extractInteractionText(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  const status = typeof d.status === "string" ? d.status.toLowerCase() : "";
+  if (status === "failed" || status === "cancelled" || status === "canceled" || status === "error") return null;
+
+  const readParts = (content: unknown): string | null => {
+    if (!content || typeof content !== "object") return null;
+    const c = content as Record<string, unknown>;
+    if (typeof c.text === "string" && c.text.trim()) return c.text.trim();
+    if (Array.isArray(c.parts)) {
+      const texts: string[] = [];
+      for (const p of c.parts) {
+        if (p && typeof p === "object" && typeof (p as Record<string, unknown>).text === "string") {
+          const t = ((p as Record<string, unknown>).text as string).trim();
+          if (t) texts.push(t);
+        }
+      }
+      if (texts.length) return texts.join("\n");
+    }
+    return null;
+  };
+
+  if (typeof d.outputText === "string" && d.outputText.trim()) return d.outputText.trim().slice(0, 8000);
+  const asOutput = readParts(d.output);
+  if (asOutput) return asOutput.slice(0, 8000);
+  if (Array.isArray(d.outputs)) {
+    for (let i = d.outputs.length - 1; i >= 0; i--) {
+      const t = readParts(d.outputs[i]);
+      if (t) return t.slice(0, 8000);
+    }
+  }
+  if (Array.isArray(d.steps)) {
+    for (let i = d.steps.length - 1; i >= 0; i--) {
+      const step = d.steps[i];
+      if (!step || typeof step !== "object") continue;
+      const s = step as Record<string, unknown>;
+      const t = typeof s.outputText === "string" && s.outputText.trim()
+        ? s.outputText.trim()
+        : readParts(s.modelOutput) ?? readParts(s.text);
+      if (t) return t.slice(0, 8000);
+    }
+  }
+  return null;
+}
+
+/** Google Antigravity generative response (managed agent, Interactions API) —
+ *  LAST-resort resilience tier. Mirrors geminiRespond's shape: reuses the same
+ *  key ring (a dedicated ANTIGRAVITY_API_KEY first, then the GEMINI key
+ *  rotations), the ONE prebuilt message build, and the same breaker/retry/
+ *  token-ledger rails. Returns null on any failure (fail-closed).
+ *
+ *  Unlike the single-shot tiers this is an AGENTIC run: the JARVIS persona +
+ *  rails + search evidence travel as `system_instruction` (the agent's
+ *  standing orders), the conversation turns become `input`, and the agent may
+ *  itself run code / browse the web inside Google's sandbox. A bounded
+ *  `max_total_tokens` budget guarantees a runaway loop can never drain the
+ *  free-tier quota or blow the worker wall-clock budget. */
+export async function antigravityRespond(
+  env: Env,
+  userText: string,
+  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
+): Promise<string | null> {
+  const keys = [env.ANTIGRAVITY_API_KEY, env.GEMINI_API_KEY, env.GEMINI_API_KEY_BACKUP, env.GEMINI_API_KEY_SECONDARY].filter(
+    (k): k is string => Boolean(k),
+  );
+  if (keys.length === 0) return null;
+  const context = opts.context ?? [];
+
+  const messages = opts.prebuiltMessages ?? await buildConversationMessages(
+    env,
+    Number(env.OWNER_TELEGRAM_ID),
+    userText,
+    opts.contextIsEnriched && context.length > 0
+      ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
+      : { topic: opts.topic, extraContext: context.length > 0 ? context : undefined, skipUserMessage: opts.skipUserMessage },
+  ).catch(() => buildFallbackMessages(context, userText));
+
+  const systemMsg = messages.find((m) => m.role === "system")?.content ?? "";
+  const conversation = messages
+    .filter((m) => m.role !== "system")
+    .map((m) => `${m.role}: ${m.content}`)
+    .join("\n\n");
+  if (!conversation.trim()) return null;
+
+  const agent = env.ANTIGRAVITY_AGENT || ANTIGRAVITY_AGENT;
+  const model = env.ANTIGRAVITY_MODEL || ANTIGRAVITY_MODEL;
+  const maxTotalTokens = Number(env.ANTIGRAVITY_MAX_TOKENS) > 0 ? Number(env.ANTIGRAVITY_MAX_TOKENS) : ANTIGRAVITY_MAX_TOKENS;
+
+  for (const apiKey of keys) {
+    let reply: string | null = null;
+    const ok = await withResilience(env, "antigravity", 0, async (timeoutMs) => {
+      const res = await fetchWithTimeout(`${ANTIGRAVITY_API}/interactions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          agent,
+          input: conversation.slice(0, 12_000),
+          environment: "remote",
+          ...(systemMsg ? { system_instruction: systemMsg.slice(0, 8000) } : {}),
+          agent_config: {
+            type: "antigravity",
+            model,
+            max_total_tokens: maxTotalTokens,
+          },
+        }),
+      }, timeoutMs);
+      if (!res.ok) return { ok: false, status: res.status };
+      const data = (await res.json()) as Record<string, unknown>;
+      const out = extractInteractionText(data);
+      if (!out) return { ok: false, status: res.status };
+      reply = isLikelyTruncated(out) ? repairTruncatedReply(out) : out;
+      const usage = (typeof data.usage === "object" && data.usage !== null ? data.usage : {}) as Record<string, unknown>;
+      const total = typeof usage.total_tokens === "number" ? (usage.total_tokens as number)
+        : typeof usage.totalTokens === "number" ? (usage.totalTokens as number) : 0;
+      const inTok = typeof usage.prompt_token_count === "number" ? (usage.prompt_token_count as number)
+        : total > 0 ? Math.floor(total * 0.5) : estimateTokens(conversation);
+      const outTok = typeof usage.candidates_token_count === "number" ? (usage.candidates_token_count as number)
+        : total > 0 ? Math.ceil(total * 0.5) : estimateTokens(reply);
+      void trackTokenUsage(env, "antigravity", inTok, outTok, { estimated: total === 0 }).catch(() => {});
+      return { ok: true, status: res.status };
+    });
+    if (ok && reply) return reply;
+  }
+  return null;
+}
+
 /** Cloudflare Workers AI — free edge inference, no API key needed.
  *  Uses the AI binding (env.AI) from wrangler.toml. OpenAI-compatible
  *  via env.AI.run() or direct fetch to the CF AI endpoint.
@@ -1009,18 +1169,21 @@ export async function workersAiRespond(
 }
 
 /** Generative LLM dispatch with Workers AI → Groq → NVIDIA NIM → OpenRouter →
- *  Gemini resilience ordering. Returns the first provider that answers, or null
- *  if all fail. Source tells the caller which provider carried the response.
- *  Builds conversation messages ONCE and shares across all providers.
- *  Because this is the single door back to the LLM, adding NVIDIA NIM here
- *  gives every JARVIS capability (chat, research, translate, prompt-master,
- *  context7, subagents, evolution, design) access to NVIDIA's hosted free
- *  models and tool calling — "plugin" access to all tools from one point. */
+ *  Gemini → Antigravity resilience ordering. Returns the first provider that
+ *  answers, or null if all fail. Source tells the caller which provider carried
+ *  the response. Builds conversation messages ONCE and shares across all
+ *  providers. Because this is the single door back to the LLM, adding NVIDIA
+ *  NIM here gives every JARVIS capability (chat, research, translate,
+ *  prompt-master, context7, subagents, evolution, design) access to NVIDIA's
+ *  hosted free models and tool calling — "plugin" access to all tools from one
+ *  point. Antigravity is the LAST tier (an agentic, slow, token-hungry run), so
+ *  it only fires when every cheap single-shot provider has already failed —
+ *  the heavy artillery that can still ground an answer via its own sandbox. */
 export async function llmRespond(
   env: Env,
   userText: string,
   opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; systemOverride?: string; deep?: boolean } = {},
-): Promise<{ reply: string | null; source: "workers_ai" | "groq" | "nvidia_nim" | "openrouter" | "gemini" | "self_ref" | null }> {
+): Promise<{ reply: string | null; source: "workers_ai" | "groq" | "nvidia_nim" | "openrouter" | "gemini" | "antigravity" | "self_ref" | null }> {
   // SELF-REFERENTIAL INTERCEPT — the brain's first and most important guard.
   // If the input asks "who are you" or "what can you do", answer directly from
   // the identity's single source of truth. NEVER call an external LLM for this,
@@ -1053,7 +1216,10 @@ export async function llmRespond(
 
   // Provider cascade with circuit-breaker awareness (free-tier smoothing).
   // Default: Groq (free, strong model) → Workers AI (free edge) → NVIDIA NIM
-  // (hosted free trial) → OpenRouter (free models) → Gemini (free last-resort).
+  // (hosted free trial) → OpenRouter (free models) → Gemini (free last-resort)
+  // → Antigravity (agentic heavy artillery, LAST — slow by nature, so it only
+  // runs when every cheap single-shot provider has failed; it can still ground
+  // a research answer via its own web-coded sandbox).
   // Quality first: the owner wants answers that read like a person, so the
   // best free conversational model speaks first; Workers AI remains an
   // unlimited resilience backstop. Each addition shares the SAME message
@@ -1067,7 +1233,7 @@ export async function llmRespond(
   // (fast-fail) instead of burning an HTTP attempt + latency; its cooldown
   // will reopen it later automatically via half-open probing. D1 reads only
   // happen when the breaker has not been consulted recently (KV warm cache).
-  const preferred: Array<{ p: "workers_ai" | "groq" | "nvidia_nim" | "openrouter" | "gemini"; fn: () => Promise<string | null>; src: "workers_ai" | "groq" | "nvidia_nim" | "openrouter" | "gemini" }> = (
+  const preferred: Array<{ p: "workers_ai" | "groq" | "nvidia_nim" | "openrouter" | "gemini" | "antigravity"; fn: () => Promise<string | null>; src: "workers_ai" | "groq" | "nvidia_nim" | "openrouter" | "gemini" | "antigravity" }> = (
     opts.deep
       ? [
           { p: "openrouter", fn: () => openrouterRespond(env, userText, sharedOpts), src: "openrouter" },
@@ -1075,6 +1241,7 @@ export async function llmRespond(
           { p: "workers_ai", fn: () => workersAiRespond(env, userText, sharedOpts), src: "workers_ai" },
           { p: "nvidia_nim", fn: () => nvidiaNimRespond(env, userText, sharedOpts), src: "nvidia_nim" },
           { p: "gemini", fn: () => geminiRespond(env, userText, sharedOpts), src: "gemini" },
+          { p: "antigravity", fn: () => antigravityRespond(env, userText, sharedOpts), src: "antigravity" },
         ]
       : [
           { p: "groq", fn: () => groqRespond(env, userText, sharedOpts), src: "groq" },
@@ -1082,6 +1249,7 @@ export async function llmRespond(
           { p: "nvidia_nim", fn: () => nvidiaNimRespond(env, userText, sharedOpts), src: "nvidia_nim" },
           { p: "openrouter", fn: () => openrouterRespond(env, userText, sharedOpts), src: "openrouter" },
           { p: "gemini", fn: () => geminiRespond(env, userText, sharedOpts), src: "gemini" },
+          { p: "antigravity", fn: () => antigravityRespond(env, userText, sharedOpts), src: "antigravity" },
         ]
   );
   for (const cand of preferred) {

@@ -11,7 +11,7 @@
 import assert from "node:assert";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
 import { isTranslateCapRequest, matchWebhookPreCapability, capabilityIntent, getCapability, approachForIntent, describeCapabilities } from "../src/lib/capability_registry";
-import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate, trackTokenUsage, detectConfusableTopic } from "../src/lib/ai";
+import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate, trackTokenUsage, detectConfusableTopic, extractInteractionText } from "../src/lib/ai";
 import { recoveryPlan, classifyOperational, budgetedRecovery, tallyFailure, readFailureTally, readFailureLedger, ledgerDayKey } from "../src/lib/failure";
 import { gateVerdict, tallyGate, sanitizeUncitedLinks, normalizeLinkForCompare, isRawDumpText, isRepetitiveText, isLikelyTruncated, repairTruncatedReply } from "../src/lib/verifier";
 import { cleanSubReply, alignAngles, significantTokens } from "../src/lib/subagents";
@@ -751,6 +751,62 @@ function testTopicOverlap() {
     "'bisnis' is a stopword -> empty token set -> NO overlap (avoids false-positive anchoring)");
   assert.strictEqual(topicOverlaps("berbisnis kerajinan", "bisnis kerajinan tangan"), true,
     "shared 'kerajinan' token -> overlap");
+}
+
+function testAntigravityExtraction() {
+  // extractInteractionText: defensive parse of the Interactions API response
+  // (Antigravity last-resort tier). Confirmed shapes + fail-closed status gate.
+  // 1) Modern outputText field.
+  assert.strictEqual(
+    extractInteractionText({ status: "completed", outputText: "Jawaban antigravity." }),
+    "Jawaban antigravity.",
+    "outputText convenience field honored",
+  );
+  // 2) Legacy outputs[] Content array (parts[]).
+  assert.strictEqual(
+    extractInteractionText({ status: "completed", outputs: [{ parts: [{ text: "Bagian satu." }, { text: "Bagian dua." }] }] }),
+    "Bagian satu.\nBagian dua.",
+    "outputs[] Content parts joined",
+  );
+  // 3) Nested output Content (parts[]) wins over an empty outputs[].
+  assert.strictEqual(
+    extractInteractionText({ status: "completed", outputs: [], output: { parts: [{ text: "Dari output." }] } }),
+    "Dari output.",
+    "output.parts read",
+  );
+  // 4) Legacy plain text Content shape.
+  assert.strictEqual(
+    extractInteractionText({ status: "completed", output: { text: "Halo." } }),
+    "Halo.",
+    "legacy text-only Content read",
+  );
+  // 5) The final Step is the tie-breaker when nothing else carries text.
+  assert.strictEqual(
+    extractInteractionText({
+      status: "incomplete",
+      steps: [
+        { modelOutput: { parts: [{ text: "Langkah awal." }] } },
+        { outputText: "Ringkasan final." },
+      ],
+    }),
+    "Ringkasan final.",
+    "last writer step surfaced",
+  );
+  // 6) Fail-closed: failed/cancelled agent runs never leak output.
+  assert.strictEqual(
+    extractInteractionText({ status: "failed", outputText: "Sepertinya ada error." }),
+    null,
+    "failed status -> null (fail-closed)",
+  );
+  assert.strictEqual(
+    extractInteractionText({ status: "cancelled", steps: [{ outputText: "Setengah." }] }),
+    null,
+    "cancelled status -> null",
+  );
+  // 7) Null / junk / empty bodies degrade to null, never throw.
+  assert.strictEqual(extractInteractionText(null), null, "null body -> null");
+  assert.strictEqual(extractInteractionText("junk"), null, "non-object -> null");
+  assert.strictEqual(extractInteractionText({ status: "completed", outputText: "   " }), null, "blank output -> null");
 }
 
 function testTidyVisionReply() {
@@ -2758,6 +2814,7 @@ async function main() {
   testFormatSourceList();
   testJunkSourceFilter();
   testTopicOverlap();
+  testAntigravityExtraction();
   testTidyVisionReply();
   testM6Regressions();
   testResolveFollowUpAnchor();

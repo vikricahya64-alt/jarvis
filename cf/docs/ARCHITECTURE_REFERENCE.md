@@ -168,5 +168,7 @@ tak pernah loop. Outcome final diverifikasi ulang (`gateVerdict`) + ditally.
 - LLM budget agregat: maks 1 panggilan ekstra per recovery; riset mendalam
   ≤6 panggilan total. Provider: Workers AI / Groq (`openai/gpt-oss-120b`) /
   OpenRouter (`qwen/qwen3.6-27b`) / Gemini (`gemma-4-31b-it`) dengan
-  max_tokens berbeda (1600/2200/1800).
+  max_tokens berbeda (1600/2200/1800); Antigravity (`antigravity-preview-09-
+  2026`, Interactions API) sebagai tier agentic terakhir dengan budget
+  `max_total_tokens` terikat.
 - Semua observabilitas KV adalah fire-and-forget (tidak pernah memblok reply).
