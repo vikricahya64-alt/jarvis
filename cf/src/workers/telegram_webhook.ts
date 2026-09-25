@@ -38,6 +38,9 @@ import { processIntelligence } from "../lib/intelligence";
 import {
   connectorsStatus, readFigmaViaVercel, notionViaVercel, notionSearchViaVercel,
 } from "../lib/vercel";
+import {
+  mcpCallTool, mcpLiveToolNames, mcpCommandSummary, mcpClientEnabled,
+} from "../lib/mcp/client";
 
 /** Incoming message context passed to the brain (single source, no legacy
  *  shim in between — the webhook talks to processIntelligence directly). */
@@ -994,6 +997,18 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // unreadable/malformed inputs get a graceful message, never an error.
   if (isConnectorCommand(trimmed)) {
     await handleConnectorCommand(env, r, text);
+    return new Response("ok", { status: 200 });
+  }
+
+  // MCP adapter (client direction) — explicit owner command BEFORE the
+  // compliance pipeline.  /mcp (summary) | /mcp <alias> <tool> [<json>] |
+  // /mcp list <alias> — invokes a tool on an ALLOW-LISTED external MCP server
+  // (MCP_SERVERS secret) and DMs the output. Fail-closed: unknown aliases,
+  // disallowed tools, bad JSON and network failures all return a graceful
+  // message, never a dead "Ok.". The server direction (Jarvis as MCP server)
+  // lives at Worker /mcp with MCP_ACCESS_TOKEN Bearer auth.
+  if (isMcpCommand(trimmed)) {
+    await handleMcpCommand(env, r, text);
     return new Response("ok", { status: 200 });
   }
 
@@ -2308,6 +2323,71 @@ async function handleConnectorCommand(env: Env, from: number, raw: string): Prom
   } catch (e) {
     await fire(sendMessage(env, from,
       `⚠️ Perintah connector gagal: ${String(e).slice(0, 200)}`));
+  }
+}
+
+// MCP adapter commands (client direction) — /mcp, /mcp <alias> <tool> <json>.
+// Invokes tools on ALLOW-LISTED external MCP servers from the MCP_SERVERS
+// secret. Fail-closed on every edge (no allow-list → graceful); never throws.
+// ---------------------------------------------------------------------
+
+/** True when the message is an MCP client command (slash only). */
+function isMcpCommand(trimmed: string): boolean {
+  return trimmed === "/mcp" || /^\/mcp\b/i.test(trimmed);
+}
+
+const MCP_USAGE =
+  "🔌 *Perintah MCP (klien)*:\n" +
+  "• `/mcp` — ringkasan adapter (server + klien)\n" +
+  "• `/mcp list <alias>` — daftar tool server terdaftar\n" +
+  "• `/mcp <alias> <tool> <json>` — panggil tool (args JSON opsional)";
+
+/** Execute MCP client commands. Fail-closed: each error degrades to a
+ *  graceful status message, never a dead "Ok.". */
+async function handleMcpCommand(env: Env, from: number, raw: string): Promise<void> {
+  const trimmed = raw.trim();
+
+  try {
+    if (trimmed === "/mcp" || /^\/mcp\s+(?:status|info)\b/i.test(trimmed)) {
+      await fire(sendMessage(env, from, mcpCommandSummary(env)));
+      return;
+    }
+
+    const lst = trimmed.match(/^\/mcp\s+list\s+(\S+)$/i);
+    if (lst) {
+      const alias = lst[1].trim();
+      const outcome = await mcpLiveToolNames(env, alias);
+      if (!outcome.ok) {
+        await fire(sendMessage(env, from, `⚠️ ${outcome.error ?? "gagal membuka server."}`));
+        return;
+      }
+      const tools = outcome.tools ?? [];
+      const body = tools.length
+        ? tools.map((t) => `• \`${t}\``).join("\n")
+        : "(server tidak mengiklankan tool)";
+      await fire(sendMessage(env, from, `🔧 *${alias}* — tool tersedia (${tools.length}):\n\n${body}`));
+      return;
+    }
+
+    const ex = trimmed.match(/^\/mcp\s+(\S+)\s+(\S+)(?:\s+([\s\S]+))?$/i);
+    if (!ex) {
+      await fire(sendMessage(env, from, MCP_USAGE));
+      return;
+    }
+
+    if (!mcpClientEnabled(env)) {
+      await fire(sendMessage(env, from, "⚠️ Perintah /mcp dinonaktifkan (MCP_ENABLED=0)."));
+      return;
+    }
+
+    const outcome = await mcpCallTool(env, ex[1].trim(), ex[2].trim(), ex[3] ?? "");
+    if (!outcome.ok) {
+      await fire(sendMessage(env, from, `⚠️ ${outcome.error ?? "panggilan gagal."}`));
+      return;
+    }
+    await fire(deliverSmartReply(env, from, outcome.text ?? "(tanpa output)", 800, "mcp"));
+  } catch (e) {
+    await fire(sendMessage(env, from, `⚠️ Perintah MCP gagal: ${String(e).slice(0, 200)}`));
   }
 }
 

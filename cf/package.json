@@ -8,8 +8,13 @@
     "typecheck": "tsc --noEmit",
     "test:safety": "npx tsx test/safety.test.ts",
     "test:logic": "npx tsx test/logic.test.ts",
+    "test:mcp": "npx tsx test/mcp.test.ts",
     "db:migrate": "wrangler d1 migrations apply jarvis",
     "db:local": "wrangler d1 migrations apply jarvis --local"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "^2.1.0",
+    "@modelcontextprotocol/server": "^2.1.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260902.1",

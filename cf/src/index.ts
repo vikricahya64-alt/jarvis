@@ -31,6 +31,7 @@ import { runErrorHealLoop, recordError } from "./lib/error_monitor";
 import { runConfigOptimization } from "./lib/config_optimizer";
 import { runDeploySafetyLoop } from "./lib/deploy_safety";
 import { runRecoveryLoop } from "./lib/recovery_loop";
+import { handleMcpRequest } from "./lib/mcp/server";
 
 const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
 const WORKER_URL = "https://jarvis-sovereign.vikricahya64.workers.dev";
@@ -344,6 +345,17 @@ version: "m9-v11.52",
       if (!authed) return respond(new Response("unauthorized", { status: 401 }));
       const summary = await auditIntegrity(env);
       return respond(Response.json({ ok: true, ts: Date.now(), ...summary }));
+    }
+
+    //------------------------------------------------------------------
+    // MCP ENDPOINT — Jarvis AS an MCP server (adapter layer, not a brain
+    // replacement). Any MCP host can drive the owner's brain over /mcp
+    // with a Bearer token (MCP_ACCESS_TOKEN). Fail-closed ordering lives
+    // in lib/mcp/server.ts: unconfigured → 503, bad token → 401; the SDK's
+    // per-request factory model keeps every exchange stateless.
+    //------------------------------------------------------------------
+    if (path === "/mcp") {
+      return respond(handleMcpRequest(request, env));
     }
 
     //------------------------------------------------------------------

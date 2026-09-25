@@ -150,6 +150,40 @@ tak pernah loop. Outcome final diverifikasi ulang (`gateVerdict`) + ditally.
   kandidat perbaikan per (path, class). Proposisi menunggu resolusi — tidak
   auto-merge (HALT).
 
+### 4.5 MCP adapter — kontrak dua arah (`src/lib/mcp/*`)
+
+MCP (Model Context Protocol, spek 2026-07-28 stateless) = **lapisan adapter di
+atas otak**, bukan pengganti portal. Prinsip:
+- Brain tetap satu: seluruh akses dari luar ke otak lewat `processIntelligence`
+  (owner-framed), TIDAK ada tool MCP yang mengekspos kredensial internal
+  (VERCEL_CONNECTOR_TOKEN / GITHUB_TOKEN / kunci LLM) — hanya jalur brain yang
+  sudah digate + status env.
+- **Server** (`server.ts`): `createMcpHandler` dengan `legacy: "stateless"`
+  → factory PER-REQUEST (SDK memanggil factory tiap request; pemegang handler
+  harus menyetel `legacy`) → tidak ada state tersisa antar-request.
+  Auth Bearer fail-closed: `MCP_ACCESS_TOKEN` kosong → 503, salah → 401.
+  Tools: `jarvis_ask` (cap 1000 char → `processIntelligence`), `memory_search`,
+  `memory_save` (→ `rememberMemorySmart`), `connectors_status`, `jarvis_status`.
+  Error tool = `{ content, isError: true }` (client menamai `isError`, tidak
+  pernah `false` — uji memakai `assert.notStrictEqual(isError, true)`).
+- **Client** (`client.ts`): seam `McpChannelFactory` disuntik untuk test
+  InMemoryTransport; channel live = `Client` SDK `versionNegotiation {mode:"auto"}`,
+  nonce `listMaxPages`, `StreamableHTTPClientTransport` dengan `authProvider`
+  (meng-ABORT token bila server menolak) + `fetch` bounded via `AbortController`
+  (`MCP_SERVER_TIMEOUT_MS`). Teardown: `registerSession.terminateSession()` lalu
+  `client.close()`.
+- **Rails fail-closed** (`config.ts`): alias `[a-z0-9][a-z0-9_-]*`, ≤8, URL
+  wajib `https://`, `tools` per-server = allow-list deny-by-default, semua
+  penolakan terjadi SEBELUM jaringan (diuji dengan factory counting: 0 open).
+  `parseMcpServers` → JSON malformed/tidak-array = nol server. `MCP_ENABLED="0"`
+  nonaktif (bukan deny) — seleksi disimpan untuk audit owner via `/mcp`.
+- **Titik masuk** di webhook = command eksplisit pre-cascade (`/mcp`), SAMA
+  dengan pola `connectors_status`/`e2b` — sengaja TIDAK masuk registry
+  `CapabilityId`, karena bukan jalur brain (register hanya untuk kontrak otak).
+  Balasan memakai `emitSmartReply(..., "mcp")` (satu pintu keluar, teraudit).
+- Bundling worker + SDK terverifikasi (`wrangler deploy --dry-run`); konvensi
+  uji di `test/mcp.test.ts` (typecheck + `npm run test:mcp`).
+
 ---
 
 ## 5. Cara upgrade NEXT (panduan praktis)
