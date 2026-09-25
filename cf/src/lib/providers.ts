@@ -45,6 +45,7 @@ export async function probeProviders(env: Env): Promise<ProviderProbe[]> {
       { name: "openrouter", configured: env.OPENROUTER_API_KEY !== undefined, live: false, ms: null, detail: "test-env (no outbound)" },
       { name: "nvidia_nim", configured: env.NVIDIA_NIM_API_KEY !== undefined, live: false, ms: null, detail: "test-env (no outbound)" },
       { name: "gemini", configured: env.GEMINI_API_KEY !== undefined, live: false, ms: null, detail: "test-env (no outbound)" },
+      { name: "antigravity", configured: env.ANTIGRAVITY_API_KEY !== undefined || env.GEMINI_API_KEY !== undefined, live: false, ms: null, detail: "test-env (no outbound)" },
       { name: "memory_vec", configured: env.MEM_VEC !== undefined, live: false, ms: null, detail: "test-env (binding only)" },
     ];
     return stub;
@@ -85,6 +86,17 @@ export async function probeProviders(env: Env): Promise<ProviderProbe[]> {
       url: "https://integrate.api.nvidia.com/v1/models",
       headers: { Authorization: `Bearer ${env.NVIDIA_NIM_API_KEY}` },
       note: "list-models",
+    },
+    {
+      // Antigravity (Interactions API) has no cheap dedicated list endpoint and
+      // shares the Gemini host + key ring, so the probe pings the shared
+      // /v1beta/models surface with the effective key — representative of the
+      // same auth + network path the interactions call would take. A dead key
+      // surfaces as dead here exactly like it would for an interaction.
+      name: "antigravity",
+      configured: !!(env.ANTIGRAVITY_API_KEY || env.GEMINI_API_KEY),
+      url: `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(env.ANTIGRAVITY_API_KEY || env.GEMINI_API_KEY || "")}`,
+      note: "list-models (shares Gemini host/key)",
     },
   ];
   const runs = await Promise.allSettled(probes.map(async (p) => {

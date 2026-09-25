@@ -26,7 +26,7 @@ every update flows through one brain (`processIntelligence`):
 | Layer | Service | Role |
 |-------|---------|------|
 | Edge | Cloudflare Worker | Single webhook→intelligence spine (100k req/day) |
-| Brain | Groq → Workers AI (keyless) → OpenRouter → Gemini | LLM cascade |
+| Brain | Groq → Workers AI (keyless) → OpenRouter → Gemini → Antigravity | LLM cascade |
 | Memory | D1 (SQLite) + KV | Long-term memory, tasks, DMS state |
 | Interface | Telegram Bot API | Chat with the owner |
 | Heavy executor | GitHub Actions (VM, ephemeral) | `/tugas` arbitrary tasks, opencode headless |
@@ -67,7 +67,7 @@ jarvis/
 | Layer | Service | Role |
 |-------|---------|------|
 | Edge | Cloudflare Workers + D1 + KV | Hosting, storage, crons |
-| LLM | Groq (key), Workers AI (keyless), OpenRouter, Gemini | Reasoning cascade |
+| LLM | Groq (key), Workers AI (keyless), OpenRouter, Gemini, Antigravity | Reasoning cascade |
 | Text gen keyless | Cloudflare Workers AI (`llama-3.3-70b`) | Zero-key fallback |
 | Image | Cloudflare Workers AI (flux) → Pollinations | Generation |
 | Integrations | Vercel Connector | Figma/Notion/GitHub APIs (token server-side) |

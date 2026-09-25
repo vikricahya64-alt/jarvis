@@ -36,6 +36,15 @@ export interface Env {
   NVIDIA_NIM_MODEL?: string;
   NVIDIA_NIM_DEEP_MODEL?: string;
   CONTEXT7_API_KEY?: string;
+  // Google Antigravity managed-agent tier (Interactions API). Rides the same
+  // Gemini API key ring by default; a dedicated ANTIGRAVITY_API_KEY (free,
+  // Google AI Studio) overrides it so the agent's quota is tracked separately.
+  // ANTIGRAVITY_AGENT / ANTIGRAVITY_MODEL / ANTIGRAVITY_MAX_TOKENS are OPTIONAL
+  // overrides — defaults live in ai.ts (pinned to free preview agents).
+  ANTIGRAVITY_API_KEY?: string;
+  ANTIGRAVITY_AGENT?: string;
+  ANTIGRAVITY_MODEL?: string;
+  ANTIGRAVITY_MAX_TOKENS?: string;
   AGENT_TOKEN?: string;
   GITHUB_TOKEN?: string;
   GITHUB_REPO?: string;

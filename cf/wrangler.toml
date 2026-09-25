@@ -49,6 +49,13 @@ index_name = "memory-vectors"
 [vars]
 OWNER_TELEGRAM_ID = "6812604983"
 APP_ENV = "production"
+# Google Antigravity (last-resort managed-agent tier). Rides the free Gemini
+# key by default —— so no new secret is REQUIRED. OPTIONAL:
+#   * ANTIGRAVITY_API_KEY  (dedicated free key from Google AI Studio, tracked
+#                           separately from Gemini) — set via `wrangler secret put`
+#   * ANTIGRAVITY_AGENT    (default "antigravity-preview-09-2026")
+#   * ANTIGRAVITY_MODEL    (default "gemini-3.8-flash")
+#   * ANTIGRAVITY_MAX_TOKENS (budget bound per run; default 12000)
 # AI Gateway (free): route Groq/OpenRouter/Gemini egress through Cloudflare's
 # gateway for logs + cache + rate-limit. Provisioned 2026-09-10 (jarvis-gw).
 AI_GATEWAY_URL = "https://gateway.ai.cloudflare.com/v1/019eb7798d76ffff19fe8f3527f39d47/jarvis-gw"
