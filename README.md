@@ -31,6 +31,7 @@ every update flows through one brain (`processIntelligence`):
 | Interface | Telegram Bot API | Chat with the owner |
 | Heavy executor | GitHub Actions (VM, ephemeral) | `/tugas` arbitrary tasks, opencode headless |
 | Integrations | Vercel Connector (`jarvis-connector`) | Figma, Notion, GitHub dispatch, image/text |
+| MCP | `@modelcontextprotocol/server` + `client` (2.1.0) | JARVIS as MCP server (`/mcp`) + client (`/mcp` cmd) |
 
 ## 📁 Folder Structure
 
@@ -54,12 +55,16 @@ jarvis/
 
 1. **User sends a Telegram message** → worker webhook receives it.
 2. **`telegram_webhook.ts`** owner-gates it, classifies intent, routes commands
-   (`/tugas`, `/figma`, `/notion`, `/todo`, …) or feeds free text to the brain.
+   (`/tugas`, `/figma`, `/notion`, `/todo`, `/mcp`, …) or feeds free text to the brain.
 3. **`processIntelligence`** (one brain) runs comprehension gate, memory recall,
    research synthesis, LLM cascade, anti-fabrication verification.
-4. **Heavy work** (`/tugas`) is queued in D1 and dispatched via GitHub Actions
+4. **MCP (both ways)** — `/mcp` is a Model Context Protocol adapter:
+   endpoint `/mcp` *exposes* the owner's brain as standard MCP tools (Bearer auth,
+   fail-closed), and the `/mcp` Telegram command *calls* allow-listed external MCP
+   servers as a client (`MCP_SERVERS` secret, deny-by-default per-server tool list).
+5. **Heavy work** (`/tugas`) is queued in D1 and dispatched via GitHub Actions
    VM; the VM commits its artifact and reports back to `/agent/done`.
-5. **Autonomy** runs on 5 cron triggers (DMS, dream cycle, obedience report,
+6. **Autonomy** runs on 5 cron triggers (DMS, dream cycle, obedience report,
    insight lifecycle, reminders) all guarded by a cron lock.
 
 ## 🧰 Tech Stack (all free tier)

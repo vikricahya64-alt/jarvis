@@ -54,6 +54,20 @@ export interface Env {
   E2B_API_KEY?: string;
   E2B_API_URL?: string;
   E2B_TEMPLATE?: string;
+  // MCP (Model Context Protocol) adapter — JARVIS speaks MCP BOTH ways:
+  //   * SERVER: endpoint /mcp exposes the brain to external MCP hosts.
+  //     MCP_ACCESS_TOKEN is a SECRET (`wrangler secret put`) — Bearer auth,
+  //     fail-closed 503 when unset.
+  //   * CLIENT: the /mcp command calls tools on allow-listed servers.
+  //     MCP_SERVERS is a SECRET — JSON array [{alias,url,token?,tools?}],
+  //     fails closed to zero servers on any malformed input.
+  //   * MCP_ENABLED (default "1") disables the /mcp command surface; "0"
+  //     turns it off without removing the allow-list.
+  //   * MCP_SERVER_TIMEOUT_MS (default 20000) bounds one outbound call.
+  MCP_ACCESS_TOKEN?: string;
+  MCP_SERVERS?: string;
+  MCP_ENABLED?: string;
+  MCP_SERVER_TIMEOUT_MS?: string;
   CLARITY_GATE?: string;
   RISK_CONSENT_THRESHOLD?: string;
   CONSENT_TIMEOUT_S?: string;

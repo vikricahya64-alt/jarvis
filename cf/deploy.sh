@@ -44,6 +44,7 @@ secrets() {
     ANTIGRAVITY_API_KEY
     AGENT_TOKEN GITHUB_TOKEN GITHUB_REPO WORKER_URL
     VERCEL_CONNECTOR_TOKEN E2B_API_KEY
+    MCP_ACCESS_TOKEN MCP_SERVERS
   )
   for var in "${vars[@]}"; do
     if [[ -z "${!var:-}" ]]; then

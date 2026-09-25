@@ -202,10 +202,45 @@ Cron L13 (`0 7 * * *`) ditambah dari 3 → 4 (tetap ≤5 dalam budget free-tier)
 memakai cron-lock D1. `ai.ts` menyisipkan preferensi+insight aktif ke konteks LLM
 dan memicu refleksi bounded (fire-and-forget) tanpa mengubah sistem-prompt.
 
+## 5f. MCP adapter — JARVIS bicara MCP dua arah (server + client)
+
+MCP (Model Context Protocol, spek 2026-07-28/stateless) dijadikan **lapisan
+adapter**, bukan pengganti inti: brain tetap `processIntelligence` (single-door,
+owner-framed). JARVIS menjadi **MCP server sekaligus MCP client** pada Worker
+yang sama.
+
+**Arah server** (external host memanggil otak JARVIS):
+- Endpoint `GET/POST /mcp` (HTTP+SSE, stateless). Tools yang diekspos:
+  `jarvis_ask` (ke `processIntelligence`, text ≤1000 chars), `memory_search`,
+  `memory_save`, `connectors_status`, `jarvis_status`.
+- Auth **Bearer**; `MCP_ACCESS_TOKEN` adalah secret (via `deploy.sh secrets`).
+  Tanpa secret → `/mcp` = **503**; token salah → **401** (fail-closed).
+
+**Arah client** (JARVIS memanggil tool server MCP lain):
+- Komando Telegram `/mcp`:
+  ```
+  /mcp                        → status + daftar server aktif (tanpa jaringan)
+  /mcp list <alias>           → daftar tool live di server tsb
+  /mcp <alias> <tool> [<json>] → panggil tool (argumen opsional JSON)
+  ```
+- `MCP_SERVERS` = secret JSON array (allow-list; malformed → nol server):
+  ```json
+  [{"alias":"brain","url":"https://jarvis.mcp.example.com/mcp","token":"…","tools":["memory_save"]}]
+  ```
+  Alias `[a-z0-9][a-z0-9_-]*`, maks 8; URL wajib `https://`. `tools` (opsional) =
+  allow-list per server; tool di luar daftar ditolak SEBELUM jaringan.
+- `MCP_ENABLED` (`wrangler.toml`, default `"1"`) mematikan permukaan `/mcp`.
+  `MCP_SERVER_TIMEOUT_MS` (default 20000) membatasi SATU panggilan keluar.
+- SDC SDK: `@modelcontextprotocol/server@2.1.0` + `@modelcontextprotocol/client@2.1.0`
+  (bundling worker terverifikasi via `wrangler deploy --dry-run`). Semua util
+  memory/panggilan memakai jalur fail-closed (`safeTokenEqual` constant-time).
+  Harap dicatat: Jarvis TIDAK pernah mengekspor kredensial internal (token Vercel/
+  GitHub) sebagai tool MCP; yang diekspor hanya jalur brain yang sudah digate.
+
 ## 6. File penting (cf/)
 
 ```
-wrangler.toml            bindings + vars + cron (4)
+wrangler.toml            bindings + vars + cron (4) + MCP vars
 migrations/0001_init.sql schema D1
 migrations/0002_legacy_inline.sql inline vault payload
 migrations/0003_upgrade.sql task_counters + conversation_log
@@ -227,6 +262,9 @@ src/lib/covenant_core.ts           covenant immutable (signing INSERT-only + val
 src/lib/identity_anchor.ts         rantai epoch identitas temporal
 src/lib/maestro.ts                 maestro otonom (decompose + schedule + execute)
 src/lib/degradation.ts             kuota free-tier → feature disable (non-esensial)
+src/lib/mcp/config.ts              allow-list MCP_SERVERS (fail-closed) + konstanta
+src/lib/mcp/server.ts              JARVIS sebagai MCP server (endpoint /mcp, Bearer auth)
+src/lib/mcp/client.ts              JARVIS sebagai MCP client (adapter panggilan keluar + summary)
 src/lib/monitor.ts                 refresh kuota + status + alert degradasi
 src/lib/dead_mans_switch.ts        state machine D1 (stage transitions)
 src/lib/zero_trust.ts              mTLS/context
@@ -234,4 +272,12 @@ src/lib/db.ts / telegram.ts        helper (telegram.ts = transport KONSUMENNYA H
 .dev.vars.example        contoh secrets
 deploy.sh                wrapper perform setup/deploy/secrets/webhook
 test/safety.test.ts      uji keamanan kritis (npx tsx)
+test/mcp.test.ts         uji MCP dua arah + rails fail-closed (npx tsx; `npm run test:mcp`)
 ```
+
+## 7. Verify cepat
+- `npm run typecheck`          # tsc --noEmit
+- `npm run test:safety`        # uji keamanan kritis
+- `npm run test:logic`         # uji logika webhook/brain
+- `npm run test:mcp`           # uji MCP server+client (InMemory transport)
+- `npx wrangler deploy --dry-run`  # pastikan SDK MCP ter-bundle tanpa error
