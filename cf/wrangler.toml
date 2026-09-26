@@ -14,7 +14,7 @@
 #
 # SECURITY: semua nilai yang bersifat pribadi/rahasia WAJIB diset lewat
 #   `wrangler secret put <NAME>` — JANGAN ditulis hardcoded di file ini.
-#   Yang dipindah ke secret: OWNER_TELEGRAM_ID, AI_GATEWAY_URL (opsional).
+#   Yang dipindah ke secret: AI_GATEWAY_URL (opsional). OWNER_TELEGRAM_ID tetap di [vars] (bukan rahasia).
 #================================================================================
 name = "jarvis-sovereign"
 main = "src/index.ts"
@@ -47,9 +47,11 @@ index_name = "memory-vectors"
 # Secrets (private identifiers, keys, tokens) → `wrangler secret put`.
 #------------------------------------------------------------------------------
 [vars]
-# OWNER_TELEGRAM_ID DIPINDAH ke secret (sebelumnya hardcoded di sini).
-#   Set dengan:  wrangler secret put OWNER_TELEGRAM_ID
-#   (kode membaca env.OWNER_TELEGRAM_ID — sama saja, tidak perlu ubah kode)
+# OWNER_TELEGRAM_ID: ID Telegram pemilik. BUKAN rahasia (ID Telegram bersifat
+# publik/semi-publik), jadi disimpan di [vars] agar owner-gating langsung aktif
+# tanpa perlu set secret. Jika ingin dipindah: `wrangler secret put OWNER_TELEGRAM_ID`
+# lalu hapus baris di bawah ini.
+OWNER_TELEGRAM_ID = "6812604983"
 APP_ENV = "production"
 # Google Antigravity (last-resort managed-agent tier). Rides the free Gemini
 # key by default —— so no new secret is REQUIRED. OPTIONAL:
