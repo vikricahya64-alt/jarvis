@@ -1,12 +1,60 @@
+# --- Dependencies ---
+node_modules/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+
+# --- Environment & secrets ---
 .env
 .env.local
+.env.*
+!.env.example
+!.dev.vars.example
+.dev.vars
+
+# --- Build outputs ---
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# --- Cloudflare / Wrangler ---
+.wrangler/
+wrangler local_state/
+cf/dist/
+
+# --- Vercel ---
 .vercel/
 .vercel
-.env*
 
-# Cloudflare local runtime/mig artifacts
-wrangler local_state/
-.dev.vars
-cf/dist/
+# --- Runtime artifacts (agent task outputs — do not commit) ---
+artifacts/*.md
+artifacts/*.json
+artifacts/*.txt
+!artifacts/.gitkeep
+
+# --- Logs ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- OS / Editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Python legacy (vercel-leg) ---
+vercel-leg/__pycache__/
+vercel-leg/**/__pycache__/
+*.egg-info/
+.pytest_cache/

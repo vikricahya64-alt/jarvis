@@ -1,7 +1,7 @@
 #================================================================================
 # J.A.R.V.I.S. — Level 10/11 Cloudflare-native sovereignty stack
 #
-# ONE Worker handles: Telegram webhook, cron daemons, queue consumer, health.
+# ONE Worker handles: Telegram webhook, cron daemons, health.
 # This keeps the free-tier footprint small (1 worker, ≤5 cron triggers).
 #
 # Free tier realities (verified Jul 2026):
@@ -9,13 +9,12 @@
 #   * Cron: max 5 triggers/account; request-driven, NOT a resident daemon.
 #   * D1: 5GB, 100k reads/day, 1M rows/table.
 #   * R2 (NOT USED — needs a card to activate; payload stays INLINE in D1).
-#   * Queues: 1M messages/month, consumer shares worker limits.
 #   * KV: 1GB, 100k reads + 1k writes/day (config/certs, NOT audit log).
 #   * Groq: ~14.4k req/day free (models vary).
 #
-# C25s edge note: the Realme stays a FULL edge node (terminal + LLM + DMS
-# sensor) feeding the same activity table. Cloudflare D1 is the AUTHORITATIVE
-# DMS decision engine; the worker scripts below are the mission-critical path.
+# SECURITY: semua nilai yang bersifat pribadi/rahasia WAJIB diset lewat
+#   `wrangler secret put <NAME>` — JANGAN ditulis hardcoded di file ini.
+#   Yang dipindah ke secret: OWNER_TELEGRAM_ID, AI_GATEWAY_URL (opsional).
 #================================================================================
 name = "jarvis-sovereign"
 main = "src/index.ts"
@@ -23,7 +22,7 @@ compatibility_date = "2026-06-01"
 compatibility_flags = ["nodejs_compat"]
 
 #------------------------------------------------------------------------------
-# Bindings: D1 (SQLite edge), AI, KV
+# Bindings: D1 (SQLite edge), AI, KV, Vectorize
 #------------------------------------------------------------------------------
 [[d1_databases]]
 binding = "DB"
@@ -44,10 +43,13 @@ binding = "MEM_VEC"
 index_name = "memory-vectors"
 
 #------------------------------------------------------------------------------
-# Vars: non-secret configuration (secrets go in `wrangler secret put`)
+# Vars: non-secret configuration ONLY.
+# Secrets (private identifiers, keys, tokens) → `wrangler secret put`.
 #------------------------------------------------------------------------------
 [vars]
-OWNER_TELEGRAM_ID = "6812604983"
+# OWNER_TELEGRAM_ID DIPINDAH ke secret (sebelumnya hardcoded di sini).
+#   Set dengan:  wrangler secret put OWNER_TELEGRAM_ID
+#   (kode membaca env.OWNER_TELEGRAM_ID — sama saja, tidak perlu ubah kode)
 APP_ENV = "production"
 # Google Antigravity (last-resort managed-agent tier). Rides the free Gemini
 # key by default —— so no new secret is REQUIRED. OPTIONAL:
@@ -57,8 +59,10 @@ APP_ENV = "production"
 #   * ANTIGRAVITY_MODEL    (default "gemini-3.8-flash")
 #   * ANTIGRAVITY_MAX_TOKENS (budget bound per run; default 12000)
 # AI Gateway (free): route Groq/OpenRouter/Gemini egress through Cloudflare's
-# gateway for logs + cache + rate-limit. Provisioned 2026-09-10 (jarvis-gw).
-AI_GATEWAY_URL = "https://gateway.ai.cloudflare.com/v1/019eb7798d76ffff19fe8f3527f39d47/jarvis-gw"
+# gateway for logs + cache + rate-limit. URL berisi Account ID → disarankan
+# pindah ke secret:  wrangler secret put AI_GATEWAY_URL
+# (jika tidak diset, kode fallback ke direct provider tanpa gateway.)
+# AI_GATEWAY_URL = "<set via wrangler secret put AI_GATEWAY_URL>"
 # Telegram webhook secret token (x-telegram-bot-api-secret-token). PROPER
 # SECRET: set via `wrangler secret put TELEGRAM_SECRET` — NEVER as a [vars]
 # entry. The /webhook endpoint rejects any update without this header, so the
