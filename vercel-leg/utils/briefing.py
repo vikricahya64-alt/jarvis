@@ -6,6 +6,7 @@ to-do list, then sends one consolidated Telegram message. Fully offline to
 Groq (no LLM) so it fits the free budget and the 60s window.
 """
 import datetime
+import os
 from zoneinfo import ZoneInfo
 
 from utils import telegram, todos
@@ -54,7 +55,7 @@ def _fetch(city: str = "Jakarta") -> str:
     return "\n".join(lines)
 
 
-_DEFAULT_TG = 6812604983
+_DEFAULT_TG = int(os.environ.get("OWNER_TELEGRAM_ID", "0"))
 
 
 def send_daily_briefing(telegram_id: int = _DEFAULT_TG, city: str = None):
