@@ -1,3 +1,6 @@
+> **⚠️ LEGACY / BACKSTACK** — Folder ini adalah stack lama (Python/Vercel) yang masih ter-deploy sebagai backstop. Stack aktif adalah [`cf/`](../cf/) (Cloudflare Worker). Lihat [`LEGACY.md`](LEGACY.md).
+
+
 # J.A.R.V.I.S. — Personal Industrial Agentic AI
 
 A personal agentic AI assistant built **100% on free-tier services**. It orchestrates
