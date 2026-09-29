@@ -24,7 +24,7 @@ import { isInternalEchoDump, isAdminChaff } from "../src/lib/db";
 import { cmdAlias, isBareUnknownSlashCmd } from "../src/workers/telegram_webhook";
 import { semanticSearchMemory, semanticUpsertMemory } from "../src/lib/memory_vec";
 import { probeProviders } from "../src/lib/providers";
-import { probeBorrowedPlatforms } from "../src/lib/borrowed";
+import { probeBorrowedPlatforms, authLive, errReason } from "../src/lib/borrowed";
 import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation, translateInput, hasDegenerateEcho, isAcknowledgeOnly } from "../src/lib/intelligence";
 import { cleanRecallLine } from "../src/lib/context_manager";
 import {
@@ -1664,6 +1664,35 @@ async function testFreeServiceLayers() {
   assert.ok(bp.every((b) => b.live === false), "borrowed stubs never claim live without a real env");
 }
 
+async function testAuthProbeSemantics() {
+  // AUTH-PROBE CONTRACT: an authenticated platform row (e2b, github) is only
+  // live when the CREDENTIAL WAS ACCEPTED (2xx). 401/403 — the /tugas executor
+  // failing state we saw live as a misleading green "HTTP 403" — must read
+  // down, because the capability behind the probe fails the same way.
+  assert.strictEqual(authLive(200), true, "2xx = credential accepted → up");
+  assert.strictEqual(authLive(401), false, "401 = credential rejected → down");
+  assert.strictEqual(authLive(403), false, "403 = credential rejected → down");
+  assert.strictEqual(authLive(404), false, "404 = resource gone → down");
+  assert.strictEqual(authLive(500), false, "5xx → down");
+  assert.strictEqual(authLive(null), false, "timeout → down");
+
+  // SELF-DIAGNOSING DETAIL: the platform's own reason must surface so /status
+  // distinguishes "token salah" from "rate limit" without guessing.
+  assert.strictEqual(
+    errReason('{"message":"Resource not accessible by personal access token"}'),
+    "Resource not accessible by personal access token", "GitHub message extracted");
+  assert.strictEqual(
+    errReason('{"error":{"message":"Invalid API Key"}}'),
+    "Invalid API Key", "nested error.message extracted");
+  assert.strictEqual(errReason('{"error":"rate limited"}'), "rate limited", "flat error extracted");
+  assert.strictEqual(errReason("line1\n   line2"), "line1 line2", "whitespace collapsed to one line");
+  assert.strictEqual(errReason(""), null, "empty body carries no reason");
+  assert.strictEqual(errReason("   "), null, "blank body carries no reason");
+  assert.strictEqual(errReason("plain text failure"), "plain text failure", "non-JSON body passes through");
+  assert.ok((errReason("y".repeat(500)) ?? "").length <= 90, "reason capped so a status row stays one line");
+  console.log("  auth-probe semantics OK");
+}
+
 async function testAdminChaff() {
   // m9-v11.9: admin/diagnostic chatter is NOT conversation. The bare slash
   // commands (the /audit_status the LLM kept echoing) and the replies that
@@ -1884,6 +1913,7 @@ async function main() {
   await testMenuGuard();
   await testInputDoor();
   await testFreeServiceLayers();
+  await testAuthProbeSemantics();
   await testAdminChaff();
   await testRootComprehension();
   await testTriStateGates();

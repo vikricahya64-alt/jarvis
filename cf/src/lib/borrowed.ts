@@ -140,6 +140,65 @@ async function reach(url: string, headers?: Record<string, string>, expectHttp =
   }
 }
 
+type ReachResult = { status: number | null; msg: string | null };
+
+/** Extract a short human reason from an error body (GitHub/E2B JSON `message`
+ *  or `error`, else raw text). Whitespace-collapsed and capped so a status row
+ *  stays one line. Never throws — a malformed body just yields null. */
+export function errReason(text: string): string | null {
+  const raw = text.slice(0, 2000).trim();
+  if (!raw) return null;
+  let msg = "";
+  try {
+    const j = JSON.parse(raw) as unknown;
+    if (j && typeof j === "object") {
+      const o = j as Record<string, unknown>;
+      if (typeof o.message === "string") msg = o.message;
+      else if (typeof o.error === "string") msg = o.error;
+      else if (o.error && typeof o.error === "object") {
+        const em = (o.error as Record<string, unknown>).message;
+        if (typeof em === "string") msg = em;
+      }
+    }
+  } catch { /* not JSON — fall through to raw text */ }
+  if (!msg) msg = raw;
+  msg = msg.replace(/\s+/g, " ").trim();
+  return msg.length > 90 ? `${msg.slice(0, 89)}…` : msg;
+}
+
+/** Like reach(), but also captures the platform's own error message on 4xx/5xx
+ *  so /status is SELF-DIAGNOSING (which it never could be with a bare status
+ *  code): "token ditolak" vs "rate limit" vs "gangguan" is in the detail. */
+async function reachMsg(url: string, headers?: Record<string, string>): Promise<ReachResult> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { headers, signal: ctrl.signal });
+    if (res.status < 400) return { status: res.status, msg: null };
+    const text = await res.text().catch(() => "");
+    return { status: res.status, msg: errReason(text) };
+  } catch {
+    return { status: null, msg: null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Liveness for an AUTHENTICATED probe: only an ACCEPTED credential (2xx)
+ *  counts as up. 401/403 (rejected) and everything else are down — the
+ *  capability behind the probe (dispatch, sandbox) fails identically, so a
+ *  green row there would be a lie. */
+export function authLive(status: number | null): boolean {
+  return status !== null && status >= 200 && status < 300;
+}
+
+/** One-line detail for an authenticated probe, carrying the platform's reason
+ *  when it rejected the request. */
+function reachDetail(r: ReachResult): string {
+  if (r.status === null) return "timeout/error";
+  return r.msg ? `HTTP ${r.status} — ${r.msg}` : `HTTP ${r.status}`;
+}
+
 /** LIVE probe every probed borrowed platform (cheap, side-effect-free, cached
  *  60s). Never throws — errors become "dead" rows so /status always renders.
  *  Non-production envs return the configured shape with no outbound calls. */
@@ -169,20 +228,21 @@ export async function probeBorrowedPlatforms(env: Env): Promise<BorrowedProbe[]>
     });
   };
 
-  // Executors.
+  // Executors: AUTHENTICATED probes — rejection (401/403) = platform down,
+  // and the platform's own reason lands in /status (self-diagnosing rows).
   const e2b = env.E2B_API_KEY?.trim();
   if (e2b) {
-    const status = await reach("https://api.e2b.app/sandboxes", { "X-API-Key": e2b });
-    ok("e2b", status !== null && status < 500, status !== null ? status : null, status === null ? "timeout/error" : `HTTP ${status}`);
+    const r = await reachMsg("https://api.e2b.app/sandboxes", { "X-API-Key": e2b });
+    ok("e2b", authLive(r.status), r.status, reachDetail(r));
   } else {
     ok("e2b", false, null, "E2B_API_KEY belum dipasang");
   }
   if (env.GITHUB_TOKEN && env.GITHUB_REPO) {
-    const status = await reach(`https://api.github.com/repos/${encodeURIComponent(env.GITHUB_REPO)}`, {
+    const r = await reachMsg(`https://api.github.com/repos/${encodeURIComponent(env.GITHUB_REPO)}`, {
       Authorization: `Bearer ${env.GITHUB_TOKEN}`,
       "X-GitHub-Api-Version": "2022-11-28",
     });
-    ok("github", status !== null && status < 500, status !== null ? status : null, status === null ? "timeout/error" : `HTTP ${status}`);
+    ok("github", authLive(r.status), r.status, reachDetail(r));
   } else {
     ok("github", false, null, "token/repo belum lengkap");
   }
