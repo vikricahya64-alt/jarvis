@@ -15,6 +15,26 @@ OWNER_TELEGRAM_ID=0
 # --- Groq (engines intent classification) ---
 GROQ_API_KEY=groq_sk_placeholder
 
+# --- MCP (Model Context Protocol — JARVIS bicara dua arah) ---
+# Server: Bearer token untuk endpoint /mcp. Tanpa secret ini /mcp selalu 503
+# (fail-closed); token salah → 401. Generate nilai baru:
+#   openssl rand -hex 24
+MCP_ACCESS_TOKEN=replace-with-64-hex-chars
+# Client: allow-list server MCP eksternal yang boleh dipanggil via /mcp
+# (Telegram). JSON array; nilai rusak → nol server (fail-closed).
+# Bentuk entri: {"alias":"brain","url":"https://host/mcp","token":"…",
+#   "tools":["memory_save"]}
+#   - alias   [a-z0-9][a-z0-9_-]*, maks 8 entri
+#   - url     wajib https://
+#   - tools   opsional; TANPA field ini semua tool di server itu DILARANG
+#             (deny-by-default) — isi daftar yang diizinkan
+# Contoh nyata: printf '%s' '[{"alias":"brain","url":"https://jarvis.mcp.example/mcp","token":"…","tools":["memory_save"]}]' \
+#   | wrangler secret put MCP_SERVERS
+MCP_SERVERS=[]
+# Non-secret (sudah ada di wrangler.toml [vars], bukan di sini):
+#   MCP_ENABLED="1"           # "0" mematikan permukaan /mcp di Telegram
+#   MCP_SERVER_TIMEOUT_MS="20000"   # batas SATU panggilan keluar
+
 # --- Tuning (optional, defaults in code) ---
 CLARITY_GATE=0.95
 RISK_CONSENT_THRESHOLD=0.3
