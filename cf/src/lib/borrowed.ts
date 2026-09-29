@@ -240,6 +240,8 @@ export async function probeBorrowedPlatforms(env: Env): Promise<BorrowedProbe[]>
   if (env.GITHUB_TOKEN && env.GITHUB_REPO) {
     const r = await reachMsg(`https://api.github.com/repos/${encodeURIComponent(env.GITHUB_REPO)}`, {
       Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "User-Agent": "jarvis-sovereign",
       "X-GitHub-Api-Version": "2022-11-28",
     });
     ok("github", authLive(r.status), r.status, reachDetail(r));
