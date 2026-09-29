@@ -29,7 +29,7 @@ import { queueStatus, recordTaskCounters, recentContext, auditIntegrity } from "
 import { comprehend, comprehensionNote } from "../lib/comprehension";
 import { probeProviders } from "../lib/providers";
 import { probeBorrowedPlatforms, borrowedStatusLine } from "../lib/borrowed";
-import { extractTopic, parseTranslate, translateText, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, storeResearchAnchor, groqChatCompletionsUrl } from "../lib/ai";
+import { extractTopic, parseTranslate, translateText, generateImagePrompt, generateImage, sniffImageMime, deepReadPage, llmRespond, storeResearchAnchor, groqChatCompletionsUrl, groqSingleShot } from "../lib/ai";
 import { getWeatherText } from "../lib/weather";
 
 import { normalizeInput, isEmptyInput } from "../lib/normalize";
@@ -75,6 +75,7 @@ import {
   auditPhantomRules,
 } from "../lib/evolution";
 import { listSuggestions, resolveSuggestion } from "../lib/predictive";
+import { resolveIntent, isHardCommand, looksLikeCommand, type ResolvedIntent } from "../lib/intent_gate";
 import {
   getGreeting, STATUS, HELP,
 } from "../lib/messages";
@@ -1145,6 +1146,63 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
 
+  // m9-v11.53 — GERBANG INTENT GLOBAL (2-arah, anti-halusinasi). Hanya
+  // menyala untuk input BERBENTUK perintah; dialog biasa keluar di L0 shape
+  // sehingga jalur chat tetap nol-LLM. Empat kemungkinan:
+  //   verified + canonical  -> repair lalu eksekusi (mis. "hapus semua tugas
+  //                            pending" tanpa slash -> /tugas hapus semua
+  //                            pending). Ini yang memperbaiki kelas bug
+  //                            "perintah terverifikasi tak pernah sampai
+  //                            handler".
+  //   verified, tak ada repair -> biarkan ke act() seperti biasa.
+  //   UNVERIFIED             -> klarifikasi. Actions destructive TIDAK pernah
+  //                            dieksekusi dari intent yang tak terverifikasi.
+  const shaped = looksLikeCommand(text);
+  if (shaped) {
+    const resolved: ResolvedIntent = await resolveIntent(env, text, {
+      llm: (e, prompt) => groqSingleShot(e, {
+        label: "groq:intent_verify",
+        user: prompt,
+        model: "openai/gpt-oss-120b",
+        temperature: 0,
+        maxTokens: 200,
+      }),
+    });
+    if (!resolved.verified) {
+      console.log(
+        `[intent_gate] unverified source=${resolved.source} destructive=${resolved.destructive} ` +
+        `text="${text.slice(0, 60)}"`,
+      );
+      await fire(sendMessage(env, r, resolved.clarify ?? 
+        `Perintah itu belum kumertegas. Tulis ulang dengan format yang lebih jelas, ` +
+        `mis. /tugas <pekerjaan> atau /status.`));
+      return new Response("ok", { status: 200 });
+    }
+    if (resolved.source === "verified_repair" && resolved.canonical && !/^\//.test(text.trim())) {
+      // Repair: pesan tak berawalan "/" tapi intent-nya terverifikasi. Kirim
+      // bentuk kanonik ke handler yang sama supaya tak ada jalur kedua.
+      console.log(`[intent_gate] repair intent=${resolved.intent} -> ${resolved.canonical}`);
+      // Konfirmasi kalau destruktif: tak pernah jalan diam-diam. Owner harus
+      // menyebut cakupan eksplisit ("semua"/"pending") dulu — itu isi `args`.
+      const scopeExplicit = resolved.args.some((a) => /^(?:semua|pending|seluruh|all)$/i.test(a));
+      if (resolved.destructive && !scopeExplicit) {
+        await fire(sendMessage(env, r,
+          `⚠️ Itu perintah yang mengubah data. Kirim persis \`${resolved.canonical}\` ` +
+          `kalau memang mau, atau sebutkan dulu cakupannya.`));
+        return new Response("ok", { status: 200 });
+      }
+      await fire(sendMessage(env, r, `🔧 Ku repairing perintah itu jadi \`${resolved.canonical}\`…`));
+      if (resolved.intent === "tugas") {
+        await handleAgentCommand(env, r, resolved.canonical);
+        return new Response("ok", { status: 200 });
+      }
+      // Kapabilitas lain: teruskan ke pipeline normal lewat act() dengan teks
+      // kanonik (tetap satu pintu, tak ada jalur eksekusi terpisah).
+      await act(env, r, normalizeInput(resolved.canonical));
+      return new Response("ok", { status: 200 });
+    }
+  }
+
   // Everything else → compliance pipeline.
   try {
     await act(env, r, text);
@@ -1221,6 +1279,16 @@ export async function resolveParkedResume(
   from: number,
   text: string,
 ): Promise<{ consumed: boolean; capability?: string }> {
+  // m9-v11.53 — GERBANG 2-ARAH (global). Input yang sudah terverifikasi sebagai
+  // perintah (slash ATAU verba destruktif) TIDAK BOLEH dimakan sebagai "jawaban"
+  // intent yang parked. Live bug: "/tugas hapus semua tugas pending" saat
+  // negosiasi masih tertunda → "hapus" cocok resumeWords → pesan jadi jawaban
+  // pertanyaan 1/3, perintah destruktif hilang, JARVIS malah bertanya format
+  // output. Perintah terverifikasi selalu menang atas intent parked; kata  // resume yang lembut ("lanjut"/"ya"/"oke") tetap sampai ke sini lebih dulu.
+  if (isHardCommand(text)) {
+    console.log(`[parked_resume] bypass — input terverifikasi sebagai perintah: "${text.slice(0, 60)}"`);
+    return { consumed: false };
+  }
   for (const spec of CAPABILITY_COMMANDS) {
     const parked = resolveParkedResumeWords(spec, text);
     if (!parked) continue;

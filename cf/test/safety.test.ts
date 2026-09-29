@@ -25,6 +25,10 @@ import { cmdAlias, isBareUnknownSlashCmd } from "../src/workers/telegram_webhook
 import { semanticSearchMemory, semanticUpsertMemory } from "../src/lib/memory_vec";
 import { probeProviders } from "../src/lib/providers";
 import { probeBorrowedPlatforms, authLive, errReason } from "../src/lib/borrowed";
+import {
+  isHardCommand, looksLikeCommand, matchRule, repairIntent, parseVerify,
+  destructiveClarify, INTENT_RULES,
+} from "../src/lib/intent_gate";
 import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation, translateInput, hasDegenerateEcho, isAcknowledgeOnly } from "../src/lib/intelligence";
 import { cleanRecallLine } from "../src/lib/context_manager";
 import {
@@ -32,6 +36,10 @@ import {
 } from "../src/lib/verdict";
 import { detectRelevanceAmbiguity, isRelevantExecutorTask } from "../src/lib/relevance";
 import { classifyInsightStability } from "../src/lib/evolution";
+import {
+  looksLikeCommand, isHardCommand, matchRule, repairIntent, parseVerify,
+  buildVerifyPrompt, resolveIntent, VERIFY_MIN_CONFIDENCE,
+} from "../src/lib/intent_gate";
 
 const FAKE_ENV = {
   CLARITY_GATE: "0.95",
@@ -1128,7 +1136,7 @@ async function testOutputGateFilter() {
   assert.ok(/brainExitRail\(text, inputTopic\)/.test(gateSrc),
     "emitSmartReply must pass inputTopic to brainExitRail");
 
-  //脑ExitRail must use output gate score
+  // ExitRail must use output gate score
   assert.ok(/computeOutputGateScore\(t, inputTopic/.test(gateSrc),
     "brainExitRail must call computeOutputGateScore with output and inputTopic");
 
@@ -1876,6 +1884,108 @@ async function testTriStateGates() {
   console.log("  tri-state gate contract OK");
 }
 
+async function testIntentGate() {
+  // m9-v11.53 — GERBANG INTENT 2-ARAH. Live bug: "/tugas hapus semua tugas
+  // pending" saat negosiasi parked dimakan sebagai "jawaban pertanyaan 1/3",
+  // jadi perintah destruktif hilang dan JARVIS bertanya format output.
+  // Kontrak di sini mengunci TIGA hal: (1) perintah terverifikasi menang atas
+  // parked-resume, (2) intent destruktif tanpa objek TAK PERNAH ditebak,
+  // (3) LLM hanya boleh memilih dari tabel tertutup.
+
+  // (1) PARKED-RESUME BYPASS — perintah verified tak boleh dimakan jawaban.
+  assert.strictEqual(isHardCommand("/tugas hapus semua tugas pending"), true,
+    "slash command = perintah keras → bypass parked-resume");
+  assert.strictEqual(isHardCommand("hapus semua tugas pending"), true,
+    "verba destruktif tanpa slash = perintah keras");
+  // Kata resume yang lembut TIDAK boleh bypass — itu intent parked yang sah.
+  for (const soft of ["lanjut", "ya", "oke", "gas", "lanjutkan"]) {
+    assert.strictEqual(isHardCommand(soft), false,
+      `kata resume "${soft}" harus sampai ke parked-resume, bukan di-bypass`);
+  }
+
+  // (2) ANTI-TEBAK pada intent destruktif.
+  const ambig = repairIntent("hapus semua");
+  assert.strictEqual(ambig, null,
+    "\"hapus semua\" tanpa objek = ambigu → tak boleh ditebak jadi satu kapabilitas");
+  assert.ok(destructiveClarify().includes("/tugas hapus"),
+    "klarifikasi destruktif menyebut opsi nyata");
+  // Dengan objek eksplisit → terverifikasi + Scope terbaca.
+  const repaired = repairIntent("hapus semua tugas pending");
+  assert.ok(repaired && repaired.verified, "noun kapabilitas eksplisit = terverifikasi");
+  assert.strictEqual(repaired?.intent, "tugas", "noun \"tugas\" → kapabilitas tugas");
+  assert.strictEqual(repaired?.destructive, true, "ditandai destruktif");
+  assert.strictEqual(repaired?.source, "verified_repair", "via repair deterministik (0 LLM)");
+  assert.strictEqual(repaired?.canonical, "/tugas hapus semua pending",
+    "canonical membawa verba hapus + cakupan pending");
+  const repairedTodo = repairIntent("hapus catatan");
+  assert.strictEqual(repairedTodo?.intent, "todo",
+    "noun \"catatan\" → todo, bukan tugas (nouns jadi pemisah)");
+  // REGRESSION: canonical WAJIB mempertahankan verba destruktif. "hapus catatan"
+  // → "/todo" polos akan menambah todo BARU, bukan menghapus (live bug yang
+  // ditemukan probe sebelum deploy).
+  assert.ok(repairedTodo?.canonical?.includes("hapus"),
+    `canonical destruktif harus punya verba hapus, dapat "${repairedTodo?.canonical}"`);
+  assert.strictEqual(repairedTodo?.canonical, "/todo hapus",
+    "canonical destruktif = /<slug> hapus <cakupan?>");
+  // Cakupan pending/semua ikut terbawa.
+  const repairedPending = repairIntent("hapus semua tugas pending");
+  assert.strictEqual(repairedPending?.canonical, "/tugas hapus semua pending",
+    "cakukan 'semua pending' ikut terbawa ke canonical");
+
+  // (3) LLM 2-Arah: closed table, fail-closed di luar ambang.
+  const okLlm = parseVerify('{"intent":"status","confidence":0.9,"destructive":false,"args":[]}', "status dong");
+  assert.strictEqual(okLlm.verified, true, "intent di tabel + skor tinggi = terverifikasi");
+  assert.strictEqual(okLlm.intent, "status", "intent diteruskan apa adanya");
+  const lowConf = parseVerify('{"intent":"status","confidence":0.3,"args":[]}', "hm");
+  assert.strictEqual(lowConf.verified, false, "skor < ambang = TAK terverifikasi (fail-closed)");
+  const outside = parseVerify('{"intent":"delete_everything","confidence":0.99,"args":[]}', "wipe semua");
+  assert.strictEqual(outside.verified, false, "intent di luar tabel = TAK terverifikasi");
+  const broken = parseVerify("bukan json sama sekali", "apa nih");
+  assert.strictEqual(broken.verified, false, "balasan rusak = TAK terverifikasi");
+  const dead = parseVerify(null, "apa nih");
+  assert.strictEqual(dead.verified, false, "LLM mati = TAK terverifikasi (bukan tebak)");
+  assert.strictEqual(dead.source, "unverified", "LLM mati tetap di jalur klarifikasi");
+  assert.ok(typeof dead.clarify === "string" && dead.clarify.length > 0,
+    "jalur tak terverifikasi selalu punya klarifikasi — tak pernah output diam");
+
+  // Anti-halusinasi: TIDAK BOLEH ada intent/canonical untuk tak-terverifikasi.
+  for (const r of [lowConf, outside, broken, dead]) {
+    assert.strictEqual(r.canonical, undefined, "tak terverifikasi tak punya perintah kanonik");
+    assert.strictEqual(r.destructive, false, "tak terverifikasi tak boleh ditandai destruktif");
+  }
+
+  // SHAPE GATE: dialog biasa harus keluar di L0 (jalur chat tetap nol-LLM).
+  for (const chat of ["apa kabar", "terima kasih ya", "ceritakan tentang tata kota", "kamu lagi ngapain"]) {
+    assert.strictEqual(looksLikeCommand(chat), false, `dialog biasa bukan perintah: "${chat}"`);
+  }
+  assert.strictEqual(looksLikeCommand("/tugas"), true, "slash = perintah");
+  assert.strictEqual(looksLikeCommand("hapus semua tugas"), true, "verba destruktif = perintah");
+
+  // L1: aturan deterministik, 0 LLM.
+  const rule = matchRule("/tugas hapus semua pending");
+  assert.ok(rule && rule.rule.intent === "tugas", "L1 slash → tugas");
+  assert.strictEqual(rule?.destructive, true, "argumen destruktif terdeteksi di L1");
+  assert.strictEqual(matchRule("/perintah-ngawur"), null, "slash tak dikenal = tak terverifikasi di L1");
+
+  // Tabel tertutup: tiap kapabilitas punya slug + verbs + nouns.
+  for (const r of INTENT_RULES) {
+    assert.ok(r.intent && r.slash.length > 0 && r.verbs.length > 0 && r.nouns.length > 0,
+      `entri tabel intent "${r.intent}" harus lengkap (slug/verbs/nouns)`);
+  }
+  // Slug harus unik — duplikat akan bikin resolve ambigu diam-diam.
+  const slugs = INTENT_RULES.map((r) => r.slash[0]);
+  assert.strictEqual(new Set(slugs).size, slugs.length, "slug kapabilitas harus unik");
+
+  // WIRING: gerbang harus terpasang di webhook (source-scan), kalau tidak,
+  // modul ini hanya kode mati.
+  const hookSrc = readFileSync(new URL("../src/workers/telegram_webhook.ts", import.meta.url), "utf-8");
+  assert.ok(/isHardCommand\(text\)/.test(hookSrc),
+    "resolveParkedResume harus memakai bypass isHardCommand");
+  assert.ok(/resolveIntent\(env, text/.test(hookSrc),
+    "gerbang global harus memanggil resolveIntent sebelum act()");
+  console.log("  intent gate (2-arah, closed table, anti-tebak) OK");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -1914,6 +2024,7 @@ async function main() {
   await testInputDoor();
   await testFreeServiceLayers();
   await testAuthProbeSemantics();
+  await testIntentGate();
   await testAdminChaff();
   await testRootComprehension();
   await testTriStateGates();
