@@ -558,7 +558,12 @@ export async function pendingProposals(
 // references: `memories` + `memories_fts` virtual table with sync triggers.
 // ---------------------------------------------------------------------
 
-/** Store a curated memory (fact/decision/context/person) into the FTS5 index. */
+/** Store a curated memory (fact/decision/context/person) into the FTS5 index.
+ *
+ *  m9-v11.55 — SCOPING PER-USER. `ownerId` WAJIB. Tanpa itu memori akan
+ *  menyimpang ke owner_id=0 (tidak terlihat oleh siapa pun, termasuk
+ *  pemiliknya) — fail-closed yang disengaja: lebih baik memori hilang
+ *  daripada bocor ke user lain. */
 export async function rememberMemory(
   env: Env,
   content: string,
@@ -568,8 +573,11 @@ export async function rememberMemory(
     importance?: number;
     source?: string;
     ttlMs?: number;
-  } = {},
+    /** Pemilik memori. Wajib sejak m9-v11.55. */
+    ownerId: number;
+  },
 ): Promise<void> {
+  if (!opts?.ownerId) return; // fail-closed: tanpa pemilik = jangan simpan
   const now = Date.now();
   const id = (() => {
     try {
@@ -581,8 +589,8 @@ export async function rememberMemory(
   const expires = opts.ttlMs ? now + opts.ttlMs : 0;
   try {
     await env.DB.prepare(
-      `INSERT INTO memories (id, type, content, tags, importance, source, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO memories (id, type, content, tags, importance, source, created_at, expires_at, owner_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       id,
       opts.type ?? "fact",
@@ -592,6 +600,7 @@ export async function rememberMemory(
       opts.source ?? "turn",
       now,
       expires,
+      opts.ownerId,
     ).run();
     // m9-v11.18 SEMANTIC MEMORY: mirror this memory into Vectorize (free) for
     // meaning-based recall. Fire-and-forget — keyword FTS remains the fallback
@@ -600,24 +609,30 @@ export async function rememberMemory(
   } catch { /* availability */ }
 }
 
-/** BM25 keyword retrieval over memories (D1 native FTS5). Returns top k. */
+/** BM25 keyword retrieval over memories (D1 native FTS5). Returns top k.
+ *
+ *  m9-v11.55 — SCOPING PER-USER. `ownerId` wajib: tanpa filter ini, tier
+ *  "user" akan menerima memo pribadi owner di recallnya. Memori tanpa
+ *  pemilik (owner_id = 0) TIDAK pernah dikembalikan ke jalur user. */
 export async function searchMemory(
   env: Env,
   query: string,
-  k = 5,
+  k: number,
+  ownerId: number,
 ): Promise<Array<{ id: string; type: string; content: string; importance: number }>> {
   try {
     const tail = query.trim().replace(/[^\w\s-]/g, " ").slice(0, 60);
     if (!tail) return [];
+    if (!ownerId) return []; // fail-closed: tanpa pemilik = tanpa recall
     const { results } = await env.DB.prepare(
       `SELECT m.rowid, m.id, m.type, m.content, m.importance,
               bm25(memories_fts, 10.0, 5.0, 2.0) AS rank
        FROM memories_fts
        JOIN memories m ON m.rowid = memories_fts.rowid
-       WHERE memories_fts MATCH ?
+       WHERE memories_fts MATCH ? AND m.owner_id = ?
        ORDER BY rank ASC, m.importance DESC
        LIMIT ?`,
-    ).bind(tail, k).all<{ rowid: number; id: string; type: string; content: string; importance: number }>();
+    ).bind(tail, ownerId, k).all<{ rowid: number; id: string; type: string; content: string; importance: number }>();
     const rows = results ?? [];
     // Bump recency/access so consolidation knows which memories stay useful.
     if (rows.length > 0) {
@@ -643,6 +658,7 @@ export async function storeLearnedKnowledge(
   topic: string,
   knowledge: string,
   source = "web_search",
+  ownerId: number,
 ): Promise<void> {
   const content = `[${topic}] ${knowledge}`.slice(0, 2000);
   await rememberMemorySmart(env, content, {
@@ -650,6 +666,7 @@ export async function storeLearnedKnowledge(
     tags: ["learned", topic.toLowerCase().slice(0, 50)],
     importance: 2.5, // High importance for learned knowledge
     source,
+    ownerId,
   });
 }
 
@@ -658,19 +675,21 @@ export async function storeLearnedKnowledge(
 export async function isTopicKnown(
   env: Env,
   topic: string,
-  minImportance = 2.0,
+  minImportance: number,
+  ownerId: number,
 ): Promise<boolean> {
   try {
     const tail = topic.trim().replace(/[^\w\s-]/g, " ").slice(0, 60);
     if (!tail) return false;
+    if (!ownerId) return false; // fail-closed
     const { results } = await env.DB.prepare(
       `SELECT m.rowid, m.importance
        FROM memories_fts
        JOIN memories m ON m.rowid = memories_fts.rowid
-       WHERE memories_fts MATCH ?
+       WHERE memories_fts MATCH ? AND m.owner_id = ?
        ORDER BY bm25(memories_fts, 10.0, 5.0, 2.0) ASC
        LIMIT 1`,
-    ).bind(tail).all<{ rowid: number; importance: number }>();
+    ).bind(tail, ownerId).all<{ rowid: number; importance: number }>();
     return (results?.[0]?.importance ?? 0) >= minImportance;
   } catch {
     return false;
@@ -732,7 +751,9 @@ export async function rememberMemorySmart(
     importance?: number; // override otomatis jika disediakan
     source?: string;
     ttlMs?: number;
-  } = {},
+    /** Pemilik memori. Wajib sejak m9-v11.55 (scoping per-user). */
+    ownerId: number;
+  },
 ): Promise<void> {
   const importance = opts.importance ?? computeImportance(content, opts.type ?? "fact");
   await rememberMemory(env, content, { ...opts, importance });

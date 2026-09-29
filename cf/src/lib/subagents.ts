@@ -503,6 +503,7 @@ export function alignAngles(userText: string, topic: string, rawAngles: string[]
 // ---- researcher sub-agent (1 LLM call) ----------------------------------
 async function runResearcher(
   env: Env,
+  owner: number,
   userText: string,
   topic: string,
   anchor = "",
@@ -515,7 +516,7 @@ async function runResearcher(
   // SAAT INI (memori lama tidak boleh mengubah arah riset) dan ingatkan
   // researcher bahwa pertanyaan sekarang adalah penentu arah.
   const focusTokens = significantTokens(`${userText} ${topic}`);
-  const mems = (await searchMemory(env, topic, 4).catch(() => []))
+  const mems = (await searchMemory(env, topic, 4, owner).catch(() => []))
     .filter((m) => focusTokens.length === 0 || overlaps(significantTokens(m.content), focusTokens));
   const known = mems.length
     ? "\nPengetahuan yang SUDAH tersimpan (KONTEKS SAJA — JANGAN memindahkan arah riset ke subjek memori lama; pertanyaan & topik pemilik SAAT INI adalah penentu arah):\n" +
@@ -567,7 +568,7 @@ async function runWriter(
   // jawaban menjauh dari pertanyaan saat ini — hanya memori yang berbagi kata
   // kunci dengan query/topic yang ikut sebagai konteks.
   const focusTokens = significantTokens(`${userText} ${topic}`);
-  const mems = (await searchMemory(env, topic, 4).catch(() => []))
+  const mems = (await searchMemory(env, topic, 4, owner).catch(() => []))
     .filter((m) => focusTokens.length === 0 || overlaps(significantTokens(m.content), focusTokens));
   if (mems.length > 0) {
     context.push({
@@ -714,7 +715,7 @@ export async function orchestrateResearch(
   let calls = 0;
   try {
     // 1) Researcher (bounded angles); Level 15 follow-up may provide an anchor.
-    const plan = await runResearcher(env, userText, topic, anchor);
+    const plan = await runResearcher(env, owner, userText, topic, anchor);
     calls += 1;
     if (calls > MAX_TOTAL_LLM_CALLS) return null;
 

@@ -465,6 +465,7 @@ version: "m9-v11.52",
         const headline = (gatedResult || task.task).replace(/\s+/g, " ").trim().slice(0, 140);
         await rememberMemory(env, `Eksekusi cloud #${tid} berhasil: ${headline}`, {
           type: "fact", tags: ["agent_task", "executor"], importance: 3, source: "agent_task",
+          ownerId: task.owner_id,
         }).catch(() => {});
         // EPISODIC MEMORY: condensed summary for recentContext() recall.
         const core = (gatedResult || "").replace(/\s+/g, " ").trim().slice(0, 300);

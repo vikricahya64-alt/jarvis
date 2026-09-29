@@ -101,7 +101,7 @@ export function buildJarvisMcpServer(env: Env): McpServer {
       const query = typeof a.query === "string" ? a.query.trim() : "";
       if (!query) return toolError("Parameter 'query' wajib diisi.");
       const k = Math.min(10, Math.max(1, Number(a.k) || 5));
-      const rows = await searchMemory(env, query, k);
+      const rows = await searchMemory(env, query, k, Number(env.OWNER_TELEGRAM_ID));
       if (!rows.length) {
         return { content: [{ type: "text", text: "Tidak ada memori yang cocok." }] };
       }
@@ -133,7 +133,9 @@ export function buildJarvisMcpServer(env: Env): McpServer {
       }
       const want = typeof a.type === "string" ? a.type.trim().toLowerCase() : "fact";
       const type = (MCP_MEMORY_TYPES as readonly string[]).includes(want) ? (want as (typeof MCP_MEMORY_TYPES)[number]) : "fact";
-      await rememberMemorySmart(env, content, { type, source: "mcp" });
+      // m9-v11.55: /mcp adalah antarmuka OWNER (Bearer MCP_ACCESS_TOKEN), jadi
+      // memori yang dibaca/tulis di sini milik owner — bukan tier "user".
+      await rememberMemorySmart(env, content, { type, source: "mcp", ownerId: Number(env.OWNER_TELEGRAM_ID) });
       return { content: [{ type: "text", text: `✅ Memori tersimpan (${type}).` }] };
     },
   );

@@ -42,7 +42,7 @@ export type AgentResultOpts = {
 
 /** Finalize a ledger row and DM the owner (never throws). */
 export async function finalizeAgentTask(o: AgentResultOpts): Promise<void> {
-  const { env, id, st, result: rawResult, task, memoryLabel, executorType } = o;
+  const { env, id, st, result: rawResult, task, memoryLabel, executorType, owner } = o;
   let result = rawResult;
   if (st === "done") {
     await finishAgentTask(env, id, "done", result.slice(0, 60000), "", "");
@@ -50,7 +50,13 @@ export async function finalizeAgentTask(o: AgentResultOpts): Promise<void> {
     await rememberMemory(
       env,
       `Eksekusi ${memoryLabel} #${id} berhasil: ${headline}`,
-      { type: "fact", tags: ["agent_task", "executor", memoryLabel.toLowerCase()], importance: 3, source: "agent_task" },
+      {
+        type: "fact", tags: ["agent_task", "executor", memoryLabel.toLowerCase()],
+        importance: 3, source: "agent_task",
+        // m9-v11.55: memori hasil eksekutor milik user yang menugaskan, bukan
+        // global — supaya tier "user" tak membaca hasil eksekusi owner.
+        ownerId: owner,
+      },
     ).catch(() => {});
 
     // OUTPUT GATE: verify executor output through the same deterministic rail

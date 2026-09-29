@@ -1764,7 +1764,7 @@ export async function searchAndSynthesize(
   // If high-confidence memories exist, use them directly (no web search needed).
   // M8-v27: institutional asks always search (never reuse stale memory); known-
   // topics shortcut applies only to non-institutional queries.
-  const topicKnown = await isTopicKnown(env, topic, 2.0).catch(() => false);
+  const topicKnown = await isTopicKnown(env, topic, 2.0, owner).catch(() => false);
   // v11.49 (kemampuan cabang pemilik): memori-shortcut (skip search) hanya
   // sah untuk riset-inline-biasa. PERMINTAAN BUTIR-BERSUMBER (ambil/daftar/N
   // artikel/link/teratas …) WAJIB memakai pencarian nyata — menjawab butir
@@ -1790,7 +1790,7 @@ const [pkg, context, mems, behaviorContext] = await Promise.all([
     // (naik dari 4), lalu kompres proporsional — 2 terakhir full, 2 berikutnya
     // 50%, 2 terakhir 25%. Hemat ~30-40% token tanpa kehilangan konteks kritis.
     recentContext(env, owner, 6).then(compressContext),
-    searchMemory(env, topic, 4).catch(() => []),
+    searchMemory(env, topic, 4, owner).catch(() => []),
     getAnswerBehaviorContext(env, topic).catch(() => null),
   ]);
   const searchResult = pkg.digest;
@@ -1938,7 +1938,7 @@ const [pkg, context, mems, behaviorContext] = await Promise.all([
     }
     // SELF-LEARNING: Store the synthesized knowledge for future queries
     if (searchResult) {
-      await storeLearnedKnowledge(env, topic, searchResult, "web_search_synthesized").catch(() => {});
+      await storeLearnedKnowledge(env, topic, searchResult, "web_search_synthesized", owner).catch(() => {});
     }
     // L18: Enhanced emotion detection with inference for unknown topics
     const rawEmotion = detectEmotionSig(userText);
@@ -1966,7 +1966,7 @@ const [pkg, context, mems, behaviorContext] = await Promise.all([
   }
   if (searchResult) {
     // SELF-LEARNING: Store the new knowledge for future queries
-    await storeLearnedKnowledge(env, topic, searchResult, "web_search").catch(() => {});
+    await storeLearnedKnowledge(env, topic, searchResult, "web_search", owner).catch(() => {});
     // Use topic sentiment for fallback formatting
     const topicSentiment = detectTopicSentiment(topic);
     const formatted = buildFinalReply(
@@ -2153,7 +2153,7 @@ export async function understandUserWants(
   // Pull memories for the owner to ground the understanding in prior turns.
   let mems: string[] = [];
   try {
-    const hits = await searchMemory(env, baseTopic, 3).catch(() => []);
+    const hits = await searchMemory(env, baseTopic, 3, _owner).catch(() => []);
     mems = hits.map((m) => m.content).slice(0, 3);
   } catch { mems = []; }
 

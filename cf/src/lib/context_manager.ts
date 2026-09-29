@@ -603,10 +603,16 @@ export async function buildEnrichedContext(
   // path understands paraphrases ("tadi kita bahas bekerja remote") that an
   // exact-match FTS query misses — the fragile part we previously patched with
   // dictionaries and recall pivots.
+  // m9-v11.55: SEMANTIC RECALL juga harus ter-scope per-user. Vectorize tak
+  // punya metadata owner, jadi jalur semantik DITUTUP untuk non-owner — lebih
+  // baik tanpa recall daripada membocorkan memori orang lain. FTS (di bawah)
+  // tetap jadi fallback yang ter-scope.
   const searchMem = async (q: string, k: number) => {
-    const sem = await semanticSearchMemory(env, q, k).catch(() => []);
-    if (sem.length > 0) return sem as Array<{ content: string }>;
-    return searchMemory(env, q, k).catch(() => [] as Array<{ content: string }>);
+    if (owner && Number(env.OWNER_TELEGRAM_ID) === owner) {
+      const sem = await semanticSearchMemory(env, q, k).catch(() => []);
+      if (sem.length > 0) return sem as Array<{ content: string }>;
+    }
+    return searchMemory(env, q, k, owner).catch(() => [] as Array<{ content: string }>);
   };
   const [recent, mems] = await Promise.all([
     recentContext(env, owner, maxRecent).catch(() => [] as Array<{ role: string; content: string }>),

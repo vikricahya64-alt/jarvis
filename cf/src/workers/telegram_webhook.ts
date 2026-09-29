@@ -76,6 +76,7 @@ import {
 } from "../lib/evolution";
 import { listSuggestions, resolveSuggestion } from "../lib/predictive";
 import { resolveIntent, isHardCommand, looksLikeCommand, type ResolvedIntent } from "../lib/intent_gate";
+import { tierFor, quotaCheck, ownerOnlyDenial, isOwner } from "../lib/access";
 import {
   getGreeting, STATUS, HELP,
 } from "../lib/messages";
@@ -273,12 +274,32 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   const rawText = msg.text ?? "";
   const text = normalizeInput(rawText);
 
-  // Only the owner may drive the mission-critical switch.
-  if (!OWNER_OK(env, from)) {
-    await fire(sendMessage(env, from, "Maaf, saya hanya melayani pemilik saya."));
-    return new Response("ok", { status: 200 });
+  // m9-v11.55 — ACCESS TIER (gerbang terbuka, data terisolasi).
+  //
+  // AKSES FUNGSIONAL terbuka: setiap non-owner = tier "user" dengan FUNGSI
+  // PENUH — obrolan, memory, todo, reminder, /tugas, /etask, /mcp, /pinjam,
+  // /proyek, /baca, search, gambar. Tidak ada daftar ID yang perlu dikelola.
+  //
+  // AKSES DATA tetap terpisah: memory, sesi, negosiasi, dan tugasan di-scope
+  // per-user (scoping owner_id di db.ts + migrasi 0020), jadi temanmu memakai
+  // JARVIS-nya sendiri dan tak pernah membaca memo/hasil eksekusi/riwayat
+  // milik owner. Perintah yang mengatur bot secara global (privacy, autonomy,
+  // admin, audit, debug) tetap owner-only — itu pengaturan owner atas
+  // JARVIS-nya sendiri, bukan "fungsi".
+  //
+  // KUOTA wajib: kunci LLM dibayar owner dan gerbang terbuka untuk siapa pun.
+  const tier = tierFor(env, from);
+  if (tier === "user") {
+    const uquota = await quotaCheck(env, from);
+    if (!uquota.allowed) {
+      await fire(sendMessage(env, from, uquota.reason === "daily_quota"
+        ? "📊 Kuota harianmu sudah habis. Bicara lagi besok ya."
+        : "⏳ Terlalu sering. Tunggu sebentar sebelum kirim lagi."));
+      return new Response("ok", { status: 200 });
+    }
   }
-  if (await rateLimited(env, from)) {
+
+  if (tier === "owner" && await rateLimited(env, from)) {
     // NEVER silently drop the owner's message — a sub-second burst of two
     // legit messages must not look like a lost reply. Nudge visibly instead.
     await fire(sendMessage(env, from, "⏳ Santai — aku proses satu per satu, kirim ulang sebentar ya."));
@@ -1274,6 +1295,7 @@ async function resolveConsent(env: Env, owner: number, corr: string, decision: s
  *  (2) intent itu harus BENAR-BENAR tertunda (kunci KV ada). Tanpa itu,
  *  "ya"/"oke" biasa tetap ke jalur normal (obrolan/memori) — tidak ada
  *  sandbox yang terbuka tanpa rencana yang benar-benar menunggu. */
+
 export async function resolveParkedResume(
   env: Env,
   from: number,

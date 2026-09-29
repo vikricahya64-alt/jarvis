@@ -29,6 +29,9 @@ import {
   isHardCommand, looksLikeCommand, matchRule, repairIntent, parseVerify,
   destructiveClarify, INTENT_RULES,
 } from "../src/lib/intent_gate";
+import {
+  tierFor, isOwner, gateCapability, ownerOnlyDenial, quotaCheck, isOwnerOnlyCapability,
+} from "../src/lib/access";
 import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation, translateInput, hasDegenerateEcho, isAcknowledgeOnly } from "../src/lib/intelligence";
 import { cleanRecallLine } from "../src/lib/context_manager";
 import {
@@ -1986,6 +1989,105 @@ async function testIntentGate() {
   console.log("  intent gate (2-arah, closed table, anti-tebak) OK");
 }
 
+async function testAccessTiers() {
+  // m9-v11.55 — ACCESS TIER: gerbang FUNGSIONAL terbuka, gerbang DATA
+  // terisolasi. Setiap non-owner = tier "user" dengan fungsi penuh (tak ada
+  // daftar ID yang harus dikelola), TAPI data owner tidak boleh bocor:
+  // memory/sesi/tugas di-scope per-user. Perintah yang mengatur bot secara
+  // global tetap owner-only.
+  const E = { OWNER_TELEGRAM_ID: "6812604983" } as any;
+  const OWNER = 6812604983;
+  const TEMAN = 555000111;
+  const ACak = 999888777;
+
+  // Tier: hanya owner = owner. SEMUA non-owner = user (fungsi penuh).
+  assert.strictEqual(tierFor(E, OWNER), "owner", "pemilik = owner");
+  assert.strictEqual(tierFor(E, TEMAN), "user", "teman = user (fungsi penuh)");
+  assert.strictEqual(tierFor(E, ACak), "user", "user acak = user, tak perlu didaftarkan");
+  assert.strictEqual(isOwner(E, OWNER), true, "isOwner benar untuk pemilik");
+  assert.strictEqual(isOwner(E, TEMAN), false, "isOwner salah untuk non-owner");
+  // String-vs-number: Telegram kirim id sebagai number, env kita string.
+  // Bug di sini = akses owner terbuka untuk semua orang.
+  assert.strictEqual(tierFor(E, "6812604983"), "owner", "id string harus tetap owner");
+
+  // FUNGSI PENUH: semua kapabilitas fungsional boleh untuk tier user.
+  for (const cap of ["chat", "help", "status", "memory_read", "memory_write",
+    "task_dispatch", "e2b_sandbox", "mcp_client", "negotiation", "todo",
+    "reminder", "search", "baca", "kapabilitas_asing"]) {
+    assert.strictEqual(gateCapability(E, TEMAN, cap).allowed, true,
+      `tier user boleh "${cap}" (fungsi penuh)`);
+  }
+  // Owner-only (kendali atas bot) TETAP tertutup untuk non-owner.
+  for (const cap of ["privacy_mode", "autonomy", "admin", "audit", "debug",
+    "evolution", "preferences", "obedience_report"]) {
+    assert.strictEqual(isOwnerOnlyCapability(cap), true, `${cap} tercatat owner-only`);
+    assert.strictEqual(gateCapability(E, TEMAN, cap).allowed, false,
+      `tier user DITOLAK "${cap}" (itu pengaturan bot, bukan fungsi)`);
+    assert.strictEqual(gateCapability(E, OWNER, cap).allowed, true,
+      `owner tetap boleh "${cap}"`);
+  }
+  // Penolakan tak boleh mengenumerate kapabilitas tersembunyi.
+  const denial = ownerOnlyDenial("privacy_mode");
+  assert.ok(denial.includes("privacy_mode"), "penolakan menyebut kapabilitas yang diminta");
+  assert.ok(!/e2b|mcp|memory_read|task_dispatch/i.test(denial),
+    "penolakan JANGAN mengenumerate kapabilitas lain yang tersembunyi");
+
+  // KUOTA WAJIB: gerbang terbuka + kunci LLM dibayar owner → rem per-id.
+  const KVM = new Map<string, string>();
+  const KVE = { CONFIG_KV: {
+    get: async (k: string) => KVM.get(k) ?? null,
+    put: async (k: string, v: string) => { KVM.set(k, v); },
+  } } as any;
+  // Tier user: 60/jam → ke-61 DITOLAK.
+  for (let i = 0; i < 60; i++) {
+    assert.strictEqual((await quotaCheck(KVE, TEMAN)).allowed, true,
+      `user ke-${i + 1} dalam kuota`, );
+  }
+  const over = await quotaCheck(KVE, TEMAN);
+  assert.strictEqual(over.allowed, false, "user ke-61/jam DITOLAK (batas 60)");
+  assert.strictEqual(over.reason, "hourly_quota", "alasan = kuota jam");
+  // Owner tidak ikut kena limit yang sama.
+  assert.strictEqual((await quotaCheck(KVE, OWNER)).allowed, true,
+    "owner tetap boleh (kuota 200/jam)");
+
+  // Fail-closed saat KV mati: user DITOLAK, owner tetap jalan.
+  const KVBroken = { OWNER_TELEGRAM_ID: "6812604983", CONFIG_KV: {
+    get: async () => { throw new Error("kv down"); },
+    put: async () => { throw new Error("kv down"); },
+  } } as any;
+  assert.strictEqual((await quotaCheck(KVBroken, TEMAN)).allowed, false,
+    "KV mati → user TOLAK (fail-closed, lindungi kuota owner)");
+  assert.strictEqual((await quotaCheck(KVBroken, OWNER)).allowed, true,
+    "KV mati → owner tetap boleh (jangan matikan bot sendiri)");
+
+  // SCOPING MEMORY — inti proteksi data owner. source-scan: owner_id WAJIB
+  // ada di semua query baca memory dan di INSERT, supaya lapisan scoping tak
+  // bisa "lupa" filter (ini yang menahan kebocoran ke tier user).
+  const dbSrc = readFileSync(new URL("../src/lib/db.ts", import.meta.url), "utf-8");
+  // searchMemory: filter owner_id di WHERE + ownerId non-opsional di tipe.
+  const searchFn = dbSrc.slice(dbSrc.indexOf("export async function searchMemory"),
+    dbSrc.indexOf("export async function", dbSrc.indexOf("export async function searchMemory") + 10));
+  assert.ok(/m\.owner_id = \?/.test(searchFn),
+    "searchMemory WAJIB memfilter owner_id (tak boleh recall lintas user)");
+  assert.ok(/ownerId: number/.test(searchFn),
+    "ownerId searchMemory harus wajib (bukan opsional) — fail-closed");
+  // Tulis: INSERT harus menyertakan owner_id.
+  const memFn = dbSrc.slice(dbSrc.indexOf("export async function rememberMemory"),
+    dbSrc.indexOf("export async function", dbSrc.indexOf("export async function rememberMemory") + 10));
+  assert.ok(/owner_id/.test(memFn) && /ownerId/.test(memFn),
+    "rememberMemory WAJIB menyimpan owner_id");
+  assert.ok(/if \(!opts\??\.?ownerId\) return/.test(memFn),
+    "rememberMemory fail-closed tanpa ownerId (jangan simpan memori yatim)");
+  // Tidak boleh ada query memory tanpa filter owner.
+  assert.ok(!/FROM memories\s+WHERE(?!.*owner_id)/s.test(dbSrc),
+    "tak boleh ada query ke memories tanpa filter owner_id");
+  // Migrasi scoping harus ada.
+  const mig = readFileSync(new URL("../migrations/0020_memories_owner_scoped.sql", import.meta.url), "utf-8");
+  assert.ok(/ADD COLUMN owner_id/.test(mig), "migrasi 0020 menambah owner_id ke memories");
+
+  console.log("  access tiers (fungsi penuh, data terisolasi) OK");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -2025,6 +2127,7 @@ async function main() {
   await testFreeServiceLayers();
   await testAuthProbeSemantics();
   await testIntentGate();
+  await testAccessTiers();
   await testAdminChaff();
   await testRootComprehension();
   await testTriStateGates();
