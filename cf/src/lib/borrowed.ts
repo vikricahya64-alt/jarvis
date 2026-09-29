@@ -238,7 +238,8 @@ export async function probeBorrowedPlatforms(env: Env): Promise<BorrowedProbe[]>
     ok("e2b", false, null, "E2B_API_KEY belum dipasang");
   }
   if (env.GITHUB_TOKEN && env.GITHUB_REPO) {
-    const r = await reachMsg(`https://api.github.com/repos/${encodeURIComponent(env.GITHUB_REPO)}`, {
+    const repoPath = env.GITHUB_REPO.split("/").map(encodeURIComponent).join("/");
+    const r = await reachMsg(`https://api.github.com/repos/${repoPath}`, {
       Authorization: `Bearer ${env.GITHUB_TOKEN}`,
       Accept: "application/vnd.github+json",
       "User-Agent": "jarvis-sovereign",
