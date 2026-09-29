@@ -24,6 +24,7 @@ import { isInternalEchoDump, isAdminChaff } from "../src/lib/db";
 import { cmdAlias, isBareUnknownSlashCmd } from "../src/workers/telegram_webhook";
 import { semanticSearchMemory, semanticUpsertMemory } from "../src/lib/memory_vec";
 import { probeProviders } from "../src/lib/providers";
+import { probeBorrowedPlatforms } from "../src/lib/borrowed";
 import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation, translateInput, hasDegenerateEcho, isAcknowledgeOnly } from "../src/lib/intelligence";
 import { cleanRecallLine } from "../src/lib/context_manager";
 import {
@@ -1646,6 +1647,21 @@ async function testFreeServiceLayers() {
   assert.ok(ps.some((p) => p.name === "workers_ai"), "probe lists workers_ai");
   assert.ok(ps.some((p) => p.name === "memory_vec"), "probe lists memory_vec binding");
   assert.ok(ps.every((p) => p.live === false), "probe stubs never claim live without a real env");
+
+  // /status CONTRACT: the HTTP /status handler maps these exact fields into
+  // its JSON (name/configured/live/detail for providers; id/label/… for
+  // borrowed). Every row must carry them so the route can never render
+  // undefined — and the borrowed inventory must still merge the LLM rows.
+  assert.ok(ps.every((p) => typeof p.name === "string" && typeof p.detail === "string" && typeof p.configured === "boolean"),
+    "every provider row exposes name/detail/configured for /status");
+  const bp = await probeBorrowedPlatforms(FAKE_ENV as never);
+  assert.ok(bp.length > 0, "borrowed probe lists platforms");
+  assert.ok(bp.some((b) => b.id === "e2b"), "borrowed probe lists e2b");
+  assert.ok(bp.some((b) => b.id === "figma"), "borrowed probe lists figma");
+  assert.ok(bp.some((b) => b.id === "groq"), "borrowed inventory merges the LLM providers");
+  assert.ok(bp.every((b) => typeof b.id === "string" && typeof b.label === "string" && typeof b.detail === "string"),
+    "every borrowed row exposes id/label/detail for /status");
+  assert.ok(bp.every((b) => b.live === false), "borrowed stubs never claim live without a real env");
 }
 
 async function testAdminChaff() {

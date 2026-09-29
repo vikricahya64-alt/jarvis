@@ -57,11 +57,12 @@ export async function probeProviders(env: Env): Promise<ProviderProbe[]> {
   // free provider is routed through it, so the probe must ping the very same
   // gateway URLs (a direct ping can 403 for reasons that the gateway hides).
   const gw = env.AI_GATEWAY_URL ? `${env.AI_GATEWAY_URL}` : "";
-  const probes: Array<{ name: string; configured: boolean; url?: string; headers?: Record<string, string>; note: string }> = [
+  const probes: Array<{ name: string; configured: boolean; url?: string; direct?: string; headers?: Record<string, string>; note: string }> = [
     {
       name: "groq",
       configured: !!env.GROQ_API_KEY,
       url: gw ? `${gw}/groq/v1/models` : "https://api.groq.com/openai/v1/models",
+      direct: "https://api.groq.com/openai/v1/models",
       headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` },
       note: "list-models",
     },
@@ -69,6 +70,7 @@ export async function probeProviders(env: Env): Promise<ProviderProbe[]> {
       name: "openrouter",
       configured: !!env.OPENROUTER_API_KEY,
       url: gw ? `${gw}/openrouter/v1/models` : "https://openrouter.ai/api/v1/models",
+      direct: "https://openrouter.ai/api/v1/models",
       headers: { Authorization: `Bearer ${env.OPENROUTER_API_KEY}` },
       note: "list-models",
     },
@@ -78,6 +80,7 @@ export async function probeProviders(env: Env): Promise<ProviderProbe[]> {
       url: gw
         ? `${gw}/google-ai-studio/v1beta/models?key=${encodeURIComponent(env.GEMINI_API_KEY ?? "")}`
         : `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(env.GEMINI_API_KEY ?? "")}`,
+      direct: `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(env.GEMINI_API_KEY ?? "")}`,
       note: "list-models",
     },
     {
@@ -103,12 +106,26 @@ export async function probeProviders(env: Env): Promise<ProviderProbe[]> {
     if (!p.configured || !p.url) return { name: p.name, configured: false, live: false, ms: null, detail: "key tidak terpasang" };
     const status = await ping(p.url, p.headers);
     const live = status !== null && status >= 200 && status < 300;
+    let detail = status === null ? "timeout/error" : status === 200 ? `${p.note} 200` : `HTTP ${status}`;
+    // GATEWAY DIAGNOSIS: egress brain SELALU lewat AI Gateway, tapi sebuah
+    // 401 di situ ambigu — kunci mati ATAU hop gateway rusak. Bila jalur
+    // terkonfigurasi gagal, ping juga origin-nya (hanya saat gagal: hemat
+    // subrequest) supaya pemilik langsung tahu mana yang harus diperbaiki.
+    // `live` tetap false bila origin hidup: jalur yang benar-benar dipakai
+    // (gateway) tetap dianggap down.
+    if (gw && p.direct && !live) {
+      const ds = await ping(p.direct, p.headers);
+      const dLive = ds !== null && ds >= 200 && ds < 300;
+      const gwPart = status === null ? "timeout" : `HTTP ${status}`;
+      const dsPart = ds === null ? "timeout" : `HTTP ${ds}`;
+      detail = `${gwPart} (gateway) → ${dsPart} (langsung): ${dLive ? "kunci OK — periksa konfigurasi gateway" : "kunci ditolak"}`;
+    }
     return {
       name: p.name,
       configured: true,
       live,
       ms: status !== null ? status : null,
-      detail: status === null ? "timeout/error" : status === 200 ? `${p.note} 200` : `HTTP ${status}`,
+      detail,
     };
   }));
 

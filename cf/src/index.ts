@@ -32,6 +32,8 @@ import { runConfigOptimization } from "./lib/config_optimizer";
 import { runDeploySafetyLoop } from "./lib/deploy_safety";
 import { runRecoveryLoop } from "./lib/recovery_loop";
 import { handleMcpRequest } from "./lib/mcp/server";
+import { probeProviders } from "./lib/providers";
+import { probeBorrowedPlatforms } from "./lib/borrowed";
 
 const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
 const WORKER_URL = "https://jarvis-sovereign.vikricahya64.workers.dev";
@@ -266,6 +268,12 @@ env: env.APP_ENV ?? "unknown",
           webhookInfo = wh.url ? `set (${wh.pending_update_count} pending)` : "NOT SET";
         } catch { webhookInfo = "error"; }
 
+        // LIVE PROVIDER + BORROWED PLATFORM PROBE — paralel (providers) lalu
+        // sekuensial (borrowed), keduanya cache 60s dan fail-open, sehingga
+        // /status tidak pernah 500 hanya karena ada upstream yang mati.
+        const providers = await probeProviders(env).catch(() => []);
+        const borrowed = await probeBorrowedPlatforms(env).catch(() => []);
+
         return respond(Response.json({
           ok: true,
 ts: Date.now(),
@@ -277,6 +285,19 @@ version: "m9-v11.52",
             webhook: webhookInfo,
             owner_id: owner,
           },
+          providers: providers.map((p) => ({
+            name: p.name,
+            configured: p.configured,
+            live: p.live,
+            detail: p.detail,
+          })),
+          borrowed: borrowed.map((b) => ({
+            id: b.id,
+            label: b.label,
+            configured: b.configured,
+            live: b.live,
+            detail: b.detail,
+          })),
           env: env.APP_ENV ?? "unknown",
         }));
       } catch (e) {
