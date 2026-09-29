@@ -1278,6 +1278,23 @@ export async function deleteAgentTask(env: Env, owner: number, id: number): Prom
   }
 }
 
+/** Bulk-delete the owner's tasks by status set ("/tugas hapus semua [pending]").
+ *  Same policy as deleteAgentTask: only retryable rows (pending/failed/done)
+ *  are ever deletable — running tasks are never silently lost. Returns the
+ *  number of rows removed (0 on error, fail-closed). */
+export async function deleteAllAgentTasks(env: Env, owner: number, statuses: string[]): Promise<number> {
+  const allowed = statuses.filter((s) => s === "pending" || s === "failed" || s === "done");
+  if (!allowed.length) return 0;
+  try {
+    const res = await env.DB.prepare(
+      `DELETE FROM agent_tasks WHERE owner_id = ? AND status IN (${allowed.map(() => "?").join(",")})`,
+    ).bind(owner, ...allowed).run();
+    return res.meta.changes ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 /** Recent executor activity (last `hours`), for the morning briefing. */
 export async function statAgentTasksRecent(
   env: Env,

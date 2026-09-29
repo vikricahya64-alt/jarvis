@@ -10,7 +10,7 @@
 //=====================================================================
 
 import { Env, touchActivity, logConsent, getConsentRequestTs } from "../lib/db";
-import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById, addAgentTask, listAgentTasks, markAgentTaskRunning, restartAgentTask, getAgentTask, deleteAgentTask, addAgentRule, listAgentRules, deleteAgentRule, setAgentRuleActive } from "../lib/db";
+import { addTodo, listTodos, deleteTodoById, deleteTodoByText, addReminder, listReminders, cancelReminderById, addAgentTask, listAgentTasks, markAgentTaskRunning, restartAgentTask, getAgentTask, deleteAgentTask, deleteAllAgentTasks, addAgentRule, listAgentRules, deleteAgentRule, setAgentRuleActive } from "../lib/db";
 import {
   addProduct, listProducts, updateProduct, lowStockProducts,
   addCustomer, listCustomers,
@@ -2905,7 +2905,7 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
     const items = await listAgentTasks(env, from, 15);
     if (!items.length) {
       await fire(sendMessage(env, from,
-        "📦 *Tugas serverless*\n\nBelum ada tugas. Kirim: `/tugas <pekerjaan>` (mis. `/tugas riset kompetitor AI 2026 jadi laporan markdown`).\n\nBisa juga: `/tugas --riset <pekerjaan>` (laporan bersumber), `/tugas <pekerjaan> setiap Senin 09:00` (jadwal berulang), `/tugas lanjut <id>` (ulang tugas), `/tugas tanya <id> <soal>` (tanya hasil), `/tugas hapus <id>`.\n\n💡 Eksekutor cloud (GitHub Actions + opencode) untuk *kemampuan berat* yang tak bisa kubuh sendiri — eksekusi nyata (shell/file/browser/riset). Input diteruskan apa adanya; tambah `--riset` untuk laporan bersumber. Untuk tanya-jawab biasa, cukup chat langsung."));
+        "📦 *Tugas serverless*\n\nBelum ada tugas. Kirim: `/tugas <pekerjaan>` (mis. `/tugas riset kompetitor AI 2026 jadi laporan markdown`).\n\nBisa juga: `/tugas --riset <pekerjaan>` (laporan bersumber), `/tugas <pekerjaan> setiap Senin 09:00` (jadwal berulang), `/tugas lanjut <id>` (ulang tugas), `/tugas tanya <id> <soal>` (tanya hasil), `/tugas hapus <id>` / `/tugas hapus semua [pending]`.\n\n💡 Eksekutor cloud (GitHub Actions + opencode) untuk *kemampuan berat* yang tak bisa kubuh sendiri — eksekusi nyata (shell/file/browser/riset). Input diteruskan apa adanya; tambah `--riset` untuk laporan bersumber. Untuk tanya-jawab biasa, cukup chat langsung."));
       return;
     }
     const lines = items.map((t) => {
@@ -2996,6 +2996,22 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
     }
     await markAgentTaskRunning(env, target.id, sent.runId ?? "");
     await fire(sendMessage(env, from, "🧠 Berhasil — hasil kubalas di sini. `/tugas list` untuk status." + truncationWarning(sent)));
+    return;
+  }
+
+  // --- Hapus semua: "/tugas hapus semua [pending]" — clear the queue/history.
+  // Must run BEFORE the numeric "/tugas hapus <id>" branch: without this,
+  // "hapus semua tugas pending" fell through to task creation and started a
+  // negotiation instead of deleting. A "pending" qualifier narrows the delete
+  // to the pending queue; without it every retryable row goes. Running tasks
+  // are never deletable (same policy as deleteAgentTask). ---
+  const delAll = /^\/(?:tugas|delegasi)\s+hapus\s+(?:semua|all)\b(.*)$/i.exec(trimmed);
+  if (delAll) {
+    const onlyPending = /\bpending\b/i.test(delAll[1]);
+    const n = await deleteAllAgentTasks(env, from, onlyPending ? ["pending"] : ["pending", "failed", "done"]);
+    await fire(sendMessage(env, from, n
+      ? `🗑️ ${n} tugas${onlyPending ? " pending" : ""} dihapus.${onlyPending ? "" : " (Tugas yang sedang berjalan tetap dibiarkan.)"}`
+      : onlyPending ? "Tidak ada tugas pending untuk dihapus." : "Tidak ada tugas yang bisa dihapus."));
     return;
   }
 
