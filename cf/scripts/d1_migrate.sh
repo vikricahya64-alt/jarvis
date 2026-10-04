@@ -74,12 +74,25 @@ d1() { "${WRANGLER[@]}" d1 execute "$DB_NAME" $LOCAL_FLAG --command "$1"; }
 # Wrangler exits non-zero on failure, so let that propagate and print stderr.
 d1_count() {
   local out
-  if ! out="$("${WRANGLER[@]}" d1 execute "$DB_NAME" $LOCAL_FLAG --command "SELECT COUNT(*) AS n FROM $1;" 2>&1)"; then
+  # The marker matters. `grep -oE '[0-9]+' | tail -1` over raw wrangler output
+  # picks up whatever number happens to be last -- the database UUID, a
+  # timestamp, the row count of a different column. That reported a ledger
+  # holding 12 rows as "1", which then triggered the baseline path and made
+  # the guard refuse. Tag the value so extraction is unambiguous.
+  if ! out="$("${WRANGLER[@]}" d1 execute "$DB_NAME" $LOCAL_FLAG \
+        --command "SELECT 'JARVIS_LEDGER_COUNT=' || COUNT(*) AS marker FROM $1;" 2>&1)"; then
     echo "d1_migrate: query failed against table $1:" >&2
     echo "$out" | sed 's/^/  /' >&2
     return 1
   fi
-  printf '%s' "$out" | grep -oE '[0-9]+' | tail -1
+  local n
+  n="$(printf '%s' "$out" | grep -oE 'JARVIS_LEDGER_COUNT=[0-9]+' | tail -1 | grep -oE '[0-9]+' | tail -1)"
+  if [ -z "$n" ]; then
+    echo "d1_migrate: could not read a count out of the response for $1:" >&2
+    echo "$out" | sed 's/^/  /' >&2
+    return 1
+  fi
+  printf '%s' "$n"
 }
 
 # --------------------------------------------------------------------------
@@ -96,9 +109,12 @@ resolve_account() {
     return 0
   fi
   if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
-    echo "!! neither CLOUDFLARE_ACCOUNT_ID nor CLOUDFLARE_API_TOKEN is set;" >&2
-    echo "!! d1_migrate cannot authenticate. Check the repo secrets." >&2
-    return 1
+    # Not fatal. A developer who ran `wrangler login` has an OAuth session in
+    # ~/.wrangler and needs no env vars at all; wrangler will resolve the
+    # account itself. If it genuinely cannot, d1_count below fails loudly with
+    # wrangler's own error rather than this pre-emptive guess.
+    echo ">> account id: no env credentials; relying on a local wrangler session"
+    return 0
   fi
   echo ">> account id: CLOUDFLARE_ACCOUNT_ID unset, deriving from the API token"
   local body acc
@@ -145,7 +161,8 @@ echo ">> ledger currently holds ${BASELINE_COUNT} applied migration(s)"
 HISTORIC="0001_init.sql,0002_legacy_inline.sql,0003_upgrade.sql,0004_maestro.sql,0005_covenant.sql,0006_resilience.sql,0007_evolution.sql,0008_predictive.sql,0009_behavior_feedback.sql,0010_monitoring_infra.sql,0011_todos.sql,0012_ecommerce.sql,0013_reconcile.sql,0014_reminders.sql,0015_recurring_reminders.sql,0016_agent_tasks.sql,0017_agent_tasks_artifact_url.sql,0018_agent_task_rules.sql,0019_covenant_text.sql,0020_memories_owner_scoped.sql"
 
 if [[ "${BASELINE_COUNT}" -lt 20 ]]; then
-  echo ">> baselining 0001-0020 as already-applied (they ARE applied in this DB)."
+  echo ">> baselining any missing 0001-0020 rows (they ARE applied in this DB;
+>> INSERT OR IGNORE leaves rows the ledger already holds untouched)."
   VALUES=""
   IFS=',' read -ra NAMES <<< "$HISTORIC"
   for n in "${NAMES[@]}"; do
