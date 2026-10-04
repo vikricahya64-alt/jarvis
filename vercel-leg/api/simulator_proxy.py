@@ -39,6 +39,12 @@ def _read_json(handler):
     return json.loads(body or b"{}")
 
 
+def _send_unauthorized(handler_obj):
+    """401 in the same shape as the other endpoints, without leaking whether a
+    token was present, wrong, or simply not configured."""
+    _send_json(handler_obj, {"ok": False, "error": "unauthorized"}, 401)
+
+
 def _send_json(handler, payload, status):
     data = json.dumps(payload).encode("utf-8")
     handler.send_response(status)
@@ -207,13 +213,45 @@ def flush_batch(telegram_id: int) -> dict:
 # Library functions (imported by api/simulator.py, not an endpoint)
 # ------------------------------------------------------------------
 class handler(BaseHTTPRequestHandler):
-    """Stub — this file is a library module, not a serverless endpoint.
-    Use run_simulation() or add_to_batch() / flush_batch() from other code."""
+    """Serverless endpoint wrapping the simulation library.
+
+    AUTH (added): every mutating path here executes caller-supplied code in a
+    sandbox and, in `private_edge` mode, spends the owner's Groq quota. The
+    handler had no auth check at all, which was survivable only because the
+    Vercel build had been failing for weeks - an accident, not a control. With
+    the project layout fixed (rootDirectory -> vercel-leg) this would have been
+    published as an open endpoint, reachable from api/orchestrator.py which
+    also has no auth on do_POST.
+
+    GET stays open: it is a liveness probe and returns a static string.
+    POST requires X-Internal-Auth matching INTERNAL_AUTH_TOKEN, or Bearer
+    CRON_SECRET, matching the convention already used by analytics.py and
+    cron.py. Fail-closed when neither variable is set."""
+
+    def _authorized(self) -> bool:
+        import hmac
+
+        internal = os.getenv("INTERNAL_AUTH_TOKEN", "")
+        cron = os.getenv("CRON_SECRET", "")
+        presented = (self.headers.get("X-Internal-Auth") or "").strip()
+        bearer = (self.headers.get("Authorization") or "").strip()
+        if bearer.lower().startswith("bearer "):
+            presented = bearer[7:].strip() or presented
+        if not presented:
+            return False
+        # Either configured secret may authorise, compared in constant time.
+        for expected in (internal, cron):
+            if expected and hmac.compare_digest(presented, expected):
+                return True
+        return False
 
     def do_GET(self):
         _send_json(self, {"ok": True, "service": "jarvis-simulate"}, 200)
 
     def do_POST(self):
+        if not self._authorized():
+            self._send_unauthorized()
+            return
         try:
             body = _read_json(self)
             code = body.get("code", "")

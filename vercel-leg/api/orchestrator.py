@@ -500,7 +500,21 @@ class handler(BaseHTTPRequestHandler):
         Accepts a webhook payload matching the tasks row shape:
           {"record": {id, telegram_id, input, status, ...}}
         or simply {"id": ..., "telegram_id": ..., "input": ...}.
+
+        AUTH (added): this handler had NO auth check. It accepts an arbitrary
+        `telegram_id`, builds a task from `input`, and dispatches through the
+        tool layer - which reaches web search, LLM calls on the owner's keys,
+        E2B sandboxes and (previously) arbitrary shell on the owner's device.
+        Reachable from the open internet.
+
+        It survived only because the Vercel build had been failing for weeks.
+        An accident is not a control. Now requires X-Internal-Auth against
+        INTERNAL_AUTH_TOKEN, or Bearer CRON_SECRET, matching analytics.py,
+        cron.py and simulator_proxy.py. Fail-closed when neither is set.
         """
+        if not self._authorized():
+            self._send_unauthorized()
+            return
         try:
             payload = self._read_json()
             record = payload.get("record", payload)
@@ -523,6 +537,29 @@ class handler(BaseHTTPRequestHandler):
         except Exception as exc:
             logger.exception("Orchestrator failed")
             return self._send_json({"ok": False, "error": str(exc)}, 500)
+
+    def _authorized(self) -> bool:
+        """Constant-time check of X-Internal-Auth against INTERNAL_AUTH_TOKEN,
+        or Authorization: Bearer CRON_SECRET. Either configured secret is
+        accepted; an unset variable never authorises."""
+        import hmac
+
+        presented = (self.headers.get("X-Internal-Auth") or "").strip()
+        bearer = (self.headers.get("Authorization") or "").strip()
+        if bearer.lower().startswith("bearer "):
+            presented = bearer[7:].strip() or presented
+        if not presented:
+            return False
+        for env_name in ("INTERNAL_AUTH_TOKEN", "CRON_SECRET"):
+            expected = os.getenv(env_name, "")
+            if expected and hmac.compare_digest(presented, expected):
+                return True
+        return False
+
+    def _send_unauthorized(self):
+        """Same 401 shape as the rest of the stack, and it does not reveal
+        whether a token was wrong or simply not configured."""
+        self._send_json({"ok": False, "error": "unauthorized"}, 401)
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
