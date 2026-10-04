@@ -41,10 +41,16 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 DB_NAME="jarvis"
-LOCAL_FLAG=""
 MODE="remote (production)"
+# The location flag must ALWAYS be present and explicit. An empty flag expands to
+# nothing, and wrangler's default is `local` - which silently means a run
+# labelled "remote (production)" would baseline and migrate a throwaway local
+# SQLite file and report success. That is what happened on the first three CI
+# attempts: the log said "remote (production)", the ledger went 0 -> 20, and
+# wrangler then printed "Resource location: local".
+LOCATION_FLAG="--remote"
 if [[ "${1:-}" == "--local" ]]; then
-  LOCAL_FLAG="--local"
+  LOCATION_FLAG="--local"
   MODE="local"
 fi
 
@@ -62,7 +68,7 @@ else
 fi
 echo ">> wrangler: ${WRANGLER[*]}"
 
-d1() { "${WRANGLER[@]}" d1 execute "$DB_NAME" $LOCAL_FLAG --command "$1"; }
+d1() { "${WRANGLER[@]}" d1 execute "$DB_NAME" $LOCATION_FLAG --command "$1"; }
 
 # Read a single integer out of wrangler's table output without depending on its
 # exact formatting.
@@ -79,7 +85,7 @@ d1_count() {
   # timestamp, the row count of a different column. That reported a ledger
   # holding 12 rows as "1", which then triggered the baseline path and made
   # the guard refuse. Tag the value so extraction is unambiguous.
-  if ! out="$("${WRANGLER[@]}" d1 execute "$DB_NAME" $LOCAL_FLAG \
+  if ! out="$("${WRANGLER[@]}" d1 execute "$DB_NAME" $LOCATION_FLAG \
         --command "SELECT 'JARVIS_LEDGER_COUNT=' || COUNT(*) AS marker FROM $1;" 2>&1)"; then
     echo "d1_migrate: query failed against table $1:" >&2
     echo "$out" | sed 's/^/  /' >&2
@@ -143,7 +149,7 @@ print(accs[0]["id"])
   echo ">> account id: ${CLOUDFLARE_ACCOUNT_ID}"
 }
 
-echo ">> mode: $MODE"
+echo ">> mode: $MODE  (wrangler $LOCATION_FLAG)"
 
 resolve_account
 
@@ -181,7 +187,7 @@ fi
 
 # ------------------------------------------------------------------- apply
 echo ">> applying pending migrations (0021+)"
-"${WRANGLER[@]}" d1 migrations apply "$DB_NAME" $LOCAL_FLAG
+"${WRANGLER[@]}" d1 migrations apply "$DB_NAME" $LOCATION_FLAG
 
 echo ">> final ledger:"
 d1 "SELECT id, name, applied_at FROM d1_migrations ORDER BY id;"
