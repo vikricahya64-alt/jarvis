@@ -17,7 +17,6 @@ import { handleUpdate, ensureWebhook } from "./workers/telegram_webhook";
 import { emitText as sendMessage, setWebhook, getWebhookInfo, getMe, setMyCommands, handleIncoming, registerUpdateRouter } from "./lib/telegram_gate";
 import { runDms } from "./daemons/dead_mans_switch";
 
-import { requireCert } from "./lib/zero_trust";
 import { covenantHash } from "./lib/covenant_core";
 import { createEpoch, markEpochVerified } from "./lib/identity_anchor";
 import { refreshQuotaSnapshot as monitorRefresh } from "./lib/monitor";
@@ -98,12 +97,30 @@ async function ensureTelegramCommands(env: Env): Promise<void> {
 }
 
 /** Environment-adaptive privileged-endpoint gate. */
-function certOr(request: Request, fallback: boolean): boolean {
-  const hasCertHeaders =
-    request.headers.has("Cloudflare-Client-Cert-Verified") &&
-    request.headers.has("Cloudflare-Client-Cert-Subject");
-  if (!hasCertHeaders) return fallback;
-  return requireCert(request).ok;
+/**
+ * Authentication for privileged endpoints.
+ *
+ * The `Cloudflare-Client-Cert-Verified` / `-Subject` branch that used to be
+ * here is gone. Those are not Cloudflare-reserved header names, and this worker
+ * is served from `*.workers.dev`, so any client could set them and thereby
+ * reach /setup, /status, /debug, /setwebhook, /ai_diag and /audit_status. A
+ * single unauthenticated curl with two headers re-pointed the live Telegram
+ * webhook through /setwebhook.
+ *
+ * A real secret is now the only accepted signal. Two forms, because existing
+ * tooling uses both:
+ *   `?token=<TELEGRAM_SECRET>`  - cf/deploy.sh
+ *   `x-agent-token: <...>`      - .github/actions/worker-cron, and /agent/*
+ *
+ * `TELEGRAM_TOKEN` is deliberately NOT accepted here. It is the bot credential
+ * that the worker appends to every outbound api.telegram.org call, and putting
+ * it in a query string puts it in access logs, wrangler tail and any proxy in
+ * front. It is not an admin token. */
+function privilegedAuth(request: Request, url: URL, env: Env): boolean {
+  const header = request.headers.get("x-agent-token") ?? "";
+  if (env.AGENT_TOKEN && header === env.AGENT_TOKEN) return true;
+  const param = url.searchParams.get("token") ?? "";
+  return Boolean(env.TELEGRAM_SECRET) && param === env.TELEGRAM_SECRET;
 }
 
 /** Compose + send the Sunday obedience report to the owner via Telegram. */
@@ -220,9 +237,7 @@ env: env.APP_ENV ?? "unknown",
     //------------------------------------------------------------------
     // AUTHENTICATED ENDPOINTS (require token)
     //------------------------------------------------------------------
-    const tokenParam = url.searchParams.get("token");
-    const isAuth = tokenParam === env.TELEGRAM_SECRET || tokenParam === env.TELEGRAM_TOKEN;
-    const authed = certOr(request, isAuth);
+    const authed = privilegedAuth(request, url, env);
 
     // /setup — re-configure Telegram webhook (owner only).
     if (path === "/setup") {

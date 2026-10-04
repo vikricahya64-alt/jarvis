@@ -252,21 +252,68 @@ async function testHardeningWiring() {
   //      enough to trust through the type + the runtime endpoint test.)
   assert.ok(db.auditIntegrity.length >= 1, "auditIntegrity takes env");
 
-  // (3) Zero-trust module is now reachable: exported helpers exist.
+  // Source of index.ts, used by the zero-trust assertions below.
+  const indexSrcSrc = readFileSync(new URL("../src/index.ts", import.meta.url), "utf-8");
+
+  // (3) Zero-trust: certificate-header authentication is DISABLED.
+  //
+  //     This assertion used to require the opposite. `Cloudflare-Client-Cert-*`
+  //     are not Cloudflare-reserved header names, and the worker is served from
+  //     a bare *.workers.dev hostname with no Cloudflare Access policy in front
+  //     of it, so any internet client can set both headers itself. That granted
+  //     access to /setup, /status, /debug, /setwebhook, /ai_diag and
+  //     /audit_status, and /setwebhook re-points the Telegram webhook - a full
+  //     bot takeover.
+  //
+  //     It was not theoretical: one unauthenticated curl carrying two headers
+  //     did re-point the live webhook. It was restored right away, and nothing
+  //     was exfiltrated only because the attacker host did not resolve.
   const zt = await import("../src/lib/zero_trust");
   assert.strictEqual(typeof zt.requireCert, "function");
-  assert.strictEqual(typeof zt.clientCertVerified, "function");
-  // requireCert rejects when no cert headers are present (fallback env).
-  const noCertReq = new Request("https://jarvis-sovereign.vikricahya64.workers.dev/webhook");
-  assert.strictEqual(zt.requireCert(noCertReq).ok, false, "no-cert request must fail requireCert");
-  // And accepts when a valid verified + operator CN header is present.
-  const okReq = new Request("https://jarvis-sovereign.vikricahya64.workers.dev/webhook", {
+  assert.strictEqual(zt.CERT_HEADER_AUTH_REMOVED, true,
+    "certificate-header auth must stay removed");
+
+  const spoofed = new Request("https://jarvis-sovereign.vikricahya64.workers.dev/setwebhook?url=https://evil.example/x", {
     headers: {
       "Cloudflare-Client-Cert-Verified": "SUCCESS",
       "Cloudflare-Client-Cert-Subject": "CN=jarvis-admin",
     },
   });
-  assert.strictEqual(zt.requireCert(okReq).ok, true, "operator cert must pass requireCert");
+  assert.strictEqual(zt.requireCert(spoofed).ok, false,
+    "a SPOOFED certificate-header pair must be rejected");
+  assert.strictEqual(zt.requireCert(spoofed).verdict, "deny",
+    "spoofed cert headers must deny, not merely be unknown");
+
+  const noCert = new Request("https://jarvis-sovereign.vikricahya64.workers.dev/webhook");
+  assert.strictEqual(zt.requireCert(noCert).ok, false,
+    "no-cert request must fail requireCert");
+  // A FAILED verdict and a malformed one must also be denied.
+  for (const [verified, subject] of [["FAILED", "CN=jarvis-admin"], ["SUCCESS", "CN=someone-else"], ["bogus", ""]]) {
+    const r = zt.requireCert(new Request("https://x.workers.dev/setwebhook", {
+      headers: { "Cloudflare-Client-Cert-Verified": verified, "Cloudflare-Client-Cert-Subject": subject },
+    }));
+    assert.strictEqual(r.ok, false, `cert header pair (${verified}, ${subject}) must be denied`);
+  }
+
+  // index.ts must not reintroduce a header-based branch on privileged routes.
+  // Strip comments first: index.ts documents the removed bypass by name, and a
+  // bare substring test would flag that documentation as if it were live code.
+  const indexCode = indexSrcSrc
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  assert.ok(!/get\(\s*["']Cloudflare-Client-Cert/.test(indexCode),
+    "index.ts must not read Cloudflare-Client-Cert-* headers (comments excluded)");
+  assert.ok(!/has\(\s*["']Cloudflare-Client-Cert/.test(indexCode),
+    "index.ts must not test for Cloudflare-Client-Cert-* presence (comments excluded)");
+  assert.ok(!/function\s+certOr\b/.test(indexCode),
+    "index.ts must not define the certOr() auth bypass");
+  assert.ok(!/requireCert\(/.test(indexCode),
+    "index.ts must not call requireCert() for authentication");
+  // TELEGRAM_TOKEN must not be usable as an admin credential: it is the bot
+  // credential appended to every outbound api.telegram.org call, so accepting it
+  // in a query string leaks it into access logs and proxy logs.
+  assert.ok(!/tokenParam === env.TELEGRAM_TOKEN/.test(indexSrcSrc),
+    "index.ts must not accept TELEGRAM_TOKEN as an admin token");
 
   // (4) Index exposes the live cron/health surfaces only — the queue consumer
   //     (task_processor) was removed as dead code (queue bindings disabled).
