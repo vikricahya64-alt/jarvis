@@ -48,12 +48,21 @@ if [[ "${1:-}" == "--local" ]]; then
   MODE="local"
 fi
 
-if ! command -v wrangler >/dev/null 2>&1; then
-  echo "d1_migrate: wrangler not found (npm i -g wrangler)" >&2
-  exit 1
+# wrangler is a devDependency of cf/package.json, so it lives in
+# node_modules/.bin and is NOT on PATH in CI. The previous "Deploy Worker"
+# step worked because it used `npx wrangler`. Resolve in the same order:
+# local install first (deterministic, uses the pinned version), then a global
+# install, then npx as a last resort.
+if [ -x "node_modules/.bin/wrangler" ]; then
+  WRANGLER=(node_modules/.bin/wrangler)
+elif command -v wrangler >/dev/null 2>&1; then
+  WRANGLER=(wrangler)
+else
+  WRANGLER=(npx wrangler)
 fi
+echo ">> wrangler: ${WRANGLER[*]}"
 
-d1() { wrangler d1 execute "$DB_NAME" $LOCAL_FLAG --command "$1"; }
+d1() { "${WRANGLER[@]}" d1 execute "$DB_NAME" $LOCAL_FLAG --command "$1"; }
 
 # Read a single integer out of wrangler's table output without depending on its
 # exact formatting.
@@ -97,7 +106,7 @@ fi
 
 # ------------------------------------------------------------------- apply
 echo ">> applying pending migrations (0021+)"
-wrangler d1 migrations apply "$DB_NAME" $LOCAL_FLAG
+"${WRANGLER[@]}" d1 migrations apply "$DB_NAME" $LOCAL_FLAG
 
 echo ">> final ledger:"
 d1 "SELECT id, name, applied_at FROM d1_migrations ORDER BY id;"
