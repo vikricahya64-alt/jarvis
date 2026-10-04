@@ -250,7 +250,7 @@ class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self._authorized():
-            self._send_unauthorized()
+            _send_unauthorized(self)
             return
         try:
             body = _read_json(self)
