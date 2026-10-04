@@ -66,12 +66,70 @@ d1() { "${WRANGLER[@]}" d1 execute "$DB_NAME" $LOCAL_FLAG --command "$1"; }
 
 # Read a single integer out of wrangler's table output without depending on its
 # exact formatting.
+#
+# Errors are deliberately NOT suppressed here. The first CI run reported a
+# ledger count of 0 both before and after the baseline insert, which looked
+# like "insert did nothing"; it was actually the query failing and
+# `2>/dev/null || echo 0` turning the failure into a plausible-looking 0.
+# Wrangler exits non-zero on failure, so let that propagate and print stderr.
 d1_count() {
-  d1 "SELECT COUNT(*) AS n FROM $1;" 2>/dev/null \
-    | grep -oE '[0-9]+' | tail -1 || echo 0
+  local out
+  if ! out="$("${WRANGLER[@]}" d1 execute "$DB_NAME" $LOCAL_FLAG --command "SELECT COUNT(*) AS n FROM $1;" 2>&1)"; then
+    echo "d1_migrate: query failed against table $1:" >&2
+    echo "$out" | sed 's/^/  /' >&2
+    return 1
+  fi
+  printf '%s' "$out" | grep -oE '[0-9]+' | tail -1
+}
+
+# --------------------------------------------------------------------------
+# Account resolution.
+#
+# CLOUDFLARE_ACCOUNT_ID is not set in this repository (no secret, no variable),
+# and `wrangler d1 execute` cannot resolve the account without it. Rather than
+# requiring an operator to add a secret on a machine nobody has, derive it from
+# the API token that IS present.
+# --------------------------------------------------------------------------
+resolve_account() {
+  if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+    echo ">> account id: from CLOUDFLARE_ACCOUNT_ID"
+    return 0
+  fi
+  if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+    echo "!! neither CLOUDFLARE_ACCOUNT_ID nor CLOUDFLARE_API_TOKEN is set;" >&2
+    echo "!! d1_migrate cannot authenticate. Check the repo secrets." >&2
+    return 1
+  fi
+  echo ">> account id: CLOUDFLARE_ACCOUNT_ID unset, deriving from the API token"
+  local body acc
+  body="$(curl -sS -m 30 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+          https://api.cloudflare.com/client/v4/accounts 2>&1)" || {
+    echo "d1_migrate: Cloudflare accounts request failed:" >&2
+    echo "$body" | sed 's/^/  /' >&2
+    return 1
+  }
+  acc="$(printf '%s' "$body" | python3 -c '
+import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception as e:
+    sys.exit(f"unparseable response: {e}")
+if not d.get("success"):
+    errs = d.get("errors") or []
+    sys.exit("api error: " + "; ".join(str(x.get("message", x)) for x in errs))
+accs = d.get("result") or []
+if not accs:
+    sys.exit("token has access to no accounts")
+print(accs[0]["id"])
+' 2>&1)" || { echo "$acc" | sed 's/^/  /' >&2; return 1; }
+  CLOUDFLARE_ACCOUNT_ID="$acc"
+  export CLOUDFLARE_ACCOUNT_ID
+  echo ">> account id: ${CLOUDFLARE_ACCOUNT_ID}"
 }
 
 echo ">> mode: $MODE"
+
+resolve_account
 
 # ---------------------------------------------------------------- ledger table
 d1 "CREATE TABLE IF NOT EXISTS d1_migrations(
