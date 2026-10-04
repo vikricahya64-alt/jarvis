@@ -67,6 +67,7 @@ export async function finalizeAgentTask(o: AgentResultOpts): Promise<void> {
       if (verdict !== "ok") {
         const path: FailurePath = executorType === "e2b" ? "e2b" : "borrowed";
         const recovery = await budgetedRecovery(env, {
+          owner,
           userText: task,
           bad: result,
           anchor: "",

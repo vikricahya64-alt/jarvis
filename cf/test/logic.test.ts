@@ -1359,6 +1359,7 @@ async function testContext7ResolveVerifier() {
       list: async () => ({ keys: [] }),
     },
     CONTEXT7_API_KEY: undefined,
+    OWNER_TELEGRAM_ID: "6812604983",
   };
   try {
     (globalThis as any).fetch = async (url: any) => {
@@ -1373,11 +1374,11 @@ async function testContext7ResolveVerifier() {
       }
       return new Response("", { status: 200 }); // context endpoint: empty docs
     };
-    const miss = await lookupLibraryDocs(env, "cara pakai sono");
+    const miss = await lookupLibraryDocs(env, 6812604983, "cara pakai sono");
     assert.strictEqual(miss.ok, false, "mismatched title must fail-closed");
     assert.strictEqual(miss.reason, "not_found", "verifier reject => not_found");
     assert.ok(!(miss.reply ?? "").includes("Sonos"), "never answer a different library");
-    const hit = await lookupLibraryDocs(env, "cara pakai hono");
+    const hit = await lookupLibraryDocs(env, 6812604983, "cara pakai hono");
     assert.strictEqual(hit.reason, "empty", "verifier PASSES hono → reaches docs fetch → empty docs");
   } finally {
     globalThis.fetch = realFetch;

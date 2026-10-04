@@ -107,7 +107,7 @@ export async function runBorrowedExecutor(
       return borrowedRisetReport(res.reply, res.grounded ?? false);
     }
     case "docs": {
-      const res = await lookupLibraryDocs(env, b).catch(() => ({ reply: null, ok: false, reason: "api_down" } as const));
+      const res = await lookupLibraryDocs(env, owner, b).catch(() => ({ reply: null, ok: false, reason: "api_down" } as const));
       if (res.ok && res.reply) return res.reply;
       return ""; // unreported failure surface
     }

@@ -48,7 +48,8 @@ export interface Decision {
   correlationId?: string;
 }
 
-const EMERGENCY_WORDS = ["/stop", "/kill", "/override", "/resume", "/kill force"];
+/** Verbal emergency — sumber kebenaran tunggal (dipakai regex di bawah). */
+const EMERGENCY_VERBS = ["/stop", "/kill", "/override", "/resume"];
 const DANGEROUS_WORDS = [
   "wipe", "delete all", "reset", "transfer legacy", "pause dms", "disarm",
   "release vault", "erase node", "destroy backup",
@@ -62,6 +63,43 @@ const COMMAND_PREFIXES = [
   "/", "tolong ", "please ", "lakukan ", "harap ",
   "stop ", "kill ", "override ", "jangan ", "never ",
 ];
+
+/**
+ * Emergency verb dihitung HANYA bila menjadi token perintah PERTAMA (setelah
+ * sapaan singkat seperti "tolong"/"silakan").
+ *
+ * Sebelumnya `EMERGENCY_WORDS.some((w) => lower.includes(w))` membuat "/stop"
+ * di posisi APAPUN dalam free text memaksa EXECUTE — dan cabang itu
+ * `return` SEBELUM `validateAction()` sempat jalan. Jadi "hapus semua /resume"
+ * melewati konstitusi (`no_destroy`) dan tercatat sebagai COMPLIANT.
+ *
+ * Di-anchor sekarang: verbal emergency adalah AUTORISASI atas dirinya sendiri,
+ * sedangkan teks SETELAH verbal itulah tindakan nyata yang harus tetap lolos
+ * guard (lihat `routeCommand`).
+ *
+ * Fungsi owner tidak berkurang sedikit pun: "/stop", "/kill", "/resume",
+ * "/override", "/kill force", dan "/resume" setelah "tolong"/"silakan" semuanya
+ * tetap EXECUTE persis seperti sebelumnya.
+ */
+const EMERGENCY_RE = new RegExp(
+  "^\\s*(?:tolong|silakan|please|oke|ok|baik|ayo|geser)?[\\s,]*(" +
+    EMERGENCY_VERBS.join("|") +
+    ")(?![\\w-])",
+  "i",
+);
+
+/** Cocokkan verbal emergency di awal perintah. Null = bukan emergency. */
+export function matchEmergency(text: string): RegExpExecArray | null {
+  return EMERGENCY_RE.exec(text || "");
+}
+
+/** Intent turunan untuk verbal emergency (dipakai juga saat guard menolak). */
+function emergencyIntent(): ClassifiedIntent {
+  return {
+    priority: TIERS.EMERGENCY, confidence: 1.0, label: "emergency_control",
+    riskLevel: "high", riskScore: 0.9, isExplicit: true, source: "prefix",
+  };
+}
 
 function hash(s: string): string {
   let h = 2166136261;
@@ -77,7 +115,7 @@ export function heuristicClassify(text: string): ClassifiedIntent {
   const raw = text || "";
   const lower = raw.toLowerCase();
   const score = riskScore(raw);
-  if (EMERGENCY_WORDS.some((w) => lower.includes(w))) {
+  if (matchEmergency(raw)) {
     return { priority: TIERS.EMERGENCY, confidence: 1.0, label: "emergency_control", riskLevel: "high", riskScore: 0.9, isExplicit: true, source: "prefix" };
   }
   if (DANGEROUS_WORDS.some((w) => lower.includes(w))) {
@@ -220,13 +258,48 @@ export async function routeCommand(
   const cfg = await getDmsConfig(env, owner);
   const rules = cfg.command_rules ?? [];
 
-  // Emergency override words are always honoured (still logged).
-  const lower = rawText.toLowerCase();
-  const isEmergency =
-    EMERGENCY_WORDS.some((w) => lower.includes(w)) ||
-    /^\/(override|resume|stop|kill)/.test(lower);
+  // Emergency override words are honoured when they lead the command (still
+  // logged) — but the payload they carry must still pass the constitution.
+  const em = matchEmergency(rawText);
+  const isEmergency = !!em;
 
   if (isEmergency) {
+    // Fail-closed, dan TIDAK menurunkan apa pun: verbal emergency adalah
+    // otorisasi atas dirinya sendiri, sedangkan teks setelah verbal itulah
+    // tindakan yang sebenarnya dijalankan. Jadi itulah yang diperiksa guard.
+    //   "/stop"                     → sisa kosong → tidak ada yang diperiksa
+    //                                  → EXECUTE (fungsi owner utuh)
+    //   "/resume"                   → sama → EXECUTE
+    //   "/resume lalu hapus semua"   → sisa diperiksa → no_destroy → BLOCK
+    const payload = rawText.slice(em![0].length).trim();
+    if (payload.length >= 2) {
+      const eg = validateAction(payload, {
+        origin,
+        commandRules: rules,
+        constitution: cfg.constitution,
+      });
+      if (!eg.allowed) {
+        const blocked: Decision = {
+          action: "BLOCK",
+          compliance: "BLOCKED",
+          priority: TIERS.EMERGENCY,
+          reason: `Constitutional guard: ${eg.violated_principle}`,
+          correlationId: cmdHash,
+        };
+        await logObedience(env, owner, "USER_COMMAND", TIERS.EMERGENCY, "BLOCK", "BLOCKED", {
+          commandHash: cmdHash,
+          blockingSource: eg.violated_principle ?? "constitution",
+          evidence: { reasoning: eg.reasoning, origin, emergency: true, payload: payload.slice(0, 300) },
+        });
+        await logViolation(env, owner, cmdHash, eg.violated_principle ?? "constitution", {
+          intent: payload.slice(0, 300),
+          reasoning: eg.reasoning,
+          confidence: eg.confidence,
+          originModule: "edge",
+        });
+        return toHierarchyResult(blocked, emergencyIntent(), cmdHash);
+      }
+    }
     const decision: Decision = {
       action: "EXECUTE",
       compliance: "COMPLIANT",
@@ -238,11 +311,7 @@ export async function routeCommand(
       commandHash: cmdHash,
       evidence: { via: "hierarchy", intent: "emergency_control" },
     });
-    return toHierarchyResult(
-      decision,
-      { priority: TIERS.EMERGENCY, confidence: 1.0, label: "emergency_control", riskLevel: "high", riskScore: 0.9 },
-      cmdHash,
-    );
+    return toHierarchyResult(decision, emergencyIntent(), cmdHash);
   }
 
   // Otherwise classify via Groq first, fallback heuristics on miss.

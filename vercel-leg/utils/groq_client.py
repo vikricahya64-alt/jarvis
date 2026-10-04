@@ -429,65 +429,7 @@ TOOLS = [
             },
         },
     },
-{
-        "type": "function",
-        "function": {
-            "name": "termux_command",
-            "description": "Execute a shell command on the user's Android device. Requires TERMUX_TUNNEL_URL env var. Use for running commands, checking files, installing packages, etc.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "Shell command to execute (e.g. 'ls -la', 'pkg list-installed')."},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 30, max 60)."},
-                },
-                "required": ["command"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "device_read_file",
-            "description": "Read a file from the user's Android device. Use to check config files, logs, source code, etc.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filepath": {"type": "string", "description": "Full path to the file (e.g. '/data/data/com.termux/files/home/.bashrc')."},
-                },
-                "required": ["filepath"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "device_write_file",
-            "description": "Write/create a file on the user's Android device.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filepath": {"type": "string", "description": "Full path to create/write the file."},
-                    "content": {"type": "string", "description": "File content to write."},
-                },
-                "required": ["filepath", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "device_list_dir",
-            "description": "List contents of a directory on the user's Android device.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "dirpath": {"type": "string", "description": "Directory path (default: home directory)."},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
+                {
         "type": "function",
         "function": {
             "name": "deep_reason",
@@ -529,9 +471,10 @@ def _build_messages(user_input, context=None, system_prompt=None,
         "temperature) use convert_units; for QR codes use make_qr. "
         "You retain a per-user to-do list: add_todo to save a task, "
         "list_todos to show it, done_todo/remove_todo to change it. "
-        "You can execute shell commands on the user's Android device via "
-        "termux_command. Use device_read_file, device_write_file, and "
-        "device_list_dir for file operations on the device. "
+        "Device control tools (termux_command, device_read_file, "
+        "device_write_file, device_list_dir) have been REMOVED: this "
+        "deployment has no phone attached, and they previously reached "
+        "an unauthenticated endpoint that ran arbitrary shell. "
         "The user can also save a preferred city: when the user gives a city "
         "name as their location (for weather/briefing/agenda), call set_city to "
         "persist it (get_city returns the saved one) instead of just clarifying.\n"

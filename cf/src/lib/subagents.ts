@@ -204,6 +204,7 @@ function scoreRelevance(
 
 async function runExtractor(
   env: Env,
+  owner: number,
   gathers: AngleGather[],
   topic = "",
 ): Promise<ExtractedFact[]> {
@@ -252,7 +253,7 @@ async function runExtractor(
     texts
       .map((t) => spotlightUntrusted(`${t.angle} (${t.url})`, t.text as string, 2600))
       .join("\n\n");
-  const g = await llmRespond(env, prompt, {
+  const g = await llmRespond(env, prompt, { owner,
     topic: "ekstraksi-bukti",
     context: [{ role: "system", content: extractorSystem() }],
   });
@@ -535,12 +536,14 @@ async function runResearcher(
     known +
     `\nBuat 1-${MAX_ANGLES} sudut pencarian (angles) yang paling mencakup dan berbeda — WAJIB berpegang pada kata-kata pertanyaan & topik pemilik,\nJANGAN membuat sudut yang jauh dari topik pertanyaan.`;
   const g = await llmRespond(env, prompt, {
+    owner,
     topic,
     context: [{ role: "system", content: researcherSystem(OWNER_SOVEREIGNTY) }],
   });
   if (!g.reply) return { angles: [shortenAngle(topic)] }; // no LLM -> single-angle fallback
   const plan = await parseStructured<ResearcherPlan>(g.reply, researcherValidator([1, MAX_ANGLES]), async (err) => {
     const again = await llmRespond(env, `${prompt}\n\nPerbaiki: ${err}. Kembalikan hanya JSON yang valid.`, {
+      owner,
       topic,
       context: [{ role: "system", content: researcherSystem(OWNER_SOVEREIGNTY) }],
     });
@@ -614,7 +617,7 @@ async function runWriter(
   context.push({ role: "system", content: writerSystem(OWNER_SOVEREIGNTY, replyLang, comprehensionNote) });
   context.push({ role: "user", content: prompt });
 
-  const g = await llmRespond(env, userText, { topic, context, contextIsEnriched: true, skipUserMessage: true });
+  const g = await llmRespond(env, userText, { owner, topic, context, contextIsEnriched: true, skipUserMessage: true });
   return g.reply;
 }
 
@@ -625,6 +628,7 @@ async function runWriter(
  *  first draft and never burn budget on an inconclusive refine. */
 async function runCritic(
   env: Env,
+  owner: number,
   userText: string,
   topic: string,
   draft: string,
@@ -634,7 +638,7 @@ async function runCritic(
     `Topik: "${topic}"\n` +
     `Draf jawaban pertama:\n${draft.slice(0, 4000)}\n` +
     `Nilai apakah draf telah menjawab semua aspek pertanyaan, lalu kembalikan JSON.`;
-  const g = await llmRespond(env, prompt, {
+  const g = await llmRespond(env, prompt, { owner,
     topic: "kritik-riset",
     context: [{ role: "system", content: criticSystem(OWNER_SOVEREIGNTY) }],
   });
@@ -658,14 +662,14 @@ async function runCritic(
 }
 
 // ---- verifier sub-agent (optional, 1 call, sparingly ---------------------
-async function runVerifier(env: Env, userText: string, reply: string): Promise<VerifierVerdict | null> {  if (reply.length > MAX_VERIFIER_REPLY_LEN) {
+async function runVerifier(env: Env, owner: number, userText: string, reply: string): Promise<VerifierVerdict | null> {  if (reply.length > MAX_VERIFIER_REPLY_LEN) {
     // Long: try a lightweight heuristic instead of always paying an LLM call.
   }
   const prompt =
     `Pertanyaan pemilik: "${userText}"\n` +
     `Draf jawaban yang akan dikirim:\n${reply}\n` +
     `Periksa keamanan & kesesuaian, lalu kembalikan JSON.`;
-  const g = await llmRespond(env, prompt, {
+  const g = await llmRespond(env, prompt, { owner,
     topic: "verifikasi",
     context: [{ role: "system", content: verifierSystem(OWNER_SOVEREIGNTY) }],
   });
@@ -728,7 +732,7 @@ export async function orchestrateResearch(
     //    pages, strip to clean text, extract structured citable facts. The
     //    Writer never sees raw HTML (dual-LLM quarantine / injection defense).
     //    +1 LLM call only when pages resolve; otherwise degrades to snippets.
-    const facts = await runExtractor(env, gathers, topic);
+    const facts = await runExtractor(env, owner, gathers, topic);
     if (facts.length > 0) {
       calls += 1;
       if (calls > MAX_TOTAL_LLM_CALLS) return null;
@@ -772,14 +776,14 @@ export async function orchestrateResearch(
     //    recursive loop capped at MAX_TOTAL_LLM_CALLS). Fail-closed: any
     //    inconclusive critique keeps the first draft — never burns scarce budget.
     if (reply.length >= CRITIC_MIN_DRAFT_LEN && calls < MAX_TOTAL_LLM_CALLS) {
-      const verdict = await runCritic(env, userText, topic, reply);
+      const verdict = await runCritic(env, owner, userText, topic, reply);
       calls += 1;
       const followups = verdict.followupAngles?.filter(Boolean) ?? [];
       if (!verdict.satisfied && followups.length > 0 && calls < MAX_TOTAL_LLM_CALLS) {
         // Deep pass: fan-out the critic's follow-up angles, then a fresh writer
         // synthesizes the first draft + new evidence into a deeper answer.
         const deeper = await gatherAllParallel(env, followups, topic);
-        const deeperFacts = await runExtractor(env, deeper, topic);
+        const deeperFacts = await runExtractor(env, owner, deeper, topic);
         if (deeperFacts.length > 0) {
           calls += 1;
           if (calls > MAX_TOTAL_LLM_CALLS) return reply;
@@ -806,7 +810,7 @@ export async function orchestrateResearch(
     const cleaned = finish(reply.trim());
     const finalReply = cleaned + (/\bhttps?:\/\//.test(cleaned) || !att ? "" : att);
     if (calls < MAX_TOTAL_LLM_CALLS && reply.length > MAX_VERIFIER_REPLY_LEN) {
-      const verdict = await runVerifier(env, userText, reply);
+      const verdict = await runVerifier(env, owner, userText, reply);
       calls += 1;
       if (verdict) {
         if (verdict.approved) return finalReply;
@@ -823,6 +827,7 @@ export async function orchestrateResearch(
     const gate = gateVerdict(finalReply, anchor);
     if (gate !== "ok" && gate !== "truncated") {
       const step = await budgetedRecovery(env, {
+      owner,
         userText,
         bad: finalReply,
         anchor,

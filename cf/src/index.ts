@@ -445,6 +445,7 @@ version: "m9-v11.52",
         const verdict = gateVerdict(rawResult);
         if (verdict !== "ok") {
           const recovery = await budgetedRecovery(env, {
+            owner: Number(env.OWNER_TELEGRAM_ID || 0),
             userText: task.task,
             bad: rawResult,
             anchor: "",

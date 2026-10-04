@@ -102,6 +102,7 @@ export interface PromptMasterResult {
 
 export async function writeExpertPrompt(
   env: Env,
+  owner: number,
   userText: string,
   context: Array<{ role: string; content: string }> = [],
 ): Promise<PromptMasterResult> {
@@ -110,7 +111,7 @@ export async function writeExpertPrompt(
   const r = await llmRespond(
     env,
     (userText || "").trim() || "Buatkan prompt contoh.",
-    {
+    { owner,
       topic: `prompt-master-${baseTopic}`,
       contextIsEnriched: true,
       context,
@@ -128,7 +129,7 @@ export async function writeExpertPrompt(
     const retry = await llmRespond(
       env,
       (userText || "").trim() || "Buatkan prompt contoh.",
-      {
+      { owner,
         topic: `prompt-master-${baseTopic}`,
         contextIsEnriched: true,
         context: [

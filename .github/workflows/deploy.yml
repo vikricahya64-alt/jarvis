@@ -17,11 +17,21 @@ name: Deploy Worker to Cloudflare
 # The GitHub repo is now the single authoritative source for the Cloudflare
 # worker (verified byte-consistent with live 2026-09-17, version m9-v11.51).
 # Auto-deploy fires on push to main that touches cf/** (or this workflow), so a
-# README/SUMMARY-only commit never deploys a stale worker. The D1 "migrations
-# apply" step is intentionally absent: migrations 0001–0019 are applied live
-# via `wrangler d1 execute --file`, and `migrations apply` would try to
-# CREATE_EXISTING tables and fail. Manual `workflow_dispatch` still available
-# for emergency/diagnostic deploys.
+# README/SUMMARY-only commit never deploys a stale worker. Manual
+# `workflow_dispatch` still available for emergency/diagnostic deploys.
+#
+# D1 MIGRATIONS ARE NOW LEDGER-GATED. Previously they were applied ad-hoc with
+# `wrangler d1 execute --file`, which keeps no record of what has run, so it
+# cannot tell "already applied" from "never applied" and is not re-runnable.
+#   * The workflow calls `cf/scripts/d1_migrate.sh`, which creates the
+#     d1_migrations ledger when absent and records 0001-0020 as applied only
+#     if the ledger is empty. Without that baseline, `migrations apply` would
+#     replay 0001-0020 and die on the first `ALTER TABLE ADD COLUMN` with
+#     "duplicate column name" (13 such statements exist across 8 tables).
+#   * The script is idempotent, so it is safe on every deploy. A newly added
+#     migrations/NNNN_*.sql is applied automatically instead of forgotten.
+#     No operator action is required, which matters because there is no
+#     laptop in this setup to run wrangler from.
 on:
   push:
     branches: [main]
@@ -63,9 +73,21 @@ jobs:
       - name: Run safety tests
         run: npm run test:safety
 
-      # NOTE: the D1 migrations step was intentionally removed — see the
-      # SAFETY GATE comment at the top. Migrations are applied live via
-      # `wrangler d1 execute --file <NNNN_*.sql>`.
+      # Migrations run BEFORE the worker deploy.
+      #
+      # scripts/d1_migrate.sh is idempotent and safe on every deploy: it creates
+      # the d1_migrations ledger if absent, records 0001-0020 as applied only
+      # when the ledger is empty (they ARE applied in this database), then runs
+      # `wrangler d1 migrations apply`, which then only executes new files.
+      #
+      # This replaces the previous hand-run procedure, which is impossible in a
+      # laptop-free setup: `deploy.yml` used to skip migrations entirely and
+      # rely on an operator running `wrangler d1 execute --file` somewhere.
+      - name: Apply D1 migrations (idempotent, ledger-gated)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID || vars.CF_ACCOUNT_ID }}
+        run: bash scripts/d1_migrate.sh
 
       - name: Deploy Worker
         env:

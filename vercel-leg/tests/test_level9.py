@@ -17,6 +17,7 @@ os.environ.setdefault("JARVIS_DMS_GRACE_DAYS", "30")
 
 __dir = os.path.dirname(os.path.abspath(__file__))
 _project = os.path.dirname(__dir)
+_repo = os.path.dirname(_project)   # repository root
 if _project not in sys.path:
     sys.path.insert(0, _project)
 
@@ -126,46 +127,6 @@ def test_guard_fail_closed_semantics():
 # ------------------------------------------------------------------
 # 7. Fly.io scaffold fragment sanity
 # ------------------------------------------------------------------
-def test_fly_toml_has_grace_config():
-    assert "JARVIS_DMS_GRACE_DAYS" in lv.FLY_TOML
-    assert "app =" in lv.FLY_TOML
-
-
-# ------------------------------------------------------------------
-# 8. 24/7 monitor (legacy_monitor_fly) fail-safe dry-run
-# ------------------------------------------------------------------
-def _import_monitor():
-    sys.path.insert(0, os.path.join(_project, "tools"))
-    from tools import legacy_monitor_fly as m
-    return m
-
-
-def test_monitor_once_defaults_to_dry_run():
-    m = _import_monitor()
-    res = m.run_once(0, execute=False)
-    assert res["mode"] == "dry_run"
-    assert res["action"] == "noop"
-    assert res["armed"] in (True, False)
-
-
-def test_monitor_once_even_execute_is_safe_without_supabase():
-    m = _import_monitor()
-    res = m.run_once(0, execute=True)
-    # Without live Supabase the state is not armed -> never destructive.
-    assert res["mode"] == "execute"
-    assert res["monitor"]["executed"] is False
-
-
-# ------------------------------------------------------------------
-# 9. Fly healthz / Dockerfile presence
-# ------------------------------------------------------------------
-def test_fly_assets_exist():
-    assert os.path.exists(os.path.join(_project, "fly.toml"))
-    assert os.path.exists(os.path.join(_project, "Dockerfile.fly"))
-    assert os.path.exists(os.path.join(_project, "tools",
-                                       "legacy_monitor_fly.py"))
-
-
 # ===========================================================================
 # Level 10 — Ubiquitous Sentience (zero-trust, failover, ephemeral workers)
 # ===========================================================================
@@ -231,13 +192,79 @@ def test_ephemeral_terminate_all():
     assert ew.queue_depths()["running"] == 0
 
 
-# ---- existence of L10 runtime / infra assets -------------------------------
-def test_level10_assets_exist():
-    for rel in ("api/fly_app.py", "healthcheck.sh", ".dockerignore",
-                "Dockerfile", "sql/level10_data_residency.sql",
+# ---- existence of the runtime assets that are actually deployed ----------
+#
+# This used to assert on Fly.io assets (api/fly_app.py, Dockerfile,
+# Dockerfile.fly, fly.toml, fly.legacy.toml, tools/legacy_monitor_fly.py),
+# Supabase Edge Functions, tools/apply_sql.py and deploy/oracle-arm/. All of
+# those were dead or broken and have been removed: the Fly CMD pointed at an
+# `api.webhook:app` that never existed so the machine restart-looped,
+# api/fly_app.py never existed either, apply_sql.py hardcoded the production
+# pooler host and imported psycopg2 which is not in requirements.txt, and the
+# Supabase `drain` function mutated rows with the service_role key and no auth.
+#
+# It had been failing for a long time because nothing ran it (there is no
+# pytest in requirements.txt, so vercel-leg/tests was never wired into CI).
+# It now asserts on the assets that are real.
+def test_deployed_runtime_assets_exist():
+    for rel in ("vercel.json",
+                "api/webhook.py",
+                "api/orchestrator.py",
+                "api/hybrid_router.py",
+                "healthcheck.sh"):
+        assert os.path.exists(os.path.join(_project, rel)), rel
+
+    # The replacement device agent must exist and be a Go module.
+    for rel in ("edge/go.mod",
+                "edge/Makefile",
+                "edge/README.md",
+                "edge/cmd/jarvis-edge/main.go",
+                "edge/internal/authz/authz.go",
+                "edge/internal/policy/policy.go"):
+        assert os.path.exists(os.path.join(_repo, rel)), rel
+
+
+def test_removed_dead_targets_are_gone():
+    """The removed deploy targets must not creep back in."""
+    for rel in ("fly.toml",
+                "fly.legacy.toml",
+                "Dockerfile",
+                "Dockerfile.fly",
+                "tools/legacy_monitor_fly.py",
                 "tools/apply_sql.py",
-                "docs/level10-free-tier-guide.md"):
-            assert os.path.exists(os.path.join(_project, rel)), rel
+                "deploy/oracle-arm",
+                "deploy/cloudflare",
+                "supabase/functions/drain",
+                "api/device_gateway.py",
+                "utils/termux_executor.py",
+                "termux"):
+        assert not os.path.exists(os.path.join(_project, rel)), (
+            f"{rel} was removed as a dead/broken target and must stay removed")
+
+
+def test_device_tools_are_not_exposed_to_the_model():
+    """termux_command and friends reached an unauthenticated RCE endpoint."""
+    import ast as _ast
+    from utils import groq_client as _g
+    tool_names = set()
+    for node in _ast.walk(_ast.parse(open(_g.__file__).read())):
+        if isinstance(node, _ast.Assign):
+            for t in node.targets:
+                if isinstance(t, _ast.Name) and t.id == "TOOLS":
+                    for e in node.value.elts:
+                        if isinstance(e, _ast.Dict):
+                            d = {k.value: v for k, v in zip(e.keys, e.values)}
+                            fn = d.get("function")
+                            if isinstance(fn, _ast.Dict):
+                                fd = {k.value: v for k, v in zip(fn.keys, fn.values)}
+                                if isinstance(fd.get("name"), _ast.Constant):
+                                    tool_names.add(fd["name"].value)
+    for banned in ("termux_command", "device_read_file",
+                   "device_write_file", "device_list_dir"):
+        assert banned not in tool_names, (
+            f"{banned} must not be offered to the model: it drove an "
+            "unauthenticated shell-execution endpoint"
+        )
 
 
 def test_level10_modules_import():
