@@ -241,7 +241,7 @@ export async function askSearchRespond(
 
   // Satu model final: gabung semua → respons kontekstual
   const finalContext = contextParts.join("\n\n");
-  const result = await llmRespond(env, text, {
+  const result = await llmRespond(env, text, { owner,
     context: [{ role: "assistant", content: finalContext }],
     topic: perception.topic ?? undefined,
   }).catch(() => ({ reply: null as string | null }));

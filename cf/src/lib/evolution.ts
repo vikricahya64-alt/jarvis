@@ -162,6 +162,7 @@ function needsReflection(
  *  Now uses selective reflection to avoid wasting tokens on trivial turns. */
 export async function reflectOnTurn(
   env: Env,
+  owner: number,
   turnText: string,
   output: string,
   errors: string[] = [],
@@ -191,7 +192,7 @@ export async function reflectOnTurn(
   let critique = "";
   let refined = output;
   let score = 0;
-  const g = await llmRespond(env, rubric, { context: [{ role: "assistant", content: turnText }], contextIsEnriched: true });
+  const g = await llmRespond(env, rubric, { owner, context: [{ role: "assistant", content: turnText }], contextIsEnriched: true });
   if (g.reply) {
     const parsed = parseReflection(g.reply);
     score = parsed.score;
@@ -228,6 +229,7 @@ export interface DreamResult {
  *  or the LLM declines — never fabricates a phantom rule. */
 export async function extractInsightFromCluster(
   env: Env,
+  owner: number,
   memories: Array<{ id: string; content: string }>,
 ): Promise<{ rule: string; category: string } | null> {
   if (memories.length < MIN_INSIGHT_EVIDENCE) return null;
@@ -238,7 +240,7 @@ export async function extractInsightFromCluster(
     "jawab TIDAK ADA POLA.\n\n" +
     memories.map((m) => `- ${m.content}`).join("\n") +
     "\n\nFormat ketat:\nCATEGORY: <behavior|format|tone|timing|safety>\nRULE: <satu kalimat umum, Bahasa Indonesia>";
-  const g = await llmRespond(env, prompt);
+  const g = await llmRespond(env, prompt, { owner: owner });
   if (!g.reply || /tidak ada pola|no pattern/i.test(g.reply)) return null;
   const cat = g.reply.match(/CATEGORY:\s*(\w+)/i)?.[1]?.toLowerCase() ?? "behavior";
   const rule = g.reply.match(/RULE:\s*(.+)/i)?.[1]?.trim();
@@ -293,7 +295,7 @@ export async function runDreamCycle(env: Env): Promise<DreamResult> {
     // single LLM call) from the freshest memories.
     if (rows.length >= MIN_INSIGHT_EVIDENCE) {
       const cluster = rows.slice(0, Math.min(8, rows.length)).map((r) => ({ id: r.id, content: r.content }));
-      const insight = await extractInsightFromCluster(env, cluster);
+      const insight = await extractInsightFromCluster(env, Number(env.OWNER_TELEGRAM_ID || 0), cluster);
       if (insight) {
         const id = await saveInsight(env, insight.rule, insight.category, cluster.map((c) => c.id));
         if (id != null) res.insightsExtracted = 1;

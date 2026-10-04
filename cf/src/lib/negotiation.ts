@@ -100,10 +100,11 @@ const QUESTIONS_SYSTEM =
 /** Generate 1-3 clarifying questions for the task via the LLM cascade. */
 export async function generateClarifyQuestions(
   env: Env,
+  owner: number,
   task: string,
 ): Promise<string[]> {
   try {
-    const g = await llmRespond(env, task, {
+    const g = await llmRespond(env, task, { owner,
       systemOverride: QUESTIONS_SYSTEM,
       skipUserMessage: true,
     }).catch(() => ({ reply: null, source: null }));
@@ -132,6 +133,7 @@ export interface AskedTerm {
 /** Compile the final instruction from the original task + clarification Q&A. */
 export async function compileFinalInstruction(
   env: Env,
+  owner: number,
   task: string,
   qa: AskedTerm[],
 ): Promise<string> {
@@ -143,7 +145,7 @@ export async function compileFinalInstruction(
       : "TANPA KLARIFIKASI TAMBAHAN.",
   ].join("\n");
   try {
-    const g = await llmRespond(env, body, {
+    const g = await llmRespond(env, body, { owner,
       systemOverride: COMPILE_SYSTEM,
       skipUserMessage: true,
     }).catch(() => ({ reply: null, source: null }));

@@ -626,6 +626,7 @@ function normalizeLang(tok: string): string {
  *  dispatch as research so it needs no new provider/budget. */
 export async function translateText(
   env: Env,
+  owner: number,
   source: string,
   target: string | null,
 ): Promise<string | null> {
@@ -635,7 +636,7 @@ export async function translateText(
     "Balas HANYA dengan hasil terjemahan, tanpa penjelasan, tanpa sinyal kutip, " +
     "tanpa menambah komentar. Terjemahkan secara akurat dan natural ke bahasa target. " +
     `Bahasa target: ${targetPhrase}.`;
-  const g = await llmRespond(env, source, {
+  const g = await llmRespond(env, source, { owner,
     topic: "terjemahan",
     context: [{ role: "system", content: sys }],
   });
@@ -757,7 +758,41 @@ export interface ProviderRespondOpts {
   skipUserMessage?: boolean;
   prebuiltMessages?: Array<{ role: string; content: string }>;
   deep?: boolean;
+  /** Telegram id pemilik SESI yang sedang dilayani.
+   *
+   *  WAJIB diisi oleh setiap entry point yang tahu siapa pemanggilnya.
+   *  Dulu lima responder di bawah melakukan hardcode
+   *  `Number(env.OWNER_TELEGRAM_ID)`, jadi `buildConversationMessages()`
+   *  mengambil session, mood, working-memory, ringkasan, dan topik terakhir
+   *  milik OWNER — untuk PESAN SIAPAPUN. Karena gerbang akses terbuka untuk
+   *  tier "user" (lihat lib/access.ts), setiap user lain dijawab dari memori
+   *  privat owner, dan pesan mereka ikut memutasi mood EMA owner.
+   *
+   *  Tidak ada perilaku owner yang berubah: untuk owner, `opts.owner` ==
+   *  OWNER_TELEGRAM_ID, jadi jalur kodenya identik dengan sebelumnya.
+   *  Yang berubah HANYA user tier "user" — dan itu justru kebocoran yang
+   *  harus ditutup, bukan fungsi yang berkurang.
+   *
+   *  field ini sengaja OPSIONAL: bila kosong, fallback ke OWNER_TELEGRAM_ID
+   *  supaya tidak ada caller lama yang ikut terputus. Resolusi selalu lewat
+   *  `resolveOwnerId()` di bawah supaya perilaku fallback-nya eksplisit dan
+   *  bisa diuji, bukan tersembunyi di lima tempat terpisah. */
+  owner?: number;
   tools?: Array<{ type: "function"; function: { name: string; description?: string; parameters?: Record<string, unknown> } }>;
+}
+
+/** Resolusi owner id untuk satu panggilan LLM.
+ *
+ *  Mengembalikan `{ owner, isOwnerScoped }`. `isOwnerScoped === false`
+ *  berarti pemanggil tidak mengirim `opts.owner`, sehingga kita memakai sesi
+ *  owner. Itu tepat HANYA untuk internal legacy (yang memang berjalan atas
+ *  nama owner); `assertOwnerScoped` dipakai test agar jalur ini tidak
+ *  kembali dipakai diam-diam oleh entry point milik user. */
+function resolveOwnerId(env: Env, opts: ProviderRespondOpts): { owner: number; isOwnerScoped: boolean } {
+  if (typeof opts.owner === "number" && Number.isFinite(opts.owner) && opts.owner > 0) {
+    return { owner: opts.owner, isOwnerScoped: true };
+  }
+  return { owner: Number(env.OWNER_TELEGRAM_ID), isOwnerScoped: false };
 }
 
 /** One unified OpenAI-compatible chat-completions responder.
@@ -780,9 +815,10 @@ async function openAICompatRespond(
   if (!cfg.key) return null; // fail-open: not configured
   const context = opts.context ?? [];
 
+  const sessionOwner = resolveOwnerId(env, opts).owner;
   const messages = opts.prebuiltMessages ?? await buildConversationMessages(
     env,
-    Number(env.OWNER_TELEGRAM_ID),
+    sessionOwner,
     userText,
     opts.contextIsEnriched && context.length > 0
       ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
@@ -898,7 +934,7 @@ export function nvidiaNimRespond(
 export async function geminiRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
+  opts: ProviderRespondOpts = {},
 ): Promise<string | null> {
   const keys = [env.GEMINI_API_KEY, env.GEMINI_API_KEY_BACKUP, env.GEMINI_API_KEY_SECONDARY].filter(
     (k): k is string => Boolean(k),
@@ -906,9 +942,10 @@ export async function geminiRespond(
   if (keys.length === 0) return null;
   const context = opts.context ?? [];
 
+  const sessionOwner = resolveOwnerId(env, opts).owner;
   const messages = opts.prebuiltMessages ?? await buildConversationMessages(
     env,
-    Number(env.OWNER_TELEGRAM_ID),
+    sessionOwner,
     userText,
     opts.contextIsEnriched && context.length > 0
       ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
@@ -1033,7 +1070,7 @@ export function extractInteractionText(data: unknown): string | null {
 export async function antigravityRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
+  opts: ProviderRespondOpts = {},
 ): Promise<string | null> {
   const keys = [env.ANTIGRAVITY_API_KEY, env.GEMINI_API_KEY, env.GEMINI_API_KEY_BACKUP, env.GEMINI_API_KEY_SECONDARY].filter(
     (k): k is string => Boolean(k),
@@ -1041,9 +1078,10 @@ export async function antigravityRespond(
   if (keys.length === 0) return null;
   const context = opts.context ?? [];
 
+  const sessionOwner = resolveOwnerId(env, opts).owner;
   const messages = opts.prebuiltMessages ?? await buildConversationMessages(
     env,
-    Number(env.OWNER_TELEGRAM_ID),
+    sessionOwner,
     userText,
     opts.contextIsEnriched && context.length > 0
       ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
@@ -1112,14 +1150,15 @@ export async function antigravityRespond(
 export async function workersAiRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; prebuiltMessages?: Array<{ role: string; content: string }> } = {},
+  opts: ProviderRespondOpts = {},
 ): Promise<string | null> {
   if (!env.AI) return null;
   const context = opts.context ?? [];
 
+  const sessionOwner = resolveOwnerId(env, opts).owner;
   const messages = opts.prebuiltMessages ?? await buildConversationMessages(
     env,
-    Number(env.OWNER_TELEGRAM_ID),
+    sessionOwner,
     userText,
     opts.contextIsEnriched && context.length > 0
       ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
@@ -1182,7 +1221,7 @@ export async function workersAiRespond(
 export async function llmRespond(
   env: Env,
   userText: string,
-  opts: { context?: Array<{ role: string; content: string }>; topic?: string; contextIsEnriched?: boolean; skipUserMessage?: boolean; systemOverride?: string; deep?: boolean } = {},
+  opts: ProviderRespondOpts & { systemOverride?: string } = {},
 ): Promise<{ reply: string | null; source: "workers_ai" | "groq" | "nvidia_nim" | "openrouter" | "gemini" | "antigravity" | "self_ref" | null }> {
   // SELF-REFERENTIAL INTERCEPT — the brain's first and most important guard.
   // If the input asks "who are you" or "what can you do", answer directly from
@@ -1198,9 +1237,10 @@ export async function llmRespond(
   const context = opts.context ?? [];
 
   // Build messages ONCE — shared across all providers (avoids 4x redundant buildConversationMessages calls)
+  const sessionOwner = resolveOwnerId(env, opts).owner;
   const prebuiltMessages = await buildConversationMessages(
     env,
-    Number(env.OWNER_TELEGRAM_ID),
+    sessionOwner,
     userText,
     opts.contextIsEnriched && context.length > 0
       ? { topic: opts.topic, enrichedContext: context, skipUserMessage: opts.skipUserMessage }
@@ -1269,6 +1309,7 @@ export async function llmRespond(
  *  provider fails so the caller keeps its original reply (fail-open). */
 export async function recoverReply(
   env: Env,
+  owner: number,
   userText: string,
   _bad: string,
   context: Array<{ role: string; content: string }>,
@@ -1300,7 +1341,7 @@ export async function recoverReply(
     });
   }
   try {
-    const g = await llmRespond(env, userText, { context: tryCtx, topic, contextIsEnriched: true });
+    const g = await llmRespond(env, userText, { owner, context: tryCtx, topic, contextIsEnriched: true });
     return g.reply?.trim() ? g.reply : null;
   } catch {
     return null;
@@ -1753,7 +1794,7 @@ export async function searchAndSynthesize(
     // with site:-filtered institutional hits (the frame owns the whole pipeline).
     const sub = await orchestrateResearch(env, owner, userText, topic, followupAnchor, opts.replyLang ?? "");
     if (sub) {
-      if (sub.length > 120) void reflectOnTurn(env, userText, sub, []).catch(() => {});
+      if (sub.length > 120) void reflectOnTurn(env, owner, userText, sub, []).catch(() => {});
       return { reply: sub, source: "subagents", grounded: true, searched: true };
     }
   }
@@ -1906,7 +1947,7 @@ const [pkg, context, mems, behaviorContext] = await Promise.all([
       content: "Pemilik minta VERSI SINGKAT: jawab maksimal ±60 kata, langsung ke inti, tanpa intro/markdown berlebihan.",
     });
   }
-  const g = await llmRespond(env, userText, { context, topic, contextIsEnriched: true, deep: true });
+  const g = await llmRespond(env, userText, { owner, context, topic, contextIsEnriched: true, deep: true });
   if (g.reply) {
     // OUTPUT GATE → Phase-3 BUDGETED RECOVERY (failure.ts): classify the
     // provider reply deterministically, then repay it within a strict LLM
@@ -1914,6 +1955,7 @@ const [pkg, context, mems, behaviorContext] = await Promise.all([
     // corrective rewrite max). Never loops, never throws; if recovery cannot
     // clean the reply it falls back to the reply as-is (fail-open).
     const step = await budgetedRecovery(env, {
+      owner,
       userText,
       bad: g.reply,
       context,
@@ -1960,7 +2002,7 @@ const [pkg, context, mems, behaviorContext] = await Promise.all([
     // Format reply for natural conversation
     let formatted = buildFinalReply(generated, "research", finalSentiment);
     if (formatted.length > 120) {
-      void reflectOnTurn(env, userText, formatted, []).catch(() => {});
+      void reflectOnTurn(env, owner, userText, formatted, []).catch(() => {});
     }
     return { reply: formatted, source: `${g.source}+ddg`, grounded: searchResult !== null || hits.length > 0, citedSources, hitsAvailable: hits.length, searched: !skipSearch };
   }
@@ -1990,7 +2032,7 @@ const [pkg, context, mems, behaviorContext] = await Promise.all([
 /** Generate an image prompt based on user description.
  *  Works for ANY topic — products, concepts, scenes, objects, etc.
  *  With automatic fallback when description is empty/unknown. */
-export async function generateImagePrompt(env: Env, userDescription: string): Promise<string> {
+export async function generateImagePrompt(env: Env, owner: number, userDescription: string): Promise<string> {
   // Clean and validate input
   const description = userDescription?.trim() ?? "";
 
@@ -2030,7 +2072,7 @@ export async function generateImagePrompt(env: Env, userDescription: string): Pr
   Gunakan format yang kompatibel dengan Midjourney/DALL-E/Stable Diffusion.`;
   }
 
-  const g = await llmRespond(env, prompt, {
+  const g = await llmRespond(env, prompt, { owner,
     topic: "image_prompt",
   });
   if (g.reply) {
@@ -2193,6 +2235,7 @@ export async function understandUserWants(
 5. Maksimal 3 kalimat.`;
 
   const g = await llmRespond(env, prompt, {
+    owner: _owner,
     topic: `understand-${baseTopic}`,
     contextIsEnriched: true,
     context,
@@ -2353,6 +2396,7 @@ export function unknownEntitySignal(text: string): boolean {
  *  treated as ask (fail-closed). */
 export async function detectGarbledInput(
   env: Env,
+  owner: number,
   userText: string,
   context: Array<{ role: string; content: string }> = [],
   topic: string | null = null,
@@ -2396,7 +2440,7 @@ export async function detectGarbledInput(
     `clear=true DILARANG kalau confidence < 0.8 (jangan pernah menjawab dengan raguan tinggi).`;
 
   try {
-    const g = await llmRespond(env, prompt, {
+    const g = await llmRespond(env, prompt, { owner,
       topic: `comprehension-${(topic ?? text).slice(0, 40)}`,
       skipUserMessage: true,
       deep: false,

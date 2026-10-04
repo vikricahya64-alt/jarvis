@@ -101,25 +101,43 @@ export async function decomposeGoal(
     }];
   }
 
-  const planId = await createPlan(env, owner, goal, steps);
-  steps = steps.map((s, i) => ({
+  // Step ids WAJIB dialokasikan SEBELUM insert. Sebelumnya `createPlan()`
+  // dipanggil lebih dulu (insert memakai `id` mentah dari JSON LLM) dan id
+  // baru di-reassign ke `${planId}-${i+1}` SESUDAHnya — sehingga id yang
+  // ditampilkan ke owner tidak pernah ada di D1, dan `/plan approve <id>`
+  // selalu gagal ("tidak ditemukan"). Menyalin urutan ini memulihkan
+  // perintah approve tanpa mengubah apa pun yang lain.
+  const planId = await sha256(`${owner}:${goal}:${Date.now()}`);
+  steps = steps.slice(0, MAX_PLAN_STEPS).map((s, i) => ({
     ...s,
-    id: `${planId}-${i+1}`,
+    id: `${planId}-${i + 1}`,
     planId,
     stepIndex: i,
-    status: "pending",
+    status: "pending" as PlanStep["status"],
   }));
 
   await logObedience(env, owner, "PLAN_DECOMPOSED", 100, "EXECUTE", "COMPLIANT", {
     commandHash: planId, evidence: { stepsCount: steps.length },
   });
 
+  await createPlan(env, owner, planId, goal, steps);
+
   return { planId, steps };
 }
 
+/** Batas atas jumlah step per plan — `plan_steps` ditulis satu batch, dan
+ *  jumlah step datang dari JSON LLM yang tidak dibatasi. Tanpa cap, satu
+ *  dekomposisi gila bisa menghasilkan batch melebihi batas D1. */
+const MAX_PLAN_STEPS = 12;
+
 /** Create a new plan and approve the owner's confirmation. */
-async function createPlan(env: Env, owner: number, goal: string, steps: PlanStep[]): Promise<string> {
-  const planId = await sha256(`${owner}:${goal}:${Date.now()}`);
+async function createPlan(
+  env: Env,
+  owner: number,
+  planId: string,
+  goal: string,
+  steps: PlanStep[],
+): Promise<void> {
   const scheduleAt = Date.now();
 
   const batches = steps.map((step) =>
@@ -136,9 +154,9 @@ async function createPlan(env: Env, owner: number, goal: string, steps: PlanStep
        VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`,
     ).bind(planId, owner, goal, `Plan: ${goal}`, 'once', scheduleAt, Date.now()),
   );
-  await env.DB.batch(batches).catch(() => {});
-
-  return planId;
+  // Tidak ditelan lagi: dulu `catch(() => {})` membuat handler tetap
+  // melaporkan "Rencana dibuat" beserta id yang tidak pernah ada di D1.
+  await env.DB.batch(batches);
 }
 
 /** Hash utility (Web Crypto, native in Workers). */

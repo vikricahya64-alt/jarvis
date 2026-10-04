@@ -5,10 +5,6 @@
     {
       "source": "/api/analytics/:path*",
       "destination": "/api/analytics"
-    },
-    {
-      "source": "/api/device_gateway/:path*",
-      "destination": "/api/device_gateway"
     }
   ],
   "crons": [
@@ -50,9 +46,6 @@
       "maxDuration": 60
     },
     "api/analytics.py": {
-      "maxDuration": 60
-    },
-    "api/device_gateway.py": {
       "maxDuration": 60
     },
     "api/simulator_proxy.py": {

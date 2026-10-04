@@ -278,24 +278,7 @@ def stale_window(telegram_id: int) -> bool:
     return not _terminate_window(last)
 
 
-# ----------------------------------------------------------------------------
-# Fly.io scaffold fragment (kept here so deploy docs can embed it)
-# ----------------------------------------------------------------------------
-FLY_TOML = """app = "jarvis-legacy-monitor"
-primary_region = "nrt"
-
-[build]
-  image = "flyio/helloworld"
-
-[services.concurrency]
-  type = "heavy"
-
-[[services]]
-  protocol = "tcp"
-  internal_port = 8080
-  processes = ["app"]
-
-[env]
-  JARVIS_DMS_GRACE_DAYS = "30"
-  JARVIS_MULTISIG_THRESHOLD = "2"
-"""
+# NOTE: the Fly.io scaffold (fly.toml, Dockerfile.fly and the
+# legacy_monitor_fly dead-man's switch) has been removed. The live
+# dead-man's switch is cf/src/daemons/dead_mans_switch.ts, driven by
+# Cloudflare cron.

@@ -1099,13 +1099,13 @@ export async function act(
     case "translate": {
       const parsed = parseTranslate(d);
       if (parsed?.source) {
-        const result = await translateText(env, parsed.source, parsed.target);
+        const result = await translateText(env, owner, parsed.source, parsed.target);
         return { reply: result ?? "Terjemahan tidak tersedia.", source: "translate" };
       }
       // Bare translate — use last assistant reply
       const lastAssistant = enrichedContext.filter((c) => c.role === "assistant").pop();
       if (lastAssistant && lastAssistant.content.length > 30) {
-        const result = await translateText(env, lastAssistant.content, "English");
+        const result = await translateText(env, owner, lastAssistant.content, "English");
         return { reply: result ?? lastAssistant.content, source: "translate_bare" };
       }
       return { reply: "Tidak ada teks untuk diterjemahkan.", source: "translate" };
@@ -1118,7 +1118,7 @@ export async function act(
       // PLUS a real flux image of the subject — flux is merged into the image
       // generation path. Fail-closed: outline failure falls back to search;
       // image failure degrades to text-only.
-      const outline = await llmRespond(env, d, {
+      const outline = await llmRespond(env, d, { owner,
         topic: `desain-${topic}`,
         contextIsEnriched: true,
         context: [{ role: "system", content: `Buat konsep desain singkat (4-6 baris, prose paragraphs) untuk: "${d}".\nTermasuk: ide utama, gaya visual, warna dominan, dan elemen utama. ${replyLang ? `Tulis dalam bahasa ${replyLang}. ` : "Bahasa Indonesia. "}Jangan sebut storyboard/keyframe/video.` }],
@@ -1127,7 +1127,7 @@ export async function act(
       let image: { bytes: Uint8Array; mime: string } | undefined;
       try {
         const promptText = d.length >= 3 ? d.slice(0, 250) : d;
-        const prompt = await generateImagePrompt(env, promptText);
+        const prompt = await generateImagePrompt(env, owner, promptText);
         const bytes = await generateImage(env, prompt).catch(() => null);
         if (bytes && bytes.length > 0) image = { bytes, mime: sniffImageMime(bytes) };
       } catch (e) {
@@ -1184,7 +1184,7 @@ export async function act(
       }
       // Fallback: plain LLM, fail-closed (still under the universal rail —
       // m9-v11.19: no model call escapes the persona/no-menu/verify-in-P2 frame).
-      const fallback = await llmRespond(env, d, {
+      const fallback = await llmRespond(env, d, { owner,
         topic: topic ?? undefined,
         context: enrichedContext,
         contextIsEnriched: true,
@@ -1197,11 +1197,11 @@ export async function act(
     }
 
     case "prompt_master": {
-      const result = await writeExpertPrompt(env, d, enrichedContext);
+      const result = await writeExpertPrompt(env, owner, d, enrichedContext);
       if (result.ok && result.reply) {
         return { reply: result.reply, source: "prompt_master" };
       }
-      const fallback = await llmRespond(env, d, {
+      const fallback = await llmRespond(env, d, { owner,
         topic: topic ?? undefined,
         context: enrichedContext,
         contextIsEnriched: true,
@@ -1214,7 +1214,7 @@ export async function act(
     }
 
     case "context7_docs": {
-      const ctx7 = await lookupLibraryDocs(env, d, enrichedContext);
+      const ctx7 = await lookupLibraryDocs(env, owner, d, enrichedContext);
       if (ctx7.ok && ctx7.reply) {
         return { reply: ctx7.reply, source: "context7" };
       }
@@ -1231,7 +1231,7 @@ export async function act(
         /\[(?:Riwayat percakapan sebelumnya|Catatan riwayat)\]/.test(c.content || ""));
       const frame = () =>
         buildUniversalFrame({ text: d, topic, perception, context: task.payload });
-      const result = await llmRespond(env, d, {
+      const result = await llmRespond(env, d, { owner,
         topic: topic ?? undefined,
         context: task.payload,
         contextIsEnriched: true,
@@ -1251,7 +1251,7 @@ export async function act(
           isMenuFirstLine(reply) || hasDegenerateEcho(reply) || isAcknowledgeOnly(reply);
         if (badAnswer) {
           const nudge = isMenuFirstLine(reply) ? MENU_FOLLOWUP_NUDGE : ECHO_FOLLOWUP_NUDGE;
-          const retry = await llmRespond(env, d, {
+          const retry = await llmRespond(env, d, { owner,
             topic: topic ?? undefined,
             context: task.payload,
             contextIsEnriched: true,
@@ -1266,7 +1266,7 @@ export async function act(
             // Recall turns get ONE content-forced second pass (the deterministic
             // continuation is a recollection, not a continuation — content must
             // come from the LLM when at all possible).
-            const retry2 = await llmRespond(env, d, {
+            const retry2 = await llmRespond(env, d, { owner,
       topic: perception.topic ?? undefined,
               context: task.payload,
               contextIsEnriched: true,
@@ -1323,7 +1323,7 @@ export async function reflect(
 
   // Trigger reflection for substantial replies (learning signal)
   if (reply.length > 120) {
-    void reflectOnTurn(env, text, reply, []).catch(() => {});
+    void reflectOnTurn(env, owner, text, reply, []).catch(() => {});
   }
 
   // Update session state
@@ -1444,7 +1444,7 @@ export async function processIntelligence(
       }
       // CONDENSE for ask_search: if response too long, condense via LLM (1 call max)
       if (reply.length > 600) {
-        const condensed = await llmRespond(env, reply, {
+        const condensed = await llmRespond(env, reply, { owner,
           context: [{ role: "system", content: CONDENSE_PROMPT }],
           topic: perception.topic ?? undefined,
         }).catch((e) => { console.warn("[condense] ask_search failed:", (e as Error).message); return null; });
@@ -1476,7 +1476,7 @@ export async function processIntelligence(
     if (skip) {
       const replyLang = perception.comprehension.language.code === "unknown"
         ? "" : perception.comprehension.language.name;
-      const result = await llmRespond(env, effectiveText, {
+      const result = await llmRespond(env, effectiveText, { owner,
         topic: perception.topic ?? undefined,
         ...(replyLang ? { systemOverride: `Jawab dalam bahasa: ${replyLang}. Jangan mengarang fakta, URL, atau data yang tidak ada. Jawab singkat dan langsung ke inti.` } : {}),
       }).catch(() => ({ reply: null as string | null, source: null as string | null }));
@@ -1490,7 +1490,7 @@ export async function processIntelligence(
         }
         // CONDENSE for skip_heavy: if still too long, condense via LLM
         if (safeReply.length > 600) {
-          const condensed = await llmRespond(env, safeReply, {
+          const condensed = await llmRespond(env, safeReply, { owner,
             context: [{ role: "system", content: CONDENSE_PROMPT }],
             topic: perception.topic ?? undefined,
           }).catch((e) => { console.warn("[condense] skip_heavy failed:", (e as Error).message); return null; });
@@ -1567,7 +1567,7 @@ export async function processIntelligence(
   // This is a safety net for when the model ignores ANTI-VERBOSE rules.
   const CONDENSE_THRESHOLD = 600;
   if (deliverable.length > CONDENSE_THRESHOLD && source !== "self_ref" && reply.length > 120) {
-    const condensed = await llmRespond(env, deliverable, {
+    const condensed = await llmRespond(env, deliverable, { owner,
       context: [{ role: "system", content: CONDENSE_PROMPT }],
       topic: perception.topic ?? undefined,
     }).catch((e) => { console.warn("[condense] global choke failed:", (e as Error).message); return null; });

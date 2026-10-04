@@ -369,24 +369,13 @@ def _dispatch_tool(name: str, args: dict, telegram_id: int = None):
         return todos.done_todo(telegram_id, args.get("match", ""))
     if name == "remove_todo":
         return todos.remove_todo(telegram_id, args.get("match", ""))
-    if name == "termux_command":
-        from utils import termux_executor
-        return termux_executor.execute_command(
-            args.get("command", ""),
-            args.get("timeout", 30),
-            telegram_id,
-        )
-    if name == "device_read_file":
-        from utils import termux_executor
-        return termux_executor.read_file(args.get("filepath", ""))
-    if name == "device_write_file":
-        from utils import termux_executor
-        return termux_executor.write_file(
-            args.get("filepath", ""), args.get("content", "")
-        )
-    if name == "device_list_dir":
-        from utils import termux_executor
-        return termux_executor.list_directory(args.get("dirpath", "."))
+    # Device-control tools were removed. They dispatched to
+    # utils/termux_executor.py, which POSTed to an endpoint
+    # (vercel-leg/termux/server.js) that had no authentication, bound to
+    # 0.0.0.0, and was published through a public `cloudflared tunnel --url`
+    # quick tunnel — i.e. arbitrary shell execution reachable from the open
+    # internet, reachable from here without any credential. The replacement is
+    # edge/cmd/jarvis-edge: one static Go binary that requires a token.
     if name in ("read_gmail", "upload_to_drive", "query_notion",
                 "get_calendar_events"):
         try:

@@ -147,6 +147,7 @@ export function context7FailureMessage(reason: NonNullable<Context7Result["reaso
 
 export async function lookupLibraryDocs(
   env: Env,
+  owner: number,
   userText: string,
   context: Array<{ role: string; content: string }> = [],
 ): Promise<Context7Result> {
@@ -177,7 +178,7 @@ export async function lookupLibraryDocs(
     `Bila relevan sertakan contoh kode dalam blok kode. Bahasa: sesuai permintaan pemilik.\n\n` +
     `=== DOKUMENTASI (Context7) — library ${libraryId} ===\n${docs.slice(0, 8000)}`;
 
-  const r = await llmRespond(env, userText, {
+  const r = await llmRespond(env, userText, { owner,
     topic: `context7-${libraryId}`,
     contextIsEnriched: true,
     context,

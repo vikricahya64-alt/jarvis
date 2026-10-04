@@ -31,7 +31,9 @@ import {
 } from "../src/lib/intent_gate";
 import {
   tierFor, isOwner, gateCapability, ownerOnlyDenial, quotaCheck, isOwnerOnlyCapability,
+  commandCapability, gateCommand,
 } from "../src/lib/access";
+import { matchEmergency, heuristicClassify } from "../src/lib/command_hierarchy";
 import { isMenuFirstLine, stripLeadingMenuSentences, deterministicRecallContinuation, translateInput, hasDegenerateEcho, isAcknowledgeOnly } from "../src/lib/intelligence";
 import { cleanRecallLine } from "../src/lib/context_manager";
 import {
@@ -2088,6 +2090,190 @@ async function testAccessTiers() {
   console.log("  access tiers (fungsi penuh, data terisolasi) OK");
 }
 
+// =====================================================================
+// GATE REGRESSION — mengunci 4 perimeter yang baru diperketat.
+//
+// Semuanya "gate-strengthening only": setiap assertion di bawahfamili
+// harus BENAR untuk owner (fungsi utuh) dan TIDAK BOLEH longgar untuk
+// user tier. Kalau suatu saat ada yang "memperbaiki" danWRAP tanpa sengaja,
+// test ini gagal — itulah tujuannya.
+// =====================================================================
+
+const GATE_OWNER = "6812604983";
+const GATE_STRANGER = "999999999";
+
+function gateEnv(): any {
+  return { ...FAKE_ENV, OWNER_TELEGRAM_ID: GATE_OWNER };
+}
+
+/** Perintah yang WAJIB tetap terbuka untuk semua orang (fungsi penuh).
+ *  Kalau salah satu masuk daftar owner-only, itu regresi fungsional. */
+const FULL_FUNCTION_COMMANDS = [
+  "/help", "/kemampuan", "/health", "/start",
+  "/checkin", "/stop", "/kill",
+  "/mark_stop", "/never jangan kirim", "/privacy".replace("/privacy", "/cari"), "/cari apa itu go",
+  "/searchuntoo".slice(0, 7), "/todo", "/todo hapus semua", "/reminder",
+  "/plan", "/plan status", "/plan approve 3",
+  "/tugas", "/etask", "/pinjam", "/proyek", "/baca", "/ringkas",
+  "/mcp", "/mcp status", "/e2b", "/connector", "/connector status",
+  "/shop", "/produk", "/stok", "/pesanan", "/pelanggan", "/laporan",
+  "/suggestions", "/suggestion 1",
+  "halo apa kabar", "jelaskan singkat tentangApilikasi tanpa kode",
+];
+
+function testOwnerOnlyGateSpec() {
+  const env = gateEnv();
+  // 1) Owner-only commands ARE gated, and use ONLY already-declared capabilities.
+  const ownerOnly: Array<[string, string]> = [
+    ["/pause", "autonomy"],
+    ["/pause_autonomy", "autonomy"],
+    ["/resume", "autonomy"],
+    ["/privacy", "privacy_mode"],
+    ["/privacy on", "privacy_mode"],
+    ["/privacy off", "privacy_mode"],
+    ["/debug_bypass", "debug"],
+    ["/status", "admin"],
+    ["/usage", "admin"],
+    ["/audit_status", "audit"],
+    ["/audit-phantom", "audit"],
+    ["/audit-dispatch", "audit"],
+    ["/recovery", "audit"],
+    ["/reflect", "evolution"],
+    ["/optimize", "evolution"],
+    ["/maestro_status", "evolution"],
+    ["/sunset_preview", "evolution"],
+    ["/degradation_status", "evolution"],
+    ["/preferences", "preferences"],
+    ["/prefs", "preferences"],
+    ["/set-preference nada = cepat", "preferences"],
+    ["/disable-preference nada", "preferences"],
+    ["/identity_verify", "identity_epoch"],
+    ["/covenant_status", "covenant"],
+    ["/covenant_sign jangan bohong", "covenant"],
+    ["/obedience_report", "obedience_report"],
+    ["/dms_status", "dm_status"],
+    ["/dmsstatus", "dm_status"],
+    ["/queue_status", "queue_status"],
+    ["/queuestatus", "queue_status"],
+    ["/insights", "insights_admin"],
+    ["/disable-insight 1", "insights_admin"],
+    ["/validate-insight 1", "insights_admin"],
+  ];
+  for (const [cmd, cap] of ownerOnly) {
+    assert.strictEqual(commandCapability(cmd), cap, `capability map: ${cmd} -> ${cap}`);
+    assert.ok(isOwnerOnlyCapability(cap), `${cap} must be an already-declared owner-only capability`);
+    // owner: TIDAK PERNAH diblokir (fungsi owner utuh)
+    assert.strictEqual(gateCommand(env, GATE_OWNER, cmd), null, `owner must keep ${cmd}`);
+    // stranger: diblokir
+    assert.ok(gateCommand(env, GATE_STRANGER, cmd) !== null, `stranger must be denied ${cmd}`);
+  }
+
+  // 2) Prefix must NOT be over-matched ("/statuses" is not "/status").
+  assert.strictEqual(commandCapability("/statuses"), null, "prefix must not over-match /status");
+  assert.strictEqual(commandCapability("/pauses"), null, "prefix must not over-match /pause");
+  assert.strictEqual(commandCapability("/cari status"), null, "argument is not a command name");
+
+  // 3) FULL-FUNCTION commands stay fully open — no functional regression.
+  for (const cmd of FULL_FUNCTION_COMMANDS) {
+    assert.strictEqual(commandCapability(cmd), null, `must stay open: ${cmd}`);
+    assert.strictEqual(gateCommand(env, GATE_STRANGER, cmd), null, `stranger keeps full function: ${cmd}`);
+    assert.strictEqual(gateCommand(env, GATE_OWNER, cmd), null, `owner keeps full function: ${cmd}`);
+  }
+
+  // 4) Non-slash input never reaches this gate at all (conversation path).
+  assert.strictEqual(commandCapability("pause"), null, "non-slash text is not a command");
+  assert.strictEqual(gateCommand(env, GATE_STRANGER, "pause"), null, "free text untouched");
+}
+
+function testEmergencyAnchoring() {
+  // Emergency verbs STILL work as leading tokens — owner function preserved.
+  for (const ok of ["/stop", "/kill", "/resume", "/override", "/kill force",
+                    "tolong /resume", "silakan /stop", "/resume autonomy"]) {
+    assert.ok(matchEmergency(ok), `emergency must still fire: ${ok}`);
+    assert.strictEqual(heuristicClassify(ok).priority, 90, `emergency tier kept: ${ok}`);
+  }
+  // The bypass that let free text smuggle an emergency verb is closed.
+  for (const bad of ["hapus semua /resume", "delete all then /stop",
+                     "bersihkan memori /kill", "hapus /override"]) {
+    assert.strictEqual(matchEmergency(bad), null, `must NOT be emergency: ${bad}`);
+  }
+  // And the dangerous verb in that text is now classified as such, so the
+  // constitutional guard (no_destroy) gets a chance to see it.
+  assert.notStrictEqual(heuristicClassify("hapus semua /resume").label, "emergency_control",
+    "smuggled emergency verb must not be labelled emergency_control");
+}
+
+async function testNoCrossUserSessionLeak() {
+  // THE bug: every provider responder hardcoded `Number(env.OWNER_TELEGRAM_ID)`
+  // when calling buildConversationMessages(), so ANY user's turn was assembled
+  // from the OWNER's session, mood, working memory and summary.
+  //
+  // This test goes through the real `llmRespond` and captures the actual
+  // outbound HTTP body — so it fails if the owner id is ever hardcoded again.
+  const OWNER = 6812604983;
+  const STRANGER = 555000111;
+
+  const env: any = {
+    CLARITY_GATE: "0.95",
+    RISK_CONSENT_THRESHOLD: "0.3",
+    OWNER_TELEGRAM_ID: String(OWNER),
+    GROQ_API_KEY: "test-key-not-real",
+    CONFIG_KV: {
+      get: async () => null, put: async () => {}, delete: async () => {},
+      list: async () => ({ keys: [] }),
+    },
+    DB: {
+      prepare: () => ({
+        bind: () => ({
+          run: async () => ({ meta: { changes: 0 } }),
+          all: async () => ({ results: [] }),
+          first: async () => null,
+        }),
+      }),
+    },
+  };
+
+  // Distinguishable per-user state.
+  getSession(OWNER).summaryBuffer = "RAHASIA-OWNER";
+  getSession(OWNER).currentTask = "TUGAS-OWNER";
+  getSession(STRANGER).summaryBuffer = "DATA-USER-LAIN";
+  getSession(STRANGER).currentTask = "TUGAS-USER-LAIN";
+
+  const realFetch = globalThis.fetch;
+  const captured: string[] = [];
+  try {
+    (globalThis as any).fetch = async (_url: any, init: any) => {
+      if (init && typeof init.body === "string") captured.push(init.body);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "siap" } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+
+    const { llmRespond } = await import("../src/lib/ai");
+
+    await llmRespond(env, "halo, apa kabar?", { owner: STRANGER });
+    await llmRespond(env, "halo, apa kabar?", { owner: OWNER });
+
+    assert.ok(captured.length >= 2, `expected >=2 captured provider calls, got ${captured.length}`);
+
+    const first  = captured[0];
+    const second = captured[1];
+
+    assert.ok(!first.includes("RAHASIA-OWNER"),
+      "MUST NOT send the owner's conversation summary to another user");
+    assert.ok(!first.includes("TUGAS-OWNER"),
+      "MUST NOT send the owner's active task to another user");
+    assert.ok(first.includes("DATA-USER-LAIN"),
+      "user tier must be answered from its OWN session");
+    assert.ok(second.includes("RAHASIA-OWNER"),
+      "owner still gets their own session (no functional loss)");
+    assert.notStrictEqual(first, second, "prompts must differ per user");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -2131,6 +2317,9 @@ async function main() {
   await testAdminChaff();
   await testRootComprehension();
   await testTriStateGates();
+  await testOwnerOnlyGateSpec();
+  testEmergencyAnchoring();
+  await testNoCrossUserSessionLeak();
   console.log("SAFETY TESTS PASSED");
 }
 

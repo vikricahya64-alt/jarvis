@@ -74,6 +74,113 @@ export function isOwnerOnlyCapability(capability: string): boolean {
   return (OWNER_ONLY_CAPABILITIES as readonly string[]).includes(capability);
 }
 
+// ---------------------------------------------------------------------------
+// COMMAND → CAPABILITY  (menerapkan spesifikasi yang SUDAH tertulis di atas)
+//
+// `OWNER_ONLY_CAPABILITIES` di atas adalah spesifikasi yang sudah ditulis
+//(owner-only: privacy, autonomy, admin, audit, debug, evolution, preferences,
+// dst) — tapi `gateCapability` tidak pernah dipanggil dari mana pun, jadi
+// spesifikasi itu tidak pernah ditegakkan. File ini menutupnya.
+//
+// Sifat penting — TIDUK ada fungsi yang dikurangi:
+//   * Peta ini memakai PERSIS nama kapabilitas yang sudah ada, bukan daftar
+//     baru. Tidak ada kapabilitas owner-only yang ditemukan ulang di sini.
+//   * Perintah yang TIDAK ada di peta ini tetap terbuka penuh untuk tier
+//     "user" — daftar "fungsi penuh" di header file ini tidak berubah sama
+//     sekali: obrolan, memory, todo, reminder, /tugas, /etask, /mcp, /pinjam,
+//     /proyek, /baca, search, gambar, /plan, /shop, /e2b, /connector, /cari,
+//     /help, /kemampuan, /checkin, /stop, /kill, /mark_stop, /never, /start.
+//   * Fungsi ini murni & sinkron: tanpa LLM, tanpa jaringan, tanpa KV/D1.
+//     Menambahnya tidak menambah panggilan keluar, latency, maupun biaya.
+// ---------------------------------------------------------------------------
+
+/** Slash-command → kapabilitas owner-only.
+ *  Satu-satunya sumber kebenaran; `test/safety.test.ts` mengunci daftar ini
+ *  agar tidak bisa melebar diam-diam. */
+const COMMAND_CAPABILITY: ReadonlyArray<{ prefix: string; capability: string }> = [
+  // autonomy — saklar kelangsungan otonomi
+  { prefix: "/pause", capability: "autonomy" },
+  { prefix: "/resume", capability: "autonomy" },
+  // privacy_mode
+  { prefix: "/privacy", capability: "privacy_mode" },
+  // debug
+  { prefix: "/debug_bypass", capability: "debug" },
+  // admin
+  { prefix: "/status", capability: "admin" },
+  { prefix: "/usage", capability: "admin" },
+  // audit
+  { prefix: "/audit_status", capability: "audit" },
+  { prefix: "/audit-phantom", capability: "audit" },
+  { prefix: "/audit-dispatch", capability: "audit" },
+  { prefix: "/recovery", capability: "audit" },
+  // evolution
+  { prefix: "/reflect", capability: "evolution" },
+  { prefix: "/optimize", capability: "evolution" },
+  { prefix: "/maestro_status", capability: "evolution" },
+  { prefix: "/sunset_preview", capability: "evolution" },
+  { prefix: "/degradation_status", capability: "evolution" },
+  // preferences
+  { prefix: "/preferences", capability: "preferences" },
+  { prefix: "/prefs", capability: "preferences" },
+  { prefix: "/set-preference", capability: "preferences" },
+  { prefix: "/disable-preference", capability: "preferences" },
+  // identity_epoch
+  { prefix: "/identity_verify", capability: "identity_epoch" },
+  // covenant
+  { prefix: "/covenant_status", capability: "covenant" },
+  { prefix: "/covenant_sign", capability: "covenant" },
+  // obedience_report
+  { prefix: "/obedience_report", capability: "obedience_report" },
+  // dm_status / queue_status
+  { prefix: "/dms_status", capability: "dm_status" },
+  { prefix: "/queue_status", capability: "queue_status" },
+  // insights_admin
+  { prefix: "/insights", capability: "insights_admin" },
+  { prefix: "/disable-insight", capability: "insights_admin" },
+  { prefix: "/validate-insight", capability: "insights_admin" },
+];
+
+/** Apakah `t` (perintah lowercase+trim) adalah `prefix` — mengikuti PERSIS
+ *  dua permukaan yang diterima dispatcher di `telegram_webhook.ts`:
+ *   1. perbandingan persis   → `trimmed === "/pause"`  → juga "/pause <arg>"
+ *   2. `cmdAlias` (underscore-insensitive) → "/dmsstatus" ≡ "/dms_status"
+ *  Prefix memoalkan TIDAK boleh cocok: "/pauses" bukan "/pause". */
+function matchesCommand(t: string, prefix: string): boolean {
+  if (t === prefix) return true;
+  if (t.startsWith(prefix + " ")) return true;      // "/pause otonomi"
+  if (t.startsWith(prefix + "_")) return true;      // "/pause_autonomy"
+  const bare = (s: string) => s.replace(/_/g, "");
+  const bt = bare(t);
+  return bt === bare(prefix) || bt.startsWith(bare(prefix) + " ");
+}
+
+/** Kapabilitas owner-only yang diwakili perintah ini, atau null bila perintah
+ *  ini bukan kendali atas bot (jadi tetap terbuka untuk tier "user").
+ *  `trimmed` = teks perintah sudah lowercase+trim (sama seperti `handleUpdate`). */
+export function commandCapability(trimmed: string): string | null {
+  const t = (trimmed || "").trim().toLowerCase();
+  if (!t.startsWith("/")) return null;
+  for (const e of COMMAND_CAPABILITY) {
+    if (matchesCommand(t, e.prefix)) return e.capability;
+  }
+  return null;
+}
+
+/** Gerbang gabungan: boleh tidakkah `userId` menjalankan perintah `trimmed`?
+ *  Mengembalikan `null` bila diizinkan (jalur cepat, tanpa objek tambahan), atau
+ *  objek penolakan berisi pesan yang aman untuk dikirim balik ke pemanggil. */
+export function gateCommand(
+  env: Env,
+  userId: number | string,
+  trimmed: string,
+): { allowed: false; reply: string } | null {
+  const capability = commandCapability(trimmed);
+  if (!capability) return null;
+  const g = gateCapability(env, userId, capability);
+  if (g.allowed) return null;
+  return { allowed: false, reply: ownerOnlyDenial(capability) };
+}
+
 /** Pesan penolakan untuk perintah owner-only. Singkat, ramah, dan TIDAK
  *  membocorkan kapabilitas apa saja yang ada (tiada enumeration privilege). */
 export function ownerOnlyDenial(capability: string): string {

@@ -116,6 +116,9 @@ export function classifyOperational(err: unknown, fallback: OperationalFailure =
 // ---------------------------------------------------------------------------
 
 export interface RecoveryOpts {
+  /** Telegram id pemilik sesi yang dipulihkan — dipakai agar `recoverReply`
+   *  tidak membaca session/mood owner untuk pesan milik user lain. */
+  owner: number;
   userText: string;
   bad: string;
   context?: Array<{ role: string; content: string }>;
@@ -171,7 +174,7 @@ export async function budgetedRecovery(env: Env, o: RecoveryOpts): Promise<Recov
   // 2) Rewrite (raw_dump / non_answer / repetitive) — exactly ONE call,
   //    honoring the caller's headroom.
   if (plan.strategy === "rewrite" && o.llmBudget > 0) {
-    const rec = await recoverReply(env, o.userText, o.bad, o.context ?? [], o.anchor, o.verdict as VerdictFailure, o.topic);
+    const rec = await recoverReply(env, o.owner, o.userText, o.bad, o.context ?? [], o.anchor, o.verdict as VerdictFailure, o.topic);
     if (rec && rec.trim().length >= 40) {
       const out = gateVerdict(rec.trim(), o.anchor);
       return {

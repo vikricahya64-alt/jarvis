@@ -1,4 +1,22 @@
 """
+NO DEVICE IS ATTACHED.
+
+Every callable here shells out to a `termux-*` binary (termux-camera-photo,
+termux-microphone-record, ...) which does not exist on a Vercel serverless
+host, so they always take the documented graceful-degradation path. They are
+KEPT because utils/commands.py (/scan, /sensor-cache-clean) and
+tests/test_level8.py call them, and deleting them would remove working
+commands that answer correctly instead of crashing.
+
+The former real device path has been REMOVED, because it was an
+unauthenticated remote-code-execution surface: vercel-leg/termux/server.js
+exposed POST /execute -> execSync(command) with no auth, bound 0.0.0.0, and
+was published through a public `cloudflared tunnel --url` quick tunnel. The
+tools that reached it (termux_command, device_read_file, device_write_file,
+device_list_dir) are gone from utils/groq_client.py and api/orchestrator.py.
+
+Replacement: edge/cmd/jarvis-edge, a single static Go binary that requires
+a bearer token, binds loopback by default, and enforces policy server-side.
 Level 8 Physical Perception: Realme C25s as a secure encrypted sensor.
 
 The phone is a THIN sensor terminal. Raw media NEVER leaves the device and is

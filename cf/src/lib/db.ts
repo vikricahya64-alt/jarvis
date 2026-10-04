@@ -228,17 +228,42 @@ export async function obedienceWeekly(env: Env, owner: number): Promise<(
 export async function queueStatus(env: Env): Promise<Record<string, number>> {
   const mk = async (q: string) => {
     try {
-      // D1 cannot introspect queue depth; derive from the counters table the
-      // producer side appends to on every insert.
+      // D1 cannot introspect queue depth; derive it from the counters table
+      // the producer side appends to on every insert.
+      //
+      // Reads `bucket`, NOT `queue`. The schema declares `queue` as
+      // high|standard|low, but every producer writes a semantic class label
+      // ('translate', 'image_prompt', 'todo_help') — so the old
+      // `WHERE queue = ?` never matched a single row and /queue_status was
+      // structurally guaranteed to return {0,0,0}. Migration 0022 adds
+      // `bucket` and backfills it; this is the matching reader.
       const r = await env.DB.prepare(
-        "SELECT COUNT(*) AS n FROM task_counters WHERE queue = ?",
+        "SELECT COUNT(*) AS n FROM task_counters WHERE bucket = ?",
       ).bind(q).first<{ n: number }>();
       return r?.n ?? 0;
     } catch {
       return 0;
     }
   };
-  return { high: await mk("high"), standard: await mk("standard"), low: await mk("low") };
+  const byClass = async () => {
+    try {
+      const r = await env.DB.prepare(
+        "SELECT queue, COUNT(*) AS n FROM task_counters GROUP BY queue ORDER BY n DESC",
+      ).all<{ queue: string; n: number }>();
+      return (r.results ?? []).filter((x) => x && x.queue);
+    } catch {
+      return [] as Array<{ queue: string; n: number }>;
+    }
+  };
+  const out: Record<string, number> = {
+    high: await mk("high"),
+    standard: await mk("standard"),
+    low: await mk("low"),
+  };
+  // Keep the real per-class breakdown visible too — it is the data that was
+  // always being collected but never shown.
+  for (const row of await byClass()) out[`class:${row.queue}`] = row.n;
+  return out;
 }
 
 // ---------------------------------------------------------------------
@@ -389,11 +414,19 @@ export async function sweepExpiredProposals(env: Env, now = Date.now()): Promise
 
 // ---------------------------------------------------------------------
 /** Record a task counter for a queue class (used by producer side). */
-export async function recordTaskCounters(env: Env, queue: string, owner: number): Promise<void> {
+export async function recordTaskCounters(
+  env: Env,
+  queue: string,
+  owner: number,
+  bucket: "high" | "standard" | "low" = "standard",
+): Promise<void> {
   try {
+    // `queue` = semantic class label; `bucket` = priority class that
+    // queueStatus() aggregates over (see 0022). Writes both so the two
+    // columns can never drift apart again.
     await env.DB.prepare(
-      `INSERT INTO task_counters (queue, owner_id, created_at) VALUES (?, ?, ?)`,
-    ).bind(queue, owner, Date.now()).run();
+      `INSERT INTO task_counters (queue, bucket, owner_id, created_at) VALUES (?, ?, ?, ?)`,
+    ).bind(queue, bucket, owner, Date.now()).run();
   } catch { /* availability */ }
 }
 
@@ -1050,12 +1083,22 @@ export async function listAgentTasksByExecutor(env: Env, executor: string, limit
 }
 
 /** Pending/running rows across ALL data/search/media borrowed executors
- *  (executor LIKE 'borrowed:%'). Used by the per-minute poller. */
+ *  (executor LIKE 'borrowed:%'). Used by the per-minute poller.
+ *
+ *  prefixed `LIKE 'borrowed:%'` cannot be turned into an index seek by
+ *  SQLite's planner — verified with EXPLAIN QUERY PLAN, it stayed a full
+ *  table scan even with `idx_agent_tasks_exec (executor, status, id)`
+ *  present. The half-open range below is the standard rewrite and DOES use
+ *  that index: it is exactly equivalent for a `TEXT` column because
+ *  `'borrowed:'` is a literal prefix and `'borrowed;'` is the next
+ *  codepoint above `':'` in ASCII ordering, so no other value can fall
+ *  inside the range. Same rows returned, one index seek instead of a scan. */
 export async function listBorrowedAgentTasks(env: Env, limit = 6): Promise<AgentTaskItem[]> {
   try {
     const { results } = await env.DB.prepare(
       `SELECT * FROM agent_tasks
-        WHERE executor LIKE 'borrowed:%' AND status IN ('running', 'pending')
+        WHERE executor >= 'borrowed:' AND executor < 'borrowed;'
+          AND status IN ('running', 'pending')
         ORDER BY id ASC LIMIT ?`,
     ).bind(limit).all<AgentTaskItem>();
     return (results ?? []) as AgentTaskItem[];
