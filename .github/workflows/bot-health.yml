@@ -1,0 +1,114 @@
+name: Bot health (Telegram)
+
+# Diagnostics for the Telegram bot, using the existing TELEGRAM_TOKEN secret.
+# Prints ONLY diagnostic fields. The token itself is never echoed, not even
+# truncated, and this workflow does not mutate anything on Telegram's side.
+#
+# Use when the bot seems unreachable: it distinguishes
+#   * bot banned / token revoked      -> getMe fails
+#   * webhook not registered          -> getWebhookInfo has url ""
+#   * webhook pointing at the wrong host
+#   * Telegram delivery errors        -> last_error_message
+#   * updates queued but not consumed -> pending_update_count
+on:
+  workflow_dispatch:
+  schedule:
+    # hourly, so a ban is noticed without anyone noticing the bot is dead
+    - cron: "7 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bot-health
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: getMe + getWebhookInfo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query Telegram Bot API
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_TOKEN:-}" ]; then
+            echo "FATAL: TELEGRAM_TOKEN secret is empty."
+            exit 1
+          fi
+          api="https://api.telegram.org/bot${TELEGRAM_TOKEN}"
+
+          echo "### getMe"
+          # Ask for no fields we do not need; print only status.
+          me="$(curl -sS --max-time 30 "${api}/getMe" || echo '{"ok":false,"description":"curl failed"}')"
+          printf '%s' "$me" | python3 -c '
+          import json,sys
+          try: d=json.load(sys.stdin)
+          except Exception as e:
+              print("  unparseable:", e); sys.exit(0)
+          if not d.get("ok"):
+              print("  ok=False")
+              print("  error_code:", d.get("error_code"))
+              print("  description:", d.get("description"))
+          else:
+              r=d.get("result") or {}
+              for k in ("id","username","first_name","is_bot","can_join_groups",
+                        "can_read_all_group_messages","supports_inline_queries",
+                        "has_main_web_app"):
+                  if k in r: print(f"  {k}: {r[k]}")
+          '
+
+          echo "### getWebhookInfo"
+          wh="$(curl -sS --max-time 30 "${api}/getWebhookInfo" || echo '{"ok":false,"description":"curl failed"}')"
+          printf '%s' "$wh" | python3 -c '
+          import json,sys
+          try: d=json.load(sys.stdin)
+          except Exception as e:
+              print("  unparseable:", e); sys.exit(0)
+          if not d.get("ok"):
+              print("  ok=False")
+              print("  error_code:", d.get("error_code"))
+              print("  description:", d.get("description"))
+              sys.exit(0)
+          r=d.get("result") or {}
+          url=r.get("url") or ""
+          print("  url:", url or "(NOT REGISTERED)")
+          print("  host_is_worker:", url.startswith("https://jarvis-sovereign"))
+          print("  has_custom_certificate:", r.get("has_custom_certificate"))
+          print("  pending_update_count:", r.get("pending_update_count"))
+          print("  last_error_date:", r.get("last_error_date"))
+          print("  last_error_message:", r.get("last_error_message"))
+          print("  last_synchronization_error_date:", r.get("last_synchronization_error_date"))
+          au=r.get("allowed_updates")
+          print("  allowed_updates:", au if au else "(default set)")
+          print("  has_secret_token_lookups: see index.ts — worker rejects updates without x-telegram-bot-api-secret-token")
+          '
+
+          echo "### verdict"
+          printf '%s%s' "$me" "$wh" | python3 -c '
+          import json,sys
+          raw=sys.stdin.read()
+          # two concatenated JSON objects
+          dec=json.JSONDecoder()
+          objs=[]; i=0
+          while i < len(raw):
+              while i < len(raw) and raw[i] in " \n\r\t": i+=1
+              if i>=len(raw): break
+              try:
+                  o,j=dec.raw_decode(raw,i); objs.append(o); i=j
+              except Exception: break
+          me = objs[0] if objs else {}
+          wh = objs[1] if len(objs)>1 else {}
+          if not me.get("ok"):
+              print("  BOT UNREACHABLE: getMe failed ->", me.get("description"))
+          elif not (wh.get("result") or {}).get("url"):
+              print("  BOT ALIVE but webhook is NOT REGISTERED")
+          elif (wh.get("result") or {}).get("last_error_message"):
+              print("  BOT ALIVE but Telegram reports delivery errors ->",
+                    (wh["result"]["last_error_message"])[:200])
+          elif (wh.get("result") or {}).get("pending_update_count",0) > 50:
+              print("  BOT ALIVE, webhook OK, but updates are backing up (worker not consuming?)")
+          else:
+              print("  HEALTHY: getMe ok, webhook registered, no delivery errors")
+          '
