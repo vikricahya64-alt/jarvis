@@ -77,6 +77,7 @@ import {
 import { listSuggestions, resolveSuggestion } from "../lib/predictive";
 import { resolveIntent, isHardCommand, looksLikeCommand, type ResolvedIntent } from "../lib/intent_gate";
 import { tierFor, quotaCheck, ownerOnlyDenial, isOwner, gateCommand } from "../lib/access";
+import { moderateIncoming, recordModerationBlock, REFUSAL_ID } from "../lib/moderation";
 import {
   getGreeting, STATUS, HELP,
 } from "../lib/messages";
@@ -273,6 +274,43 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // emoji-only) are answered helpfully instead of falling through to "Ok.".
   const rawText = msg.text ?? "";
   const text = normalizeInput(rawText);
+
+  // ------------------------------------------------------------------
+  // INPUT MODERATION — before any quota spend, any LLM call, any memory write.
+  //
+  // Why this position matters: everything downstream costs money and writes
+  // durable state. `llmRespond` builds its context from the owner's session and
+  // memories, so an unanswered-but-processed prompt would still touch owner
+  // data. Refusing here means a blocked request consumes nothing and persists
+  // nothing.
+  //
+  // Same leniency as the outgoing gate: ordinary questions that merely mention a
+  // related word ("apa fungsi hormon seks pada manusia") pass through. This is
+  // not a profanity filter; it refuses explicit sexual content, non-consensual
+  // content, and anything involving minors.
+  // ------------------------------------------------------------------
+  if (text) {
+    let blocked = false;
+    try {
+      const mod = moderateIncoming(text);
+      if (mod.verdict === "block") {
+        recordModerationBlock(mod, "telegram:incoming", from);
+        blocked = true;
+      }
+    } catch (e) {
+      // Fail-closed, but do not silently drop the message: tell the user.
+      console.error("[moderation] input gate threw, failing closed:", (e as Error).message);
+      recordModerationBlock(
+        { verdict: "block", rule: "gate_error", category: "internal", matched: null, fingerprint: null },
+        "telegram:incoming", from,
+      );
+      blocked = true;
+    }
+    if (blocked) {
+      await fire(sendMessage(env, from, REFUSAL_ID));
+      return new Response("ok", { status: 200 });
+    }
+  }
 
   // m9-v11.55 — ACCESS TIER (gerbang terbuka, data terisolasi).
   //

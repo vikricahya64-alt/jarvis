@@ -104,6 +104,41 @@ async function call(
   method: string,
   body: Record<string, unknown>,
 ): Promise<unknown> {
+  // ---- output moderation, before anything leaves the process -------------
+  // Fail-closed: if moderateText() throws, treat the message as blocked.
+  if (TEXT_METHODS.has(method)) {
+    const text = String(body.text ?? body.caption ?? "");
+    if (text) {
+      let verdict: ReturnType<typeof moderateText> | null = null;
+      let threw = false;
+      try {
+        verdict = moderateText(text);
+      } catch (e) {
+        threw = true;
+        console.error("[moderation] gate threw, failing closed:", (e as Error).message);
+      }
+      if (threw || verdict?.verdict === "block") {
+        const v = verdict ?? {
+          verdict: "block" as const, rule: "gate_error", category: "internal",
+          matched: null, fingerprint: null,
+        };
+        recordModerationBlock(v, `telegram:${method}`, body.chat_id as number | undefined);
+        if (EDIT_METHODS.has(method)) {
+          // Editing an existing message to a refusal makes no sense; leave the
+          // previous text alone and drop the edit.
+          return null;
+        }
+        if (method !== "sendMessage") {
+          // Photo/voice/document with a blocked caption: send nothing rather
+          // than the media.
+          return null;
+        }
+        body.text = REFUSAL_ID;
+        delete body.reply_markup;
+      }
+    }
+  }
+  // ------------------------------------------------------------------------
   const res = await fetch(`${API}/bot${token(env)}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -115,6 +150,23 @@ async function call(
   }
   return data.result;
 }
+
+// Content moderation. Wired into call() below so EVERY outbound string is
+// covered - the ~235 direct sendMessage() call sites in telegram_webhook.ts, the
+// brain/subagent/recovery/vision paths, and any future one - without touching
+// any of them. See src/lib/moderation.ts for why the previous bot was banned.
+import {
+  moderateText, recordModerationBlock, REFUSAL_ID,
+} from "./moderation";
+
+/** Bot API methods whose body carries user-visible text. */
+const TEXT_METHODS = new Set([
+  "sendMessage", "sendPhoto", "sendVoice", "sendDocument", "sendAudio",
+  "sendVideo", "sendAnimation", "editMessageText", "editMessageCaption",
+]);
+
+/** Methods that only edit, where a refusal would be nonsense: drop instead. */
+const EDIT_METHODS = new Set(["editMessageText", "editMessageCaption"]);
 
 const MAX_MSG_LEN = 4000;
 

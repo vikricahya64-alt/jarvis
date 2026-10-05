@@ -32,6 +32,9 @@ jobs:
       - name: Type-check (src only; tests run via tsx)
         run: npm run typecheck
 
+      - name: Moderation tests
+        run: npm run test:moderation
+
       - name: Logic tests
         run: npm run test:logic
 

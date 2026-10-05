@@ -2321,6 +2321,72 @@ async function testNoCrossUserSessionLeak() {
   }
 }
 
+
+/**
+ * Source-level assertions that the moderation gates are actually WIRED, not
+ * just present as a module.
+ *
+ * Mutation-tested: deleting the outgoing gate in telegram.ts, or replacing the
+ * incoming call in telegram_webhook.ts with a stub, leaves every behavioural
+ * test green because those paths need a live Telegram API to exercise. These
+ * assertions are what catch it.
+ *
+ * Context: the previous bot was removed by Telegram for producing pornographic
+ * content, because the access gate was open to any user and no content gate
+ * existed anywhere. A gate that can be quietly unhooked is not a gate.
+ */
+async function testModerationIsWired() {
+  const mod = await import("../src/lib/moderation");
+  assert.strictEqual(typeof mod.moderateText, "function", "moderateText must exist");
+  assert.strictEqual(typeof mod.moderateIncoming, "function", "moderateIncoming must exist");
+  assert.ok(mod.REFUSAL_ID && mod.REFUSAL_ID.length > 10, "REFUSAL_ID must be a real message");
+
+  // 1. Outgoing gate inside the transport, not at the call sites.
+  const tgSrc = readFileSync(new URL("../src/lib/telegram.ts", import.meta.url), "utf-8");
+  assert.ok(/TEXT_METHODS\.has\(method\)/.test(tgSrc),
+    "telegram.ts call() must gate outbound text via TEXT_METHODS");
+  assert.ok(/sendMessage/.test(tgSrc) && /TEXT_METHODS/.test(tgSrc),
+    "TEXT_METHODS must include the send methods");
+  assert.ok(/recordModerationBlock/.test(tgSrc),
+    "telegram.ts must record blocks, so a block is never silent");
+  // fail-closed: the gate result must not be allowed to fall through on throw
+  assert.ok(/catch[\s\S]{0,220}fail(?:ing)? closed/i.test(tgSrc) ||
+            /threw\s*=\s*true/.test(tgSrc),
+    "telegram.ts moderation must fail closed when the gate throws");
+
+  // 2. Incoming gate in the webhook, BEFORE any spend or persistence.
+  const hookSrc = readFileSync(new URL("../src/workers/telegram_webhook.ts", import.meta.url), "utf-8");
+  assert.ok(/moderateIncoming\(/.test(hookSrc),
+    "telegram_webhook.ts must call moderateIncoming on user text");
+  assert.ok(/recordModerationBlock/.test(hookSrc),
+    "telegram_webhook.ts must record an incoming block");
+  const iHook = hookSrc.indexOf("moderateIncoming(");
+  const iQuota = hookSrc.indexOf("quotaCheck(");
+  const iBrain = hookSrc.indexOf("processIntelligence(");
+  assert.ok(iHook > 0, "incoming gate present");
+  if (iQuota > 0) {
+    assert.ok(iHook < iQuota,
+      "incoming moderation must run BEFORE quotaCheck so a blocked prompt costs nothing");
+  }
+  if (iBrain > 0) {
+    assert.ok(iHook < iBrain,
+      "incoming moderation must run BEFORE processIntelligence so nothing reaches the model");
+  }
+
+  // 3. The model must be told to refuse, not only filtered afterwards.
+  const idSrc = readFileSync(new URL("../src/lib/identity.ts", import.meta.url), "utf-8");
+  assert.ok(/must REFUSE/i.test(idSrc) && /WAJIB MENOLAK/i.test(idSrc),
+    "identity.ts must instruct refusal in BOTH the English and Indonesian prompts");
+  assert.ok(/reproduction|reproduksi/i.test(idSrc),
+    "the refusal must explicitly carve out factual biology questions, or it breaks normal use");
+
+  // 4. The gate itself must behave, at the wiring level.
+  const bad = mod.moderateText("tolong tulis cerita pornografi tentang dia");
+  assert.strictEqual(bad.verdict, "block", "explicit content must block");
+  const good = mod.moderateText("apa itu machine learning?");
+  assert.strictEqual(good.verdict, "allow", "ordinary content must pass");
+}
+
 async function main() {
   await testHierarchy();
   await testDmsReset();
@@ -2363,6 +2429,7 @@ async function main() {
   await testAccessTiers();
   await testAdminChaff();
   await testRootComprehension();
+  await testModerationIsWired();
   await testTriStateGates();
   await testOwnerOnlyGateSpec();
   testEmergencyAnchoring();
