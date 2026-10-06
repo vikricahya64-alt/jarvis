@@ -65,24 +65,54 @@ async function main() {
     assert.match(c.reason, /hari ini/);
   }
 
-  // --- Direction 3 for a SUGGESTIVE follow-up: not forced, but not starved ---
-  //
-  // This is the production case verbatim. "apa sejarahnya dalam sejarah" has no
-  // strong refer-back, so it must NOT be force-anchored to yesterday's topic -
-  // that is what produced the invented subject. But it must still RECEIVE the
-  // day's turns, which is the part the old design got wrong: it received nothing
-  // at all, because nothing was ever written to any store.
+  // --- Direction 3: a genuinely new question gets a genuinely fresh start ----
   {
     const env = fakeKV();
     await recordTurn(env, OWNER, "user", "apa itu inflasi dan apa yang menyebabkannya");
     await recordTurn(env, OWNER, "assistant", "Inflasi adalah kenaikan umum harga barang dan jasa.");
-    const c = await resolveTelegramContext(env, OWNER, "apa sejarahnya dalam sejarah", undefined);
-    assert.strictEqual(c.kind, "new", "suggestive wording must not be force-anchored");
-    assert.strictEqual(c.isContinuation, false, "must not inherit the previous subject as a topic");
+    const c = await resolveTelegramContext(env, OWNER, "jelaskan perbedaan mesin turbo dan mesin biasa", undefined);
+    assert.strictEqual(c.kind, "new");
+    assert.strictEqual(c.isContinuation, false);
     assert.strictEqual(c.topic, null, "no topic forced onto the model");
-    assert.match(c.prior, /apa itu inflasi/, "but the day's turns ARE supplied as background");
-    assert.match(c.prior, /assistant:/, "both sides of the exchange");
-    assert.match(c.reason, /latar belakang/);
+    // The day's turns must NOT be injected here. An earlier version passed them
+    // as "background", and that compounded the drift: once an answer went
+    // off-topic, every following turn was steered by it.
+    assert.strictEqual(c.prior, "", "a new question must not inherit the day's turns");
+    assert.match(c.reason, /tidak dipakai/);
+  }
+
+  // --- Direction 0: an explicit correction overrides everything -------------
+  //
+  // Verbatim from production. The user had just been told about remote-work
+  // policy, said "bukan kerja remote", and got solo-business advice instead;
+  // then said "tapi sejarah inflasi" and got workspace advice. The correction
+  // itself was being answered from the context it rejected.
+  {
+    const env = fakeKV();
+    await recordTurn(env, OWNER, "user", "apa itu inflasi");
+    await recordTurn(env, OWNER, "assistant", "Kebijakan kerja remote muncul pada era 1990-an.");
+    const c1 = await resolveTelegramContext(env, OWNER, "bukan kerja remote", undefined);
+    assert.strictEqual(c1.kind, "new", "a rejection is never a continuation");
+    assert.strictEqual(c1.isContinuation, false);
+    assert.strictEqual(c1.prior, "", "rejected context must be discarded, not passed along");
+    assert.match(c1.reason, /koreksi eksplisit/);
+    assert.match(c1.reason, /kerja remote/, "the rejected phrase is named for diagnosis");
+
+    const c2 = await resolveTelegramContext(env, OWNER, "tapi sejarah inflasi", undefined);
+    assert.strictEqual(c2.kind, "new", "'tapi ...' is also a correction");
+    assert.strictEqual(c2.prior, "", "no steering from the rejected thread");
+    assert.match(c2.reason, /koreksi eksplisit/);
+    assert.match(c2.reason, /sejarah inflasi/);
+  }
+
+  // A correction wins even when Telegram supplied a reply_to_message.
+  {
+    const env = fakeKV();
+    const c = await resolveTelegramContext(
+      env, OWNER, "bukan kerja remote", "Kebijakan kerja remote muncul tahun 1990-an.",
+    );
+    assert.strictEqual(c.kind, "new", "an explicit rejection outranks the reply signal");
+    assert.strictEqual(c.prior, "", "the replied-to text is exactly what was rejected");
   }
 
   // --- Direction 3: a NEW question after a busy day must not latch ---------
@@ -98,7 +128,7 @@ async function main() {
     assert.strictEqual(c.isContinuation, false, "must NOT be treated as continuation - this is the drift case");
     assert.strictEqual(c.topic, null, "no topic may be inherited from the previous turn");
     // The day's turns are still offered as background, not as the subject.
-    assert.match(c.prior, /inflasi/, "day's turns remain available as background");
+    assert.strictEqual(c.prior, "", "and the day's turns must NOT steer a fresh question");
   }
 
   // --- Empty state: brand new user ------------------------------------------

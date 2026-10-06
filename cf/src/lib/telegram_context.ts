@@ -87,6 +87,31 @@ const STRONG_ANAPHORA =
 const BARE_FOLLOWUP =
   /^(lalu\s+)?(sebabnya|kenapa|mengapa|kapan|siapa|dimana|jelaskan|teruskan|contohnya|masih|dan\s+lalu)\s*\??$/i;
 
+/**
+ * Explicit rejection of what was just said.
+ *
+ * "bukan kerja remote" / "tapi sejarah inflasi" is the user telling us the
+ * previous answer was wrong. Treating that as a continuation - or feeding it
+ * the day's turns - is how one bad answer hijacks the rest of the conversation:
+ * observed in production, where a correction was answered from the rejected
+ * context anyway. A rejection always means NEW, whatever else the sentence
+ * looks like.
+ */
+const CORRECTION =
+  /^(tapi|tetapi|bukan|jangan|yang\s+salah|itu\s+salah|salah|stop|stop!|hapus|cancel|batal)\b/i;
+
+/** Extracts the phrase the user is rejecting, so it can be excluded from
+ *  context rather than fed back to the model as if it were still wanted. */
+export function rejectedPhrase(text: string): string | null {
+  const m = (text ?? "").match(
+    /^(?:tapi|tetapi|bukan|yang\s+salah|itu\s+salah)\s+(?:yang\s+)?(.{3,60}?)\s*$/i,
+  );
+  if (m && m[1] && !/^(saja|ya|kah|kok|adalah)$/i.test(m[1].trim())) {
+    return m[1].replace(/[.?!]+$/, "").trim();
+  }
+  return null;
+}
+
 /** True when the message refers back with high confidence. */
 export function looksLikeContinuation(text: string): boolean {
   const t = (text ?? "").trim();
@@ -153,6 +178,20 @@ export async function resolveTelegramContext(
   text: string,
   replyToText?: string,
 ): Promise<TelegramContext> {
+  // Direction 0 - the user is correcting us. Nothing from the previous turn may
+  // steer this one; doing so is how a single wrong answer took over the whole
+  // conversation in production.
+  const rejection = (text ?? "").trim();
+  if (CORRECTION.test(rejection)) {
+    return {
+      kind: "new",
+      prior: "",
+      topic: null,
+      reason: `koreksi eksplisit; konteks sebelumnya dibuang (${rejectedPhrase(rejection) ?? "tidak disebutkan"})`,
+      isContinuation: false,
+    };
+  }
+
   // Direction 1 - Telegram told us exactly which message this continues.
   const replied = (replyToText ?? "").trim();
   if (replied) {
@@ -179,15 +218,16 @@ export async function resolveTelegramContext(
       isContinuation: true,
     };
   }
-  // A non-continuation-shaped message after a busy day is still worth having
-  // the day's turns as background, but it must NOT be treated as a
-  // continuation - that is the drift that produced an invented subject.
+  // NEW means NEW. The earlier version handed the day's turns over as
+  // "background", and that compounded: once an answer went off-topic, every
+  // following turn was steered by the bad answer, including the user's explicit
+  // correction of it. A fresh question gets a fresh start.
   if (turns.length > 0) {
     return {
       kind: "new",
-      prior: turns.map((x) => `${x.role}: ${x.text}`).join("\n").slice(0, 2000),
+      prior: "",
       topic: null,
-      reason: "konteks baru; giliran hari ini hanya sebagai latar belakang",
+      reason: `konteks baru; ${turns.length} giliran hari ini sengaja tidak dipakai agar tidak mengarahkan`,
       isContinuation: false,
     };
   }
