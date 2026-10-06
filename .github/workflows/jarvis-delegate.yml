@@ -153,20 +153,16 @@ jobs:
             JSON="$(jq -nc --arg id "$TASK_ID" --arg e "$(head -c 3000 /tmp/jarvis-out.txt)" --arg u "$ARTIFACT" \
               '{task_id:($id|tonumber), status:"failed", result:"", error:$e, artifact_url:$u}')"
           fi
-          # Auth MUST go in the x-agent-token header, not a query param.
+          # Query param, because /agent/done does its own check and reads only
+          # the param - it does not call privilegedAuth and does not accept the
+          # x-agent-token header (verified: header -> 401, correct param -> 404
+          # "no such task", i.e. auth passed).
           #
-          # The worker's privilegedAuth() accepts exactly two forms:
-          #   x-agent-token: <AGENT_TOKEN>          <- this is /agent/*'s form
-          #   ?token=<TELEGRAM_SECRET>             <- a DIFFERENT secret
-          # This step sent AGENT_TOKEN as the query param, so the worker compared
-          # it against TELEGRAM_SECRET, mismatched, and returned 401.
-          #
-          # That is why the delegation looked dead: steps 1-9 all succeeded -
-          # the agent ran, the artifact was committed - and only "Report result
-          # back to JARVIS" failed. The Worker then timed the task out after 30
-          # minutes and recorded "no report within 30 menit", which read as an
-          # executor failure rather than an auth mismatch.
-          curl -fsS --max-time 30 -X POST "$WORKER/agent/done" \
-            -H "x-agent-token: $AGENT_TOKEN" \
+          # The real cause of the year-long 401s was never the transport: the
+          # GitHub repo secret and the Worker secret had drifted apart. Both are
+          # now set from one value. An earlier commit here "fixed" this by
+          # switching to the header, which was wrong - it broke a path that had
+          # been correct all along and hid the actual drift.
+          curl -fsS --max-time 30 -X POST "$WORKER/agent/done?token=$AGENT_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$JSON"
