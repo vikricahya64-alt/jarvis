@@ -32,8 +32,14 @@ cf/dist/
 .vercel/
 .vercel
 
-# --- Runtime artifacts (agent task outputs — do not commit) ---
-artifacts/*.md
+# --- Runtime artifacts ---
+# artifacts/*.md is deliberately NOT ignored: it is the deliverable the
+# delegated agent produces. /agent/done returns an artifact_url pointing at it,
+# so ignoring the file makes the whole delegation path publish nothing while
+# still reporting success. The "repo hygiene" pass that added this ignore
+# silently broke that feature - the workflow's `git add` started failing and,
+# under `bash -e`, took step 10 down with it.
+# Interim scratch formats stay ignored.
 artifacts/*.json
 artifacts/*.txt
 !artifacts/.gitkeep
