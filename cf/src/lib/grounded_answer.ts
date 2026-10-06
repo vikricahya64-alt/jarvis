@@ -39,6 +39,10 @@ export interface GroundedResult extends AnswerResult {
   sources: string[];
   /** Which Telegram direction resolved context, for diagnostics. */
   contextReason: string;
+  /** The subject this answer is about. Anchors the reply to a topic so a later
+   *  turn cannot slide onto something else. Empty when the message was a fresh
+   *  question with no established subject. */
+  topic: string;
 }
 
 export async function answerGrounded(
@@ -76,7 +80,13 @@ export async function answerGrounded(
     ctx.topic ?? "",
   );
   if (!result) return null;
-  return { ...result, sources: retrieval.used, contextReason: ctx.reason };
+  return {
+    ...result,
+    sources: retrieval.used,
+    contextReason: ctx.reason,
+    // Prefer the continued subject; otherwise the question itself is the topic.
+    topic: ctx.topic ?? q.slice(0, 80),
+  };
 }
 
 /** Single grounded completion against the answer role. */

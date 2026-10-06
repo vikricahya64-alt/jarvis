@@ -110,6 +110,38 @@ function hash(s: string): string {
   return (h >>> 0).toString(16).padStart(8, "0");
 }
 
+/**
+ * Shape tests used by the low-clarity gate in routeCommand().
+ *
+ * That gate scored the TOPIC and mistook it for the INTENT. "Lebih baik mana
+ * dalam segi inflasi perdagangan forex dan money charger" was read as a
+ * financial ACTION because "perdagangan" looks risky, so a low-confidence
+ * classification deferred it and the user got "Aksi ini saya tunda dulu" - four
+ * times, to a plain comparative question.
+ *
+ * Answering a question is not a risky act; this gate exists to stop ACTS. So
+ * the deferral is skipped when the message is interrogative by SHAPE -
+ * punctuation and interrogative words, never subject matter - which means a
+ * financial question is no more blocked than a cooking one.
+ *
+ * Deliberately narrow: destructive verbs and slash commands are NOT exempt, so
+ * "hapus semua tugas?" cannot dodge the guard by adding a question mark. The
+ * constitutional guard, CLARIFY and CONSENT branches are untouched.
+ */
+const INTERROGATIVE =
+  /\?\s*$|^\s*(apa|apakah|kenapa|mengapa|siapa|kapan|dimana|di mana|berapa|mana|banding(kan)?|sebutkan|jelaskan|ceritakan|uraikan)\b/i;
+const DESTRUCTIVE_HINT =
+  /\b(hapus|hapusin|hapush|bersihkan|buang|delete|remove|wipe|reset|batalkan)\b/i;
+const SLASH_COMMAND = /^\s*\//;
+
+export function isInterrogativeRequest(text: string): boolean {
+  const t = (text ?? "").trim();
+  if (!t) return false;
+  if (SLASH_COMMAND.test(t)) return false;
+  if (DESTRUCTIVE_HINT.test(t)) return false;
+  return INTERROGATIVE.test(t);
+}
+
 /** Fast deterministic fallback when Groq UNavailable (offline/clarity lower). */
 export function heuristicClassify(text: string): ClassifiedIntent {
   const raw = text || "";
@@ -457,7 +489,8 @@ export async function routeCommand(
   // Low-clarity terminal "restricted" utility that is otherwise safe.
   // Risk guard: safe (low-risk) conversational statements fall through to
   // EXECUTE so they get an AI response rather than a terse "ditangguhkan".
-  if (!clarityOk && intent.priority >= TIERS.UTILITY && (intent.riskLevel === "high" || intent.riskLevel === "medium")) {
+  if (!clarityOk && !isInterrogativeRequest(rawText)
+      && intent.priority >= TIERS.UTILITY && (intent.riskLevel === "high" || intent.riskLevel === "medium")) {
     const decision: Decision = {
       action: "DEFER",
       compliance: "BLOCKED",

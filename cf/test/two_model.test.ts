@@ -136,6 +136,58 @@ async function main() {
     assert.strictEqual(result, null, "a null draft must not become a reply");
   }
 
+
+  // --- 8. The decision itself: QUESTION vs COMMAND -------------------------
+  //
+  // The pipeline's single branch point. A QUESTION's answer IS the output; a
+  // COMMAND's draft is not, and execution -> action -> output happens instead.
+  // The case that motivated it: "which is better regarding inflation, forex
+  // trading or a money changer" is a QUESTION despite trading being a risky
+  // subject - being ABOUT risk is not asking to DO something.
+  {
+    const seen: string[] = [];
+    const v = await verifyAnswerWithLines(
+      env,
+      "Lebih baik mana dalam segi inflasi perdagangan forex dan money charger",
+      "Forex adalah pasar Actin Jude ??",
+      ["PASS", "QUESTION", "NONE", "NONE"].join("\n"),
+      seen,
+    );
+    assert.strictEqual(v.ok, true);
+    assert.strictEqual(v.kind, "question", "a risky TOPIC must not be read as a COMMAND");
+    assert.strictEqual(v.command, "", "a question carries no command");
+  }
+
+  // A real command must be recognised, and its command must survive parsing.
+  {
+    const v = await verifyAnswerWithLines(
+      env,
+      "hapus semua tugas pending yang sudah selesai",
+      "Pem.handlers ??",
+      ["PASS", "COMMAND", "/tugas hapus semua pending", "NONE"].join("\n"),
+      [],
+    );
+    assert.strictEqual(v.kind, "command");
+    assert.strictEqual(v.command, "/tugas hapus semua pending", "canonical command must be captured");
+  }
+
+  // A proposed command that is not a slash command is discarded, so a model
+  // cannot smuggle free text into the execution path.
+  {
+    const v = await verifyAnswerWithLines(
+      env, "hapus yang itu", "ok", ["PASS", "COMMAND", "rm -rf /sdcard", "NONE"].join("\n"), [],
+    );
+    assert.strictEqual(v.kind, "command");
+    assert.strictEqual(v.command, "", "a non-slash command must be discarded");
+  }
+
+  // An unparseable decision must not be read as an instruction to execute.
+  {
+    const v = await verifyAnswerWithLines(env, "x", "y", "PASS", []);
+    assert.strictEqual(v.kind, "question", "an unreadable kind must not become a command");
+    assert.strictEqual(v.command, "");
+  }
+
   console.log("  role separation, fail-closed verifier, single repair, no unverified shipping OK");
   console.log("TWO-MODEL TESTS PASSED");
 }
@@ -164,3 +216,16 @@ main().catch((e) => {
   console.error("TWO-MODEL TEST FAILED:", e?.message || e);
   process.exit(1);
 });
+
+/** verifyAnswer with a scripted verifier reply, for the decision tests. */
+async function verifyAnswerWithLines(
+  env: any, input: string, draft: string, reply: string, _seen: string[],
+) {
+  const { setVerifierForTest } = await import("../src/lib/answer_roles");
+  setVerifierForTest(async () => reply);
+  try {
+    return await verifyAnswer(env, input, draft, "");
+  } finally {
+    setVerifierForTest(null);
+  }
+}

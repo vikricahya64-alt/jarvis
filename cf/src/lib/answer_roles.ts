@@ -65,6 +65,24 @@ export interface Verdict {
   critique: string;
   verifier: string;
   latencyMs: number;
+  /**
+   * What the user's message actually WAS, decided in the same pass that
+   * checked relevance. This is the pipeline's single decision point:
+   *
+   *   question -> the draft IS the output, send it
+   *   command  -> the draft is not the output; the message is a request to
+   *              DO something, so it goes to execution -> action -> output
+   *
+   * Deciding this here, once, is what removes the failure where the same
+   * message was treated differently by three separate gates and ended up
+   * deferred by one of them.
+   */
+  kind: "question" | "command";
+  /** Canonical command when kind is "command". NEVER executed directly: it is
+   *  re-entered through the verified intent gate (resolveIntent) like any
+   *  user-typed command, so a model cannot invent a command that skips
+   *  verification. Empty when the model proposes no command. */
+  command: string;
 }
 
 /**
@@ -77,7 +95,7 @@ export interface Verdict {
  * starts rejecting correct answers.
  */
 const VERIFIER_PROMPT = (input: string, draft: string, subject: string) =>
-  `You are checking ONE thing: whether a draft reply addresses the user's message.
+  `You do two things about a draft reply, in one pass.
 
 USER MESSAGE:
 """
@@ -91,14 +109,26 @@ ${draft}
 
 The subject under discussion: ${subject || "(not established yet)"}
 
-Answer with exactly two lines, no other text:
-FIRST LINE: either PASS or FAIL
-SECOND LINE: if FAIL, one short sentence naming what the draft answered INSTEAD of what was asked.
+Reply with EXACTLY four lines and nothing else.
 
-Fail only when the draft is clearly about a different subject, ignores an explicit
-correction, or silently substitutes a different question. Do not fail for style,
-length, tone, formatting, missing detail on a topic it did answer, or factual
-claims you cannot verify - you are checking relevance, not truth.`;
+LINE 1: PASS or FAIL
+  PASS only if the draft addresses what the user actually sent. FAIL if it is
+  about a different subject, ignores an explicit correction, or substitutes a
+  different question. Do not fail for style, length, tone, formatting, detail
+  missing on a topic it did answer, or claims you cannot verify - you are
+  checking relevance, not truth.
+
+LINE 2: QUESTION or COMMAND
+  QUESTION - the user is asking something; the draft IS the reply to send.
+  COMMAND  - the user is asking JARVIS to DO something (create, delete, run,
+             schedule, fetch and store). Being ABOUT a risky topic is not a
+             command: "which is better, forex trading or a money changer" is a
+             QUESTION even though trading is a risky subject.
+
+LINE 3: if COMMAND, the slash command to run (for example /tugas ...), otherwise NONE
+
+LINE 4: if FAIL, one short sentence naming what the draft answered INSTEAD of
+what was asked. Otherwise NONE`;
 
 export async function verifyAnswer(
   env: Env,
@@ -130,17 +160,50 @@ export async function verifyAnswer(
       critique: "",
       verifier: `${name}:unavailable`,
       latencyMs: Date.now() - started,
+      kind: "question",
+      command: "",
     };
   }
-  const head = raw.trim().split("\n")[0]?.toUpperCase() ?? "";
+  const lines = raw.trim().split("\n").map((l) => l.trim());
+  const head = (lines[0] ?? "").toUpperCase();
   const pass = head.startsWith("PASS");
-  const critique = raw.trim().split("\n").slice(1).join(" ").trim().slice(0, 300);
+
+  // Fail-closed on the decision too. An unparseable answer must not be read as
+  // "question", because that would silently ship a draft the verifier never
+  // cleared, nor as "command", which would execute something unvetted.
+  const kindLine = (lines[1] ?? "").toUpperCase();
+  const kind: Verdict["kind"] = kindLine.startsWith("COMMAND")
+    ? "command"
+    : kindLine.startsWith("QUESTION")
+      ? "question"
+      : "question";
+
+  // A proposed command is only ever a SUGGESTION here. It is re-entered through
+  // resolveIntent before anything runs, and it is discarded outright unless it
+  // is a syntactically valid slash command.
+  const cmdRaw = (lines[2] ?? "").trim();
+  // Accept the canonical slash form only. Anything else - free text, a shell
+  // string, a path - is discarded so nothing but a real command name can ever
+  // reach the execution path.
+  // A canonical command is ALWAYS a slash command, with no exceptions. Requiring
+  // the leading "/" is what stops free text from being smuggled into the
+  // execution path: "rm -rf /sdcard" starts with letters and would otherwise
+  // pass, while "/tugas hapus semua pending" is the only shape accepted.
+  const command = kind === "command"
+    && /^\/[a-z][a-z0-9_]*(\s|$)/i.test(cmdRaw.trim())
+    && !/^\/none$/i.test(cmdRaw.trim())
+    ? cmdRaw.slice(0, 200)
+    : "";
+
+  const critique = lines.slice(3).join(" ").trim().slice(0, 300);
   return {
     ok: pass,
     reason: pass ? "" : critique || "draft tidak menjawab pertanyaan yang diminta",
-    critique: critique,
+    critique,
     verifier: name,
     latencyMs: Date.now() - started,
+    kind,
+    command,
   };
 }
 

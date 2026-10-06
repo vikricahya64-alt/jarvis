@@ -1194,8 +1194,16 @@ async function testOutputGateFilter() {
 
   // The webhook must pass perception.topic to emitSmartReply
   const hookSrc = readFileSync(new URL("../src/workers/telegram_webhook.ts", import.meta.url), "utf-8");
-  assert.ok(/deliverSmartReply.*perception\?\.topic/.test(hookSrc),
-    "webhook must pass perception.topic to emitSmartReply");
+  // The property, not the old implementation detail: the subject must reach
+  // emitSmartReply so the reply is anchored. Free text no longer routes through
+  // processIntelligence (it goes to the two-model pipeline), so there is no
+  // `perception` in this path any more - but a topic must still be passed, and
+  // passing none must still fail this assertion.
+  const smartReplyCalls = hookSrc.match(/deliverSmartReply\([^;]*?\)/g) ?? [];
+  assert.ok(
+    smartReplyCalls.some((c) => /\.topic\b/.test(c) || /topic[,)]/.test(c)),
+    "webhook must pass the resolved topic to emitSmartReply: " + JSON.stringify(smartReplyCalls.slice(0, 3)),
+  );
 }
 
 async function testMarkdownTemplateDetection() {

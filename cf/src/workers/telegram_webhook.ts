@@ -78,6 +78,8 @@ import { listSuggestions, resolveSuggestion } from "../lib/predictive";
 import { resolveIntent, isHardCommand, looksLikeCommand, type ResolvedIntent } from "../lib/intent_gate";
 import { tierFor, quotaCheck, ownerOnlyDenial, isOwner, gateCommand } from "../lib/access";
 import { moderateIncoming, recordModerationBlock, REFUSAL_ID } from "../lib/moderation";
+import { answerGrounded } from "../lib/grounded_answer";
+import { recordTurn } from "../lib/telegram_context";
 import {
   getGreeting, STATUS, HELP,
 } from "../lib/messages";
@@ -1317,11 +1319,24 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     }
   }
 
-  // Everything else → compliance pipeline.
+  // Free text -> the single pipeline. It decides, in one pass, whether the
+  // message was a QUESTION (answer is the output) or a COMMAND (hand to the
+  // compliance pipeline, which executes, acts, and only then emits output).
+  //
+  // The old route - free text straight into act() -> routeCommand ->
+  // processIntelligence - is gone from here. That route guessed intent with
+  // regex and could defer a plain comparative question as a risky action, which
+  // is how "which is better, forex trading or a money changer" came to be
+  // answered "Aksi ini saya tunda dulu" four times.
   try {
-    await act(env, r, text);
+    const handled = await runBrain(env, r, text, replyTextOf(msg));
+    if (!handled) {
+      // No grounded answer available. Only then fall back to the compliance
+      // pipeline, so capabilities and existing behaviour are still reachable.
+      await act(env, r, text);
+    }
   } catch (e) {
-    console.error("[webhook] act() threw:", (e as Error).message);
+    console.error("[webhook] pipeline threw:", (e as Error).message);
     await fire(sendMessage(env, r, "Maaf, terjadi kesalahan internal. Coba lagi sebentar."));
   }
   return new Response("ok", { status: 200 });
@@ -1442,20 +1457,69 @@ function replyTextOf(msg?: { reply_to_message?: { text?: string; caption?: strin
   return msg?.reply_to_message?.text ?? msg?.reply_to_message?.caption ?? undefined;
 }
 
+/**
+ * The single entry point for free text.
+ *
+ * Replaces the old brain route outright. That route classified intent with
+ * regex and routed on the guess, so a plain comparative question about forex
+ * trading and inflation could be deferred as a risky action - "Aksi ini saya
+ * tunda dulu", four times over.
+ *
+ * One decision, taken once, in the verifier that also checks relevance:
+ *
+ *   context from Telegram
+ *     -> keyless retrieval
+ *     -> answerer writes from the retrieved passages only
+ *     -> verifier: does it answer what was sent, and was that a QUESTION or a
+ *        COMMAND?
+ *          QUESTION -> the answer IS the output; send it
+ *          COMMAND  -> the draft is not the output. Re-enter the compliance
+ *                      pipeline with the canonical command, so execution ->
+ *                      action -> output runs through the same verified gate a
+ *                      typed command would. A model cannot invent a command
+ *                      that skips verification.
+ *
+ * Nothing is routed by guessed intent, and no answer is emitted without having
+ * been checked against the message that produced it.
+ */
 async function runBrain(env: Env, owner: number, text: string, replyToText?: string): Promise<boolean> {
   try {
-    const res = await processIntelligence(env, owner, text, replyToText);
-    if (res.text && res.text.trim().length > 0) {
-      await deliverSmartReply(env, owner, res.text, 800, res.perception?.topic ?? undefined);
+    const result = await answerGrounded(env, owner, text, replyToText);
+
+    if (!result) {
+      // No usable evidence. Fail closed rather than answering from memory,
+      // which is the failure this pipeline exists to remove.
+      console.log(`[pipeline] no grounded answer; retrieval empty chat=${owner}`);
+      return false;
+    }
+
+    if (!result.verified?.ok) {
+      console.log(`[pipeline] rejected by verifier: ${result.verified?.reason ?? "unknown"}`);
+      await fire(sendMessage(env, owner,
+        "Saya belum bisa menjawab itu dengan sumber yang bisa dipercaya."));
       return true;
     }
+
+    if (result.verified.kind === "command" && result.verified.command) {
+      console.log(`[pipeline] command branch -> ${result.verified.command}`);
+      await act(env, owner, result.verified.command);
+      return true;
+    }
+
+    console.log(
+      `[pipeline] answer branch sources=${result.sources.join("+") || "none"} ` +
+      `answeredBy=${result.answeredBy} verifiedBy=${result.verified?.verifier} ctx=${result.contextReason}`,
+    );
+    await recordTurn(env, owner, "user", text).catch(() => {});
+    await recordTurn(env, owner, "assistant", result.text).catch(() => {});
+    await deliverSmartReply(env, owner, result.text, 800, result.topic);
+    return true;
   } catch (e) {
-    console.error("[webhook] brain path failed", (e as Error).message);
+    console.error("[webhook] pipeline failed", (e as Error).message, (e as Error).stack);
     await fire(sendMessage(env, owner,
-      `Maaf, pemrosesan ini sedang bermasalah — coba lagi sebentar.`));
+      "Maaf, pemrosesan ini sedang bermasalah - coba lagi sebentar."));
     return false;
   }
-  return false;
 }
 
 /** Simplified action path for a normal (non-diagnostic) text command. */
