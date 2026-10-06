@@ -1,0 +1,139 @@
+name: Deploy Legacy (Vercel)
+
+# Auto-deploy for vercel-leg, the LEGACY Python/Vercel stack.
+#
+# Kept separate from deploy.yml on purpose. The Cloudflare Worker is the live
+# spine; vercel-leg is the fallback. Sharing one workflow would mean a Vercel
+# build failure blocking a Cloudflare deploy that has nothing to do with it, and
+# vice versa - and this repo had four consecutive failed deploys before anyone
+# noticed, because the Vercel check was red the whole time and unrelated to the
+# Cloudflare path.
+#
+# Path filter matches deploy.yml's shape: a README-only commit must not trigger
+# a rebuild of either stack.
+#
+# The build used to fail for weeks with FASTAPI_ENTRYPOINT_NOT_FOUND. Two causes,
+# both now fixed:
+#   * the project had framework=fastapi, so wrangler-style FastAPI export was
+#     demanded. The stack is a set of BaseHTTPRequestHandler functions, not an
+#     ASGI app.
+#   * rootDirectory was unset, so Vercel built the repo root while
+#     requirements.txt and vercel.json both live in vercel-leg/.
+# Both are project settings (rootDirectory=vercel-leg, framework=null), not repo
+# settings, so they cannot be encoded in this file - only applied once via the
+# API. That is why this workflow cannot fully re-create a project from scratch.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "vercel-leg/**"
+      - ".github/workflows/deploy-vercel.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vercel-deploy
+  # false, not true: a deploy already in flight should finish. Cancelling
+  # mid-deploy can leave the project pointed at a half-built deployment.
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: vercel pull + build + deploy
+    runs-on: ubuntu-latest
+    # Serverless function builds plus a pip install of groq/e2b/cryptography can
+    # exceed the 360s default on a cold runner.
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # `vercel pull` is what links the checkout to the project without an
+      # interactive prompt: it reads VERCEL_ORG_ID and VERCEL_PROJECT_ID and
+      # writes .vercel/project.json. Without it the CLI prompts for a scope and
+      # hangs until the job times out.
+      - name: Link project
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p .vercel
+          printf '{"orgId":"%s","projectId":"%s"}\n' \
+            "$VERCEL_ORG_ID" "$VERCEL_PROJECT_ID" > .vercel/project.json
+          # Sanity-check the token before spending build minutes.
+          who="$(curl -sS --max-time 30 -H "Authorization: Bearer $VERCEL_TOKEN" \
+                   https://api.vercel.com/v2/user | tr -d '\n')"
+          if ! printf '%s' "$who" | grep -q '"id"'; then
+            echo "::error::VERCEL_TOKEN is not usable"; exit 1
+          fi
+          echo "linked project=$VERCEL_PROJECT_ID org=$VERCEL_ORG_ID"
+
+      - name: Pull environment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx --yes vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+      - name: Build
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx --yes vercel@latest build --prod --token="$VERCEL_TOKEN"
+
+      - name: Deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: npx --yes vercel@latest deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+
+      # Prove the deployment actually answers, and that the two endpoints which
+      # previously had no authentication at all are refused. Those are reachable
+      # without Vercel Authentication on the project's custom domain, so a
+      # green build is not sufficient evidence.
+      - name: Verify the deployment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          URL="$(npx --yes vercel@latest inspect --token="$VERCEL_TOKEN" \
+                   --scope="$VERCEL_ORG_ID" 2>/dev/null \
+                 | sed -n 's/.*"url":"\([^"]*\)".*/\1/p' | head -1)"
+          if [ -z "$URL" ]; then
+            echo "::notice::could not resolve the deployment URL from inspect; skipping reachability check"
+            exit 0
+          fi
+          BASE="https://${URL}"
+          echo "deployment: $BASE"
+
+          health="$(curl -sS -o /tmp/h -w '%{http_code}' --max-time 30 "$BASE/api/health" || echo 000)"
+          echo "  GET  /api/health            -> $health"
+          [ "$health" = "200" ] || { echo "::error::health check returned $health"; exit 1; }
+
+          # Must be 401. These ran arbitrary caller-supplied code and spent the
+          # owner's LLM quota with no auth until commit ae0bdea.
+          for ep in orchestrator simulator_proxy; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+                    -X POST "$BASE/api/$ep" \
+                    -H 'Content-Type: application/json' \
+                    -d '{"input":"x","code":"print(1)","telegram_id":1}' || echo 000)"
+            echo "  POST /api/$ep (no token) -> $code"
+            if [ "$code" = "200" ] || [ "$code" = "302" ]; then
+              echo "::error::$ep is reachable without authentication"
+              exit 1
+            fi
+            if [ "$code" != "401" ]; then
+              echo "::error::$ep returned $code, expected 401"
+              exit 1
+            fi
+          done
+          echo "verification OK"
