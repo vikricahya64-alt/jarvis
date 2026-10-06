@@ -1184,8 +1184,10 @@ async function testOutputGateFilter() {
   assert.ok(/brainExitRail\(text.*inputTopic/.test(gateSrc),
     "brainExitRail must accept inputTopic parameter");
 
-  // emitSmartReply must pass inputTopic to brainExitRail
-  assert.ok(/brainExitRail\(text, inputTopic\)/.test(gateSrc),
+  // emitSmartReply must pass inputTopic to brainExitRail. The third argument is
+  // optional and controls clipping only, so the assertion allows it while still
+  // requiring that the topic is forwarded - which is what the gate depends on.
+  assert.ok(/brainExitRail\(text, inputTopic(, false)?\)/.test(gateSrc),
     "emitSmartReply must pass inputTopic to brainExitRail");
 
   // ExitRail must use output gate score

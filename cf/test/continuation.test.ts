@@ -1,4 +1,4 @@
-import { splitForTelegram, isContinuationWord } from "../src/lib/telegram_gate";
+import { splitForTelegram, isContinuationWord, brainExitRail } from "../src/lib/telegram_gate";
 
 const CAP = 700;
 const norm = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -31,5 +31,20 @@ for (const [label, want] of ctrl) {
   if (got !== want) bad++;
   console.log(`  ${got === want ? "✓" : "✗"} ${got === want ? "" : "( salah) "}"${label}" -> ${got}, harap ${want}`);
 }
+// The gate must never be bypassed by the splitter. When the gated copy is
+// short but the raw text is long, an earlier version split the RAW text and
+// shipped it ungated - the gates were silently skipped on that path.
+{
+  const raw = Array.from({ length: 8 }, (_, i) => `Bagian ${i + 1} yang cukup panjang untuk dipecah.`).join(" ");
+  const gatedNoClip = brainExitRail(raw, "umum", false);
+  const gatedClip = brainExitRail(raw, "umum", true);
+  const ok1 = splitForTelegram(gatedNoClip).join(" ") === norm(raw);
+  const ok2 = splitForTelegram(gatedClip).length === 1 && gatedClip.length <= 700;
+  if (!ok1) bad++;
+  console.log(`  ${ok1 ? "\u2713" : "\u2717"} gate tanpa clip -> pemecahan tidak mengubah isi`);
+  if (!ok2) bad++;
+  console.log(`  ${ok2 ? "\u2713" : "\u2717"} clip lama tetap_aplik untuk pemanggil tanpa emit`);
+}
+
 console.log(bad === 0 ? "\nCONTINUATION TESTS PASSED" : `\n${bad} FAILED`);
 process.exit(bad === 0 ? 0 : 1);

@@ -241,7 +241,7 @@ export function stripResearchApparatus(text: string): string {
   return t.trim();
 }
 
-export function brainExitRail(text: string, inputTopic?: string): string {
+export function brainExitRail(text: string, inputTopic?: string, clipLength = true): string {
   let t = (text ?? "").trim();
   if (!t) return "";
   // (x) Injection scan — block output yang mengandung pola prompt injection.
@@ -371,14 +371,13 @@ export async function emitSmartReply(
   retryDelayMs = 800,
   inputTopic?: string,
 ): Promise<void> {
-  const safe = brainExitRail(text, inputTopic);
-
-  // brainExitRail clips to the cap. Re-split the ORIGINAL text so the remainder
-  // is kept rather than discarded - that is what makes "lanjut" deliverable.
-  const parts = splitForTelegram(safe).length > 1
-    ? splitForTelegram(safe)
-    : splitForTelegram(text ?? "");
-  const first = parts[0] ?? safe;
+  // Gate the text WITHOUT clipping: the gates must see the whole answer, and
+  // the splitter owns length so the remainder can be kept for "lanjut".
+  // Splitting the raw text instead - as an earlier version did when the gated
+  // copy came out short - silently bypassed every gate on this path.
+  const gated = brainExitRail(text, inputTopic, false);
+  const parts = splitForTelegram(gated);
+  const first = parts[0] ?? "";
   const rest = parts.slice(1);
 
   if (rest.length > 0 && env.CONFIG_KV) {
