@@ -137,3 +137,37 @@ crons = ["0 */6 * * *", "0 3 * * *", "0 8 * * *", "0 7 * * *", "* * * * *"]
 # cannot be invented, it has to come from the runtime.
 [version_metadata]
 binding = "CF_VERSION"
+
+# Workers Logs - built-in, no new dependency, no cost until 2026-12-01.
+#
+# The audit found the system had NO observability at all: no OpenTelemetry, no
+# Analytics Engine, no Logpush. Every error signal lived in D1, where
+# request_log samples 1 success in 10 and failures are the only thing reliably
+# recorded - so "Requests (24h)" could never be trusted and a degradation like a
+# 429 storm was invisible until it was read out of a database by hand.
+#
+# Workers Logs captures console.log and invocation metadata with head sampling,
+# queryable through the dashboard and the Workers Observability API. 7-day
+# retention. Sampled lower than 1.0 because request_log already exists for
+# durable per-provider records; this is for tracing a single request's life.
+[observability]
+enabled = true
+head_sampling_rate = 0.25
+
+# Analytics Engine - built-in, non-blocking writes, SQL-queryable.
+#
+# NOT YET ACTIVE. Deploying this binding fails with Cloudflare error 10089:
+#   "You need to enable Analytics Engine" -> dashboard, workers/analytics-engine
+# Account-level feature, so it cannot be switched on from a token. Uncomment
+# once enabled there; nothing else needs to change, and the writer in
+# src/lib/metrics.ts falls back to D1 while the binding is absent.
+#
+# Replaces the two vestigial tables the audit found with no writers:
+# interaction_logs and quota_metrics both had a schema, a reader, and zero rows.
+# Writing usage counters here costs no Worker latency and aggregates over time in
+# a way per-run D1 COUNTs cannot - the quota snapshot is currently recomputed by
+# scanning obedience_audit twice on every six-hourly tick.
+#
+# [[analytics_engine_datasets]]
+# binding = "ANALYTICS"
+# dataset = "jarvis_usage"
