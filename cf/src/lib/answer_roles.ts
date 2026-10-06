@@ -160,6 +160,12 @@ LINE 1: PASS or FAIL
   Ignore length, tone, formatting and detail level. Judge the answer, not the
   writing.
 
+  An honest "I don't have that" PASSES. When the question needs current data and
+  it is genuinely unavailable, saying so plainly is the correct reply - failing
+  it turns an honest answer into a refusal, and pressures the assistant into
+  inventing a number. Only fail a refusal that is vague or evasive when the
+  answer was actually available.
+
 LINE 2: PLAIN, RESEARCH or COMMAND
   Classify the QUESTION on LINE 1, never the draft. A draft that states today's
   price from memory does not make the question general knowledge.
