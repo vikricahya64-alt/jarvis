@@ -215,8 +215,34 @@ function scanInjectionAttempt(text: string): boolean {
  *  inputTopic: opsional, topik dari pesan input (untuk output gate scoring).
  *  Jika disediakan, output gate score dihitung dan output yang score-nya
  *  di bawah OUTPUT_GATE_THRESHOLD (0.6) diblokir. */
+/**
+ * Strip research apparatus from text on its way to a chat.
+ *
+ * Applied to EVERY brain reply at the exit, not only to the grounded-answer
+ * path, because a citation marker is meaningless in a Telegram chat whichever
+ * route produced it. This is a transport concern, not a judgement about meaning,
+ * so it is deterministic and costs nothing.
+ *
+ * Handles the forms actually observed in production: 【1†https://...】,
+ * 【https://...】, and a trailing "Sumber: https://a, https://b" line.
+ */
+export function stripResearchApparatus(text: string): string {
+  let t = String(text ?? "");
+  if (!t) return t;
+  // Bracketed citation markers carrying a source, a URL or a confidence tag.
+  t = t.replace(/【[^】]{0,200}?(?:†|https?:\/\/|www\.)[^】]{0,200}】/g, " ");
+  // Any other bracketed reference left over (footnote markers, source tags).
+  t = t.replace(/【\s*(?:\d+|sumber|source|cf|high|medium|low)\s*†?[^】]{0,120}】/gi, " ");
+  // A trailing source line.
+  t = t.replace(/\n{0,2}\s*(?:sumber|sumber:|sources?|referensi)\s*:\s*\S+(\s*,\s*\S+)*\s*$/i, "");
+  // Inline URLs left in prose - a chat reply does not need the raw link.
+  t = t.replace(/\s*\(?<?https?:\/\/\S+>?\)?/g, "");
+  t = t.replace(/[ \t]+/g, " ").replace(/\s+([,.;:!?])/g, "$1").replace(/\n{3,}/g, "\n\n");
+  return t.trim();
+}
+
 export function brainExitRail(text: string, inputTopic?: string): string {
-  const t = (text ?? "").trim();
+  let t = (text ?? "").trim();
   if (!t) return "";
   // (x) Injection scan — block output yang mengandung pola prompt injection.
   //     Jika LLM mengulang pola injection dari input, output diblokir.
@@ -250,6 +276,11 @@ export function brainExitRail(text: string, inputTopic?: string): string {
       "",
     ).trim();
   }
+  // (b2) Research apparatus is stripped BEFORE the gates run, so relevance and
+  //      citation scoring judge the sentence the user will actually read and
+  //      not the brackets around it.
+  if (stripResearchApparatus(t) !== t) t = stripResearchApparatus(t);
+
   // (c) GATED OUTPUT FILTER (Prinsip: SwiGLU Output Gate): skor output
   //     terhadap input. Score < 0.6 = output tidak match → block.
   //     Deterministik, 0 token, <1ms. Selalu jalan jika inputTopic disediakan;

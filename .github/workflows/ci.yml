@@ -46,6 +46,8 @@ jobs:
         run: npm run test:twomodel
       - name: Answer continuation
         run: npm run test:continuation
+      - name: Output readability gate
+        run: npm run test:readability
       - name: Go/wasm module (parity + size budget)
         run: npm run test:go
 

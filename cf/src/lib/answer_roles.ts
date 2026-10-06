@@ -155,11 +155,24 @@ The subject under discussion: ${subject || "(not established yet)"}
 Reply with EXACTLY four lines and nothing else.
 
 LINE 1: PASS or FAIL
-  PASS only if the draft addresses what the user actually sent. FAIL if it is
+  PASS only if the draft addresses what the user actually sent AND reads like
+  something a person would say out loud.
+
+  REGISTER IS PART OF PASSING. Indonesian users are talking to an assistant,
+  not reading a paper. Fail the draft if it is written in academic or
+  report register - for example "merujuk pada", "memiliki fungsi penting dalam",
+  "berdasarkan hasil penelitian", "pada dasarnya", "dapat disimpulkan bahwa",
+  "merupakan suatu bentuk dari". Plain everyday Indonesian is required:
+  short sentences, everyday words, no defined-term phrasing. Being thorough is
+  fine; sounding like a textbook is not. FAIL if it is
   about a different subject, ignores an explicit correction, or substitutes a
   different question. Do not fail for style, length, tone, formatting, detail
   missing on a topic it did answer, or claims you cannot verify - you are
-  checking relevance, not truth.
+  checking relevance and readability, not truth.
+
+  Also FAIL if the draft carries research apparatus meant for a paper rather
+  than a chat message: bracketed citation markers, source tags, footnote
+  numbering, or a bare URL list. Cite nothing inline.
 
 LINE 2: PLAIN, RESEARCH or COMMAND
   PLAIN    - the user is asking something answerable from general knowledge;
