@@ -383,3 +383,86 @@ export function describeBorrowedPlatforms(): string {
     "Setiap eksekutor dipinjam apa adanya (kemampuan penuh, tidak dibangun ulang). Probe live di sini tanpa side-effect; kegagalan eksekutor tidak pernah membuat status gagal render.",
   ].filter(Boolean).join("\n");
 }
+/**
+ * What the KEYLESS search layers actually return, per query, with counts.
+ *
+ * Reachability is not usefulness. A probe that only checks HTTP status reports
+ * a blocked scraper as healthy (202 counts as a response) and cannot tell an
+ * empty knowledge graph from a full result page. This walks every layer the
+ * search cascade uses and reports, per layer: HTTP status, payload size, and
+ * how many structured hits actually parsed out.
+ *
+ * The counts are the decision input: "is search without an API key enough to
+ * ground answers" is answerable only from parsed-result counts, not from a
+ * green tick.
+ */
+export async function keylessSearchReport(
+  env: Env,
+  queries: string[],
+): Promise<Array<{
+  query: string;
+  layers: Array<{
+    layer: string;
+    status: number | null;
+    bytes: number;
+    hits: number;
+    detail: string;
+  }>;
+}>> {
+  const probe = async (
+    layer: string,
+    url: string,
+    pick: (text: string) => { hits: number; detail: string },
+  ) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10_000);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal, headers: { "User-Agent": "Mozilla/5.0 (Linux; Android 10)" } });
+      const text = await res.text();
+      const { hits, detail } = pick(text);
+      return { layer, status: res.status, bytes: text.length, hits, detail };
+    } catch (e) {
+      return { layer, status: null, bytes: 0, hits: 0, detail: (e as Error).message };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const out: Array<{ query: string; layers: any[] }> = [];
+  for (const query of queries) {
+    const q = encodeURIComponent(query);
+    const layers = [
+      await probe("ddg-instant-answer",
+        `https://api.duckduckgo.com/?q=${q}&format=json&no_html=1&skip_disambig=1`,
+        (t) => {
+          try {
+            const d = JSON.parse(t) as { AbstractText?: string; RelatedTopics?: unknown[]; Results?: unknown[] };
+            const hits = (d.RelatedTopics?.length ?? 0) + (d.Results?.length ?? 0);
+            return { hits, detail: d.AbstractText ? "abstract tersedia" : "tanpa abstract" };
+          } catch { return { hits: 0, detail: "bukan JSON valid" }; }
+        }),
+      await probe("ddg-html-scrape",
+        `https://html.duckduckgo.com/html/?q=${q}`,
+        (t) => ({
+          hits: (t.match(/class="result__a"/g) ?? []).length,
+          detail: /anomaly|captcha|challenge|unusual/i.test(t) ? "BOT CHALLENGE (tanpa hasil)" : "scrape bisa diparse",
+        })),
+      await probe("searxng-json",
+        `https://searx.be/search?q=${q}&format=json`,
+        (t) => {
+          try {
+            const d = JSON.parse(t) as { results?: unknown[] };
+            return { hits: d.results?.length ?? 0, detail: "JSON" };
+          } catch { return { hits: 0, detail: "menolak JSON untuk klien tanpa API key (balas HTML)" }; }
+        }),
+      await probe("bing-html",
+        `https://www.bing.com/search?q=${q}&count=10`,
+        (t) => ({
+          hits: (t.match(/<li class="b_algo"/g) ?? []).length,
+          detail: (t.match(/<li class="b_algo"/g) ?? []).length > 0 ? "hasil diparse" : "tidak ada hasil",
+        })),
+    ];
+    out.push({ query, layers });
+  }
+  return out;
+}

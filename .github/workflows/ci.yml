@@ -42,6 +42,8 @@ jobs:
         run: npm run test:menu
       - name: Telegram context gate
         run: npm run test:ctx
+      - name: Two-model answer/verify gate
+        run: npm run test:twomodel
       - name: Go/wasm module (parity + size budget)
         run: npm run test:go
 

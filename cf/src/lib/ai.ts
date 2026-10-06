@@ -752,6 +752,13 @@ export async function groqSingleShot(
 
 /** Shared options across the OpenAI-compatible provider responders. */
 export interface ProviderRespondOpts {
+  /** Suppress web search for this call.
+   *
+   *  Required by the verifier role (lib/answer_roles.ts): the verifier asks a
+   *  narrow relevance question about two texts it is handed. Letting it search
+   *  would spend quota and latency on every single reply, and could feed it
+   *  fresh material that distracts from the comparison it was asked to make. */
+  skipSearch?: boolean;
   context?: Array<{ role: string; content: string }>;
   topic?: string;
   contextIsEnriched?: boolean;

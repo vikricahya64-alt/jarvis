@@ -20,6 +20,13 @@ export interface Env {
    *  Absent means the module is allowed to run; see src/lib/go_wasm.ts for why
    *  the TS path always remains authoritative. */
   GO_WASM?: string;
+  /** Provider that composes replies (answer role). Defaults to groq.
+   *  Deliberately separate from VERIFIER_PROVIDER: a model grading its own
+   *  draft approves its own mistakes, which would make the gate decorative. */
+  ANSWER_PROVIDER?: string;
+  /** Provider that checks whether a draft answers the message that triggered
+   *  it. Must differ from ANSWER_PROVIDER. Defaults to openrouter. */
+  VERIFIER_PROVIDER?: string;
   DB: D1Database;
   CONFIG_KV: KVNamespace;
   AI: Ai;

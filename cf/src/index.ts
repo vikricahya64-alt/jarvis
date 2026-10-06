@@ -32,7 +32,7 @@ import { runDeploySafetyLoop } from "./lib/deploy_safety";
 import { runRecoveryLoop } from "./lib/recovery_loop";
 import { handleMcpRequest } from "./lib/mcp/server";
 import { probeProviders } from "./lib/providers";
-import { probeBorrowedPlatforms } from "./lib/borrowed";
+import { probeBorrowedPlatforms, keylessSearchReport } from "./lib/borrowed";
 import { goWasmActive, goNormalizeOrTs, goNormalizeLinkOrTs } from "./lib/go_wasm";
 import { normalize } from "./lib/moderation";
 import { normalizeLinkForCompare } from "./lib/verifier";
@@ -396,6 +396,23 @@ version: "m9-v11.52",
     // the usual timing loops all read 0ms for both sides. Parity, by contrast,
     // IS checkable in production - and parity is the property that makes the
     // module safe to switch on at all.
+    // /search_diag - measures what the KEYLESS search layers really return.
+    // Reachability is not usefulness: a scraper answering 202 with a bot
+    // challenge looks healthy to a status probe, and an Instant Answer API can
+    // return 200 with an empty knowledge graph. Deciding whether answers can be
+    // grounded without a search API key needs parsed-result counts per layer.
+    if (path === "/search_diag") {
+      if (!authed) return respond(new Response("unauthorized", { status: 401 }));
+      const url = new URL(request.url);
+      const queries = (url.searchParams.get("q") ?? "sejarah inflasi|penyebab inflasi 1929|jelaskan policies sistem").split("|").slice(0, 4);
+      const report = await keylessSearchReport(env, queries);
+      return respond(Response.json({
+        queries: report.length,
+        layers: report[0]?.layers.map((l) => l.layer) ?? [],
+        report,
+      }));
+    }
+
     if (path === "/wasm_diag") {
       if (!authed) return respond(new Response("unauthorized", { status: 401 }));
       const t0 = Date.now();
