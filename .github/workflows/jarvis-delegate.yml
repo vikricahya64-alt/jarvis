@@ -81,13 +81,31 @@ jobs:
       - name: Run opencode agent
         id: exec
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ secrets.GROQ_MODEL || 'openai/gpt-oss-120b' }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free' }}
+          WORKER: ${{ vars.WORKER_URL || 'https://jarvis-sovereign.vikricahya64.workers.dev' }}
+          AGENT_TOKEN: ${{ secrets.AGENT_TOKEN }}
         run: |
           set +e
-          if [ -n "$GROQ_API_KEY" ]; then
+          # Fetch the LLM key from the Worker instead of a second copy in repo
+          # secrets. The previous arrangement had two sources of truth for the
+          # same credential: the Worker's (which works - groq answers 200 in
+          # /status) and the repo secret's (which does not - every run ended with
+          # "Error: Invalid API Key"). Same drift class as AGENT_TOKEN, same fix:
+          # one authority, fetched rather than duplicated.
+          #
+          # /agent/env is allow-listed to these keys precisely so this can be
+          # done; the endpoint existed and was never called.
+          GROQ_API_KEY="$(curl -fsS --max-time 20 \
+            -H "x-agent-token: $AGENT_TOKEN" "$WORKER/agent/env?key=GROQ_API_KEY" \
+            | jq -r '.value // empty')"
+          OPENROUTER_API_KEY="$(curl -fsS --max-time 20 \
+            -H "x-agent-token: $AGENT_TOKEN" "$WORKER/agent/env?key=OPENROUTER_API_KEY" \
+            | jq -r '.value // empty')"
+          if [ -z "$GROQ_API_KEY" ] && [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "ERR: worker tidak punya GROQ_API_KEY maupun OPENROUTER_API_KEY." > /tmp/jarvis-out.txt
+            code=1
+          elif [ -n "$GROQ_API_KEY" ]; then
             PROVIDER=groq; MODEL="$GROQ_MODEL"
           elif [ -n "$OPENROUTER_API_KEY" ]; then
             PROVIDER=openrouter; MODEL="$OPENROUTER_MODEL"
