@@ -126,3 +126,14 @@ MCP_SERVER_TIMEOUT_MS = "20000"
 #------------------------------------------------------------------------------
 [triggers]
 crons = ["0 */6 * * *", "0 3 * * *", "0 8 * * *", "0 7 * * *", "* * * * *"]
+
+# The running Worker version, exposed by the platform.
+#
+# deploy_versions was READ by deploy_safety (getActiveVersion, getVersionHealth,
+# checkAutoRevert) and written by nothing, anywhere in the repo. Zero rows in
+# production, so the auto-revert path could never evaluate a deploy - it
+# returned the neutral default and stayed silent, which reads exactly like
+# "healthy". This binding is the missing writer's only honest input: the version
+# cannot be invented, it has to come from the runtime.
+[version_metadata]
+binding = "CF_VERSION"

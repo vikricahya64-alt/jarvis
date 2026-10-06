@@ -27,7 +27,7 @@ import { tickAutonomy } from "./lib/maestro";
 import { syncAllSessions } from "./lib/context_manager";
 import { runErrorHealLoop, recordError } from "./lib/error_monitor";
 import { runConfigOptimization } from "./lib/config_optimizer";
-import { runDeploySafetyLoop } from "./lib/deploy_safety";
+import { runDeploySafetyLoop, recordRunningVersion } from "./lib/deploy_safety";
 import { runRecoveryLoop } from "./lib/recovery_loop";
 import { handleMcpRequest } from "./lib/mcp/server";
 import { probeProviders } from "./lib/providers";
@@ -832,6 +832,11 @@ version: "m9-v11.52",
         // M8-v25: self-heal the Telegram webhook config (explicitly include
         // callback_query in allowed_updates) and drain any straggling cron work.
         await ensureWebhook(env);
+        // Deploy safety needs to know which build is live. Nothing wrote
+        // deploy_versions anywhere, so the table stayed empty and auto-revert
+        // silently degraded to "no data, assume healthy". Idempotent per
+        // version, so the per-minute tick costs one indexed SELECT.
+        await recordRunningVersion(env).catch((e) => console.warn("[deploy_safety]", (e as Error).message));
         // Self-heal the command menu too. It used to be registered only as a
         // side effect of /setwebhook and /setup, so any bot whose menu was
         // cleared - by a failed setup, a rename, or an empty setMyCommands -

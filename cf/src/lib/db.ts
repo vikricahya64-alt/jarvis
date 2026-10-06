@@ -20,6 +20,9 @@ export interface Env {
    *  Absent means the module is allowed to run; see src/lib/go_wasm.ts for why
    *  the TS path always remains authoritative. */
   GO_WASM?: string;
+  /** Cloudflare version metadata binding: the version actually serving, plus its
+   *  tag. Populated by [[version_metadata]] in wrangler.toml. */
+  CF_VERSION?: { id: string; tag?: string; metadata?: Record<string, string> };
   /** Provider that composes replies (answer role). Defaults to groq.
    *  Deliberately separate from VERIFIER_PROVIDER: a model grading its own
    *  draft approves its own mistakes, which would make the gate decorative. */

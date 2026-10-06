@@ -75,6 +75,63 @@ const AUTO_REVERT_THRESHOLDS = {
   revertCooldownMs: 60 * 60 * 1000, // 1 jam
 };
 
+/**
+ * Record the version currently serving, so deploy safety has something to read.
+ *
+ * deploy_versions was queried by getActiveVersion() but written by nothing in
+ * the repo, so the table was empty in production and getVersionHealth() fell
+ * through to its neutral default. The consequence is quiet and bad: an auto-
+ * revert that never sees a deploy can never evaluate one, and "no data" is
+ * indistinguishable from "healthy" in every status it feeds.
+ *
+ * The version is not invented here - it is read from Cloudflare's version
+ * metadata binding, which reports the build actually serving traffic. Writes
+ * are idempotent per version: the row is INSERTed once and afterwards only
+ * touched while it is still the active one, so a per-minute cron costs one
+ * indexed SELECT rather than a write storm.
+ */
+export async function recordRunningVersion(env: Env): Promise<{ recorded: boolean; version: string | null }> {
+  const version = env.CF_VERSION?.id ?? null;
+  if (!version) {
+    // No binding: do not fabricate. An invented version string would make
+    // auto-revert reason about a build that never existed.
+    return { recorded: false, version: null };
+  }
+  try {
+    const now = Date.now();
+    const existing = await env.DB.prepare(
+      "SELECT version, status FROM deploy_versions WHERE version = ?",
+    ).bind(version).first<{ version: string; status: string }>();
+
+    if (!existing) {
+      // A new build went live. Previous active rows are superseded so exactly
+      // one row is ever 'active' - that is what getActiveVersion() assumes.
+      await env.DB.prepare(
+        "UPDATE deploy_versions SET status = 'superseded' WHERE status = 'active'",
+      ).run().catch(() => {});
+      await env.DB.prepare(
+        `INSERT INTO deploy_versions (version, deployed_at, deployed_by, error_rate, status, notes)
+         VALUES (?, ?, ?, 0, 'active', ?)
+         ON CONFLICT(version) DO UPDATE SET status='active'`,
+      ).bind(version, now, env.CF_VERSION?.tag || "cf-deploy", "recorded from version_metadata binding").run();
+      console.log(`[deploy_safety] recorded new version ${version}`);
+      return { recorded: true, version };
+    }
+
+    if (existing.status !== "active") {
+      // Rolled back onto this build: make it active again.
+      await env.DB.prepare(
+        "UPDATE deploy_versions SET status = 'active' WHERE version = ?",
+      ).bind(version).run().catch(() => {});
+      return { recorded: true, version };
+    }
+    return { recorded: false, version };
+  } catch (e) {
+    console.warn(`[deploy_safety] recordRunningVersion failed: ${(e as Error).message}`);
+    return { recorded: false, version };
+  }
+}
+
 // ---------------------------------------------------------------------
 // Version Tracking
 // ---------------------------------------------------------------------
