@@ -96,11 +96,15 @@ jobs:
           #
           # /agent/env is allow-listed to these keys precisely so this can be
           # done; the endpoint existed and was never called.
+          # Query param, not the x-agent-token header. /agent/env does its own
+          # check the same way /agent/done does - it reads ?token= and compares
+          # against AGENT_TOKEN, and never consults privilegedAuth. Verified:
+          # header -> 401, ?token= -> authenticated.
           GROQ_API_KEY="$(curl -fsS --max-time 20 \
-            -H "x-agent-token: $AGENT_TOKEN" "$WORKER/agent/env?key=GROQ_API_KEY" \
+            "$WORKER/agent/env?key=GROQ_API_KEY&token=$AGENT_TOKEN" \
             | jq -r '.value // empty')"
           OPENROUTER_API_KEY="$(curl -fsS --max-time 20 \
-            -H "x-agent-token: $AGENT_TOKEN" "$WORKER/agent/env?key=OPENROUTER_API_KEY" \
+            "$WORKER/agent/env?key=OPENROUTER_API_KEY&token=$AGENT_TOKEN" \
             | jq -r '.value // empty')"
           if [ -z "$GROQ_API_KEY" ] && [ -z "$OPENROUTER_API_KEY" ]; then
             echo "ERR: worker tidak punya GROQ_API_KEY maupun OPENROUTER_API_KEY." > /tmp/jarvis-out.txt
