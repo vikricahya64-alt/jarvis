@@ -72,9 +72,22 @@ export async function updateQuotaSnapshot(env: Env, owner: number): Promise<{ di
     }
   }
 
+  // Upsert, not plain INSERT. owner_id is the PRIMARY KEY, so the first call
+  // created the row and every call after it threw
+  // "UNIQUE constraint failed: degradation_state.owner_id" - which silently
+  // froze the snapshot. Production showed remaining_pct stuck at 99.688 and
+  // disabled_features stuck at "[]" since 2026-09-03, i.e. the degradation
+  // feature could never actually suspend anything, while /status still
+  // reported it as healthy. The bootstrap path above already uses
+  // ON CONFLICT(owner_id) DO NOTHING; this is the write side of the same row.
   await env.DB.prepare(
     `INSERT INTO degradation_state (owner_id, quota_snapshot, remaining_pct, disabled_features, updated_at)
-     VALUES (?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(owner_id) DO UPDATE SET
+       quota_snapshot=excluded.quota_snapshot,
+       remaining_pct=excluded.remaining_pct,
+       disabled_features=excluded.disabled_features,
+       updated_at=excluded.updated_at`,
   ).bind(
     owner, usagePct, remainingPct, JSON.stringify(disabled), now,
   ).run();

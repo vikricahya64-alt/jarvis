@@ -15,6 +15,11 @@ export interface MemVecIndex {
 }
 
 export interface Env {
+  /** Optional Go/wasm accelerator switch. Set to "off" to force the
+   *  TypeScript implementations in src/lib/moderation.ts and src/lib/verifier.ts.
+   *  Absent means the module is allowed to run; see src/lib/go_wasm.ts for why
+   *  the TS path always remains authoritative. */
+  GO_WASM?: string;
   DB: D1Database;
   CONFIG_KV: KVNamespace;
   AI: Ai;

@@ -33,6 +33,9 @@ import { runRecoveryLoop } from "./lib/recovery_loop";
 import { handleMcpRequest } from "./lib/mcp/server";
 import { probeProviders } from "./lib/providers";
 import { probeBorrowedPlatforms } from "./lib/borrowed";
+import { goWasmActive, goNormalizeOrTs, goNormalizeLinkOrTs } from "./lib/go_wasm";
+import { normalize } from "./lib/moderation";
+import { normalizeLinkForCompare } from "./lib/verifier";
 
 const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
 const WORKER_URL = "https://jarvis-sovereign.vikricahya64.workers.dev";
@@ -384,6 +387,58 @@ version: "m9-v11.52",
     }
 
     // /ai_diag — AI/search diagnostic.
+    // /wasm_diag - reports whether the optional Go/wasm module booted in this
+    // isolate, and cross-checks it against the TypeScript implementations on
+    // real traffic-shaped input. Read-only, owner-gated, no side effects.
+    //
+    // It exists because "is Go actually faster here?" has never been answered:
+    // performance.now() does not resolve sub-millisecond values in workerd, so
+    // the usual timing loops all read 0ms for both sides. Parity, by contrast,
+    // IS checkable in production - and parity is the property that makes the
+    // module safe to switch on at all.
+    if (path === "/wasm_diag") {
+      if (!authed) return respond(new Response("unauthorized", { status: 401 }));
+      const t0 = Date.now();
+      const active = await goWasmActive(env);
+      const bootMs = Date.now() - t0;
+      const cases = [
+        "göyáng HALO", "  mixed   CASE  ", "ÀÉÎÕÜ ñ", "https://WWW.Example.com/p?q=1#f",
+        "", "user_id=42 token=abc", "HTTPS://example.com///", "日本語 Ünïcödé",
+      ];
+      const mismatches: string[] = [];
+      const timings = { goMs: 0, tsMs: 0 };
+      for (const c of cases) {
+        const a = Date.now();
+        const goN = await goNormalizeOrTs(env, c, () => normalize(c));
+        timings.goMs += Date.now() - a;
+        const b = Date.now();
+        const tsN = normalize(c);
+        timings.tsMs += Date.now() - b;
+        if (goN !== tsN) mismatches.push(`normalize(${JSON.stringify(c)}): go=${JSON.stringify(goN)} ts=${JSON.stringify(tsN)}`);
+
+        const a2 = Date.now();
+        const goL = await goNormalizeLinkOrTs(env, c, () => normalizeLinkForCompare(c));
+        timings.goMs += Date.now() - a2;
+        const b2 = Date.now();
+        const tsL = normalizeLinkForCompare(c);
+        timings.tsMs += Date.now() - b2;
+        if (goL !== tsL) mismatches.push(`normalizeLink(${JSON.stringify(c)}): go=${JSON.stringify(goL)} ts=${JSON.stringify(tsL)}`);
+      }
+      // Do not report parity as OK when the Go path never ran: comparing the TS
+      // implementation against itself is a vacuous pass and reads like a
+      // working check. Say so instead.
+      const parity = !active
+        ? "NOT VERIFIED (go module inactive; TS compared against itself)"
+        : mismatches.length === 0 ? "OK" : "MISMATCH";
+      return respond(Response.json({
+        active, bootMs, enabled: env.GO_WASM !== "off",
+        parity, mismatches,
+        cases: cases.length * 2,
+        note: "timings are NOT a valid benchmark: performance.now() does not resolve sub-millisecond in workerd, so both sides round to 0",
+        timings,
+      }));
+    }
+
     if (path === "/ai_diag") {
       if (!authed) return respond(new Response("unauthorized", { status: 401 }));
       const key = env.GROQ_API_KEY ?? "";

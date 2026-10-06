@@ -1,0 +1,239 @@
+{
+  "note": "Generated from cf/src/lib by scripts/gen_go_fixtures.ts. Do not hand-edit.",
+  "normalize": [
+    {
+      "in": "",
+      "out": ""
+    },
+    {
+      "in": " ",
+      "out": " "
+    },
+    {
+      "in": "HALO DUNIA",
+      "out": "halo dunia"
+    },
+    {
+      "in": "  Halo   DUNIA   transient  ",
+      "out": "  halo   dunia   transient  "
+    },
+    {
+      "in": "göyáng",
+      "out": "goyang"
+    },
+    {
+      "in": "GÖYÁNG",
+      "out": "goyang"
+    },
+    {
+      "in": "ÀÉÎÕÜ",
+      "out": "aeiou"
+    },
+    {
+      "in": "ñ",
+      "out": "n"
+    },
+    {
+      "in": "ǹ",
+      "out": "n"
+    },
+    {
+      "in": "Кот",
+      "out": "кот"
+    },
+    {
+      "in": "Привет мир",
+      "out": "привет мир"
+    },
+    {
+      "in": "日本語 テキスト",
+      "out": "日本語 テキスト"
+    },
+    {
+      "in": "한국어 텍스트",
+      "out": "한국어 텍스트"
+    },
+    {
+      "in": "مرحبا بالعالم",
+      "out": "مرحبا بالعالم"
+    },
+    {
+      "in": "עברית",
+      "out": "עברית"
+    },
+    {
+      "in": "ĄĆĘŁŃÓŚŹŻ",
+      "out": "acełnoszz"
+    },
+    {
+      "in": "ĹŔĀĂĄ",
+      "out": "lraaa"
+    },
+    {
+      "in": "é vs é",
+      "out": "e vs e"
+    },
+    {
+      "in": "Ångström",
+      "out": "angstrom"
+    },
+    {
+      "in": "ß vs ss",
+      "out": "ß vs ss"
+    },
+    {
+      "in": "İstanbul",
+      "out": "istanbul"
+    },
+    {
+      "in": "mixed CASE with   irregular\t\tspacing\nand\nnewlines",
+      "out": "mixed case with   irregular\t\tspacing\nand\nnewlines"
+    },
+    {
+      "in": "user_id=1234 token=abc",
+      "out": "user_id=1234 token=abc"
+    },
+    {
+      "in": "https://example.com/x",
+      "out": "https://example.com/x"
+    },
+    {
+      "in": "‌‍ zero width",
+      "out": "‌‍ zero width"
+    },
+    {
+      "in": "🎉🎊 emoji test 🔥",
+      "out": "🎉🎊 emoji test 🔥"
+    },
+    {
+      "in": "à́̂̃ stacked marks",
+      "out": "a stacked marks"
+    },
+    {
+      "in": "ｱｲｳ fullwidth",
+      "out": "ｱｲｳ fullwidth"
+    },
+    {
+      "in": "Ⅻ roman numeral",
+      "out": "ⅻ roman numeral"
+    },
+    {
+      "in": "combining after NFD only: ẛ̣",
+      "out": "combining after nfd only: ſ"
+    },
+    {
+      "in": "turkisye ğ Ğ ı İ",
+      "out": "turkisye g g ı i"
+    },
+    {
+      "in": "ǰ",
+      "out": "j"
+    },
+    {
+      "in": "Ω ohm Ω",
+      "out": "ω ohm ω"
+    },
+    {
+      "in": "combining class edge ͯͰ",
+      "out": "combining class edge ͱ"
+    },
+    {
+      "in": "àbͯc",
+      "out": "abc"
+    }
+  ],
+  "normalizeLink": [
+    {
+      "in": "",
+      "out": ""
+    },
+    {
+      "in": "   ",
+      "out": ""
+    },
+    {
+      "in": "https://example.com",
+      "out": "example.com"
+    },
+    {
+      "in": "http://example.com",
+      "out": "example.com"
+    },
+    {
+      "in": "HTTPS://EXAMPLE.COM/Path",
+      "out": "example.com/path"
+    },
+    {
+      "in": "www.example.com/x",
+      "out": "example.com/x"
+    },
+    {
+      "in": "https://www.example.com/x/",
+      "out": "example.com/x"
+    },
+    {
+      "in": "https://www.example.com///",
+      "out": "example.com"
+    },
+    {
+      "in": "https://example.com/p?q=1&r=2",
+      "out": "example.com/p"
+    },
+    {
+      "in": "https://example.com/p#frag",
+      "out": "example.com/p"
+    },
+    {
+      "in": "https://example.com/p#frag?q=1",
+      "out": "example.com/p"
+    },
+    {
+      "in": "ftp://example.com/x",
+      "out": "ftp://example.com/x"
+    },
+    {
+      "in": "  https://example.com/spaced  ",
+      "out": "example.com/spaced"
+    },
+    {
+      "in": "WWW.EXAMPLE.COM",
+      "out": "example.com"
+    },
+    {
+      "in": "https://user:pw@example.com/auth",
+      "out": "user:pw@example.com/auth"
+    },
+    {
+      "in": "https://example.com:8080/p",
+      "out": "example.com:8080/p"
+    },
+    {
+      "in": "https://example.com/Ünïcödé",
+      "out": "example.com/ünïcödé"
+    },
+    {
+      "in": "https://例え.jp/パス",
+      "out": "例え.jp/パス"
+    },
+    {
+      "in": "//example.com/proto-relative",
+      "out": "//example.com/proto-relative"
+    },
+    {
+      "in": "example.com/no-scheme",
+      "out": "example.com/no-scheme"
+    },
+    {
+      "in": "https://",
+      "out": ""
+    },
+    {
+      "in": "https://.",
+      "out": "."
+    },
+    {
+      "in": "a?b#c",
+      "out": "a"
+    }
+  ]
+}

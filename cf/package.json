@@ -12,7 +12,10 @@
     "test:logic": "npx tsx test/logic.test.ts",
     "test:mcp": "npx tsx test/mcp.test.ts",
     "db:migrate": "wrangler d1 migrations apply jarvis",
-    "db:local": "wrangler d1 migrations apply jarvis --local"
+    "db:local": "wrangler d1 migrations apply jarvis --local",
+    "test:go": "bash scripts/build_go_wasm.sh && cd gomod && go test ./...",
+    "test:go:fixtures": "tsx scripts/gen_go_fixtures.ts",
+    "build:go": "bash scripts/build_go_wasm.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.1.0",

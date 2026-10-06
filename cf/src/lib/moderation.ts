@@ -115,7 +115,10 @@ const NONCONSENSUAL_TERMS: readonly string[] = [
  * literally. Accent-insensitive so "pornografi" and "pornografi" in any
  * casing collapse to one another.
  */
-function normalize(s: string): string {
+// Exported so cf/gomod/testdata/fixtures.json can be generated from this exact
+// implementation (see cf/scripts/gen_go_fixtures.ts). The Go port is held to
+// byte-identical parity against it by cf/gomod/jarvis_test.go.
+export function normalize(s: string): string {
   return (s || "")
     .toLowerCase()
     .normalize("NFD")

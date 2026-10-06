@@ -4,3 +4,6 @@ node_modules/
 .vscode/
 wrangler local_state/
 .cf-account
+cf/gomod/jarvis.wasm
+gomod/jarvis.wasm
+cf/scripts_gen_fixtures.ts
