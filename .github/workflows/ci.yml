@@ -34,6 +34,8 @@ jobs:
 
       - name: Moderation tests
         run: npm run test:moderation
+      - name: Telegram menu
+        run: npm run test:menu
 
       - name: Logic tests
         run: npm run test:logic

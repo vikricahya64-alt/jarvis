@@ -72,6 +72,10 @@ jobs:
 
       - name: Run safety tests
         run: npm run test:safety
+      - name: Moderation gates
+        run: npm run test:moderation
+      - name: Telegram menu registration
+        run: npm run test:menu
 
       # Migrations run BEFORE the worker deploy.
       #
