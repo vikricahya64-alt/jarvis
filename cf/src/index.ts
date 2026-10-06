@@ -85,15 +85,44 @@ async function getCurrentEpochId(env: Env): Promise<string | null> {
 
 /** Register the slash-command menu once a day (KV-guarded, resets often so a
  *  bot upgrade re-publishes the menu). Fail-closed: never throws. */
+/**
+ * Register the Telegram command menu, at most once per TTL window.
+ *
+ * The KV flag is a rate limiter, not a record of truth. It used to be checked
+ * only as a bare "1", which meant a flag left behind by a PREVIOUS bot kept
+ * the menu from ever being set on the next one: the new bot shipped with an
+ * empty menu because this function short-circuited on a stale marker.
+ *
+ * So the flag now records which bot it was set for. A different bot id, or a
+ * flag that is merely "1" with no id, is treated as not-set and the menu is
+ * registered. The flag is also bot-scoped so two bots on the same worker cannot
+ * suppress each other, and the per-minute cron now calls this so the menu
+ * self-heals instead of depending on somebody hitting /setwebhook.
+ */
 async function ensureTelegramCommands(env: Env): Promise<void> {
   try {
-    const last = await env.CONFIG_KV.get("tg_commands_set");
-    if (last === "1") return;
+    // Digest, never the token itself: the flag is readable by anything holding
+    // CONFIG_KV, and the bot token is a full-account credential.
+    const who = env.TELEGRAM_TOKEN
+      ? Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(env.TELEGRAM_TOKEN))))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("")
+          .slice(0, 16)
+      : "no-token";
+    const flag = await env.CONFIG_KV.get("tg_commands_set");
+    if (flag === `bot:${who}`) return;
     const ok = await setMyCommands(env);
     if (ok) {
-      await env.CONFIG_KV.put("tg_commands_set", "1", { expirationTtl: 82800 }).catch(() => {});
+      await env.CONFIG_KV.put("tg_commands_set", `bot:${who}`, {
+        expirationTtl: 82800,
+      }).catch(() => {});
+      console.log("[telegram] command menu registered");
+    } else {
+      console.warn("[telegram] setMyCommands failed; will retry on the next tick");
     }
-  } catch { /* availability over verbosity */ }
+  } catch (e) {
+    console.warn("[telegram] ensureTelegramCommands failed:", (e as Error).message);
+  }
 }
 
 /** Environment-adaptive privileged-endpoint gate. */
@@ -678,6 +707,11 @@ version: "m9-v11.52",
         // M8-v25: self-heal the Telegram webhook config (explicitly include
         // callback_query in allowed_updates) and drain any straggling cron work.
         await ensureWebhook(env);
+        // Self-heal the command menu too. It used to be registered only as a
+        // side effect of /setwebhook and /setup, so any bot whose menu was
+        // cleared - by a failed setup, a rename, or an empty setMyCommands -
+        // stayed empty until an operator noticed and called one of those routes.
+        await ensureTelegramCommands(env);
         // v11.37: E2B delegated-async executor — complete finished sandbox
         // runs (probe marker + output), kill the sandbox, DM the report.
         const e2bDone = await pollE2bAgentRuns(env);
