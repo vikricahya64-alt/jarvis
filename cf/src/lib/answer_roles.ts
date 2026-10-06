@@ -175,11 +175,18 @@ LINE 1: PASS or FAIL
   numbering, or a bare URL list. Cite nothing inline.
 
 LINE 2: PLAIN, RESEARCH or COMMAND
+  CLASSIFY THE QUESTION, NOT THE DRAFT. The kind is a property of what the user
+  asked, and the draft is not evidence of it. A draft that confidently states a
+  live figure from memory ("bitcoin is around X") does NOT make the question
+  PLAIN - asking for today's price is RESEARCH even when the draft looks like
+  settled fact. Judge only the question on LINE 1.
+
   PLAIN    - the user is asking something answerable from general knowledge;
              the draft IS the reply to send.
-  RESEARCH - the answer needs retrieved sources the draft does not have: live
-             values, recent events, specific figures, anything where being wrong
-             matters.
+  RESEARCH - the QUESTION needs retrieved sources: live values, today's prices,
+             recent events, specific current figures, anything where being wrong
+             matters. A question about the MEANING of a word is never RESEARCH,
+             however much the draft quotes sources.
   COMMAND  - the user is asking JARVIS to DO something (create, delete, run,
              schedule, fetch and store). Being ABOUT a risky topic is PLAIN, not
              COMMAND: "which is better, forex trading or a money changer" is a
