@@ -40,6 +40,7 @@ import { goWasmActive, goNormalizeOrTs, goNormalizeLinkOrTs } from "./lib/go_was
 import { normalize } from "./lib/moderation";
 import { normalizeLinkForCompare } from "./lib/verifier";
 import { refreshQuotaSnapshot as monitorRefresh } from "./lib/monitor";
+import { routeInput } from "./lib/router";
 
 const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
 const WORKER_URL = "https://jarvis-sovereign.vikricahya64.workers.dev";
@@ -412,6 +413,21 @@ version: "m9-v11.52",
     // dulu" and the only visible signal was the constitutional guard blocking it
     // downstream. That hid the real fault: the pipeline returned null before
     // ever calling a provider, and there was no way to see which stage gave up.
+    // /route_diag - the router's verdict for a given input, with no side effects.
+    //
+    // Added before wiring the router into the live chat path, because every
+    // routing defect in this project's history was invisible until a user hit
+    // it. This makes the decision inspectable first: which route, what command
+    // it proposed, how long it took, and whether it came from the model or from
+    // a degradation.
+    if (path === "/route_diag") {
+      if (!authed) return respond(new Response("unauthorized", { status: 401 }));
+      const url = new URL(request.url);
+      const text = url.searchParams.get("text") ?? "apa itu inflasi";
+      const r = await routeInput(env, text);
+      return respond(Response.json({ text, ...r }));
+    }
+
     if (path === "/pipeline_diag") {
       if (!authed) return respond(new Response("unauthorized", { status: 401 }));
       const url = new URL(request.url);

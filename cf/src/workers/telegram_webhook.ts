@@ -78,6 +78,7 @@ import { resolveIntent, isHardCommand, looksLikeCommand, type ResolvedIntent } f
 import { tierFor, quotaCheck, ownerOnlyDenial, isOwner, gateCommand } from "../lib/access";
 import { moderateIncoming, recordModerationBlock, REFUSAL_ID } from "../lib/moderation";
 import { answerGrounded } from "../lib/grounded_answer";
+import { routeInput } from "../lib/router";
 import { recordTurn } from "../lib/telegram_context";
 import {
   getGreeting, STATUS, HELP,
@@ -1524,6 +1525,39 @@ function replyTextOf(msg?: { reply_to_message?: { text?: string; caption?: strin
  */
 async function runBrain(env: Env, owner: number, text: string, replyToText?: string): Promise<boolean> {
   try {
+    // One model call decides which existing path handles this. Routing was
+    // previously lexical, and every production drift traced back to it - a
+    // question about the history of inflation was read as a financial ACTION
+    // because the subject looked risky, and deferred four times. Verified live
+    // through /route_diag before this was wired in.
+    const routing = await routeInput(env, text);
+    console.log(`[route] ${routing.route} (${routing.source}, ${routing.latencyMs}ms) chat=${owner} :: ${routing.reason}`);
+
+    if (routing.route === "execute" && routing.command) {
+      // The router can only PROPOSE a command. It re-enters act(), so
+      // resolveIntent re-verifies it and the consent and constitutional gates
+      // apply exactly as they would to a typed command.
+      console.log(`[route] execute -> ${routing.command}`);
+      await act(env, owner, routing.command);
+      return true;
+    }
+
+    if (routing.route === "research") {
+      // Research goes through the EXISTING spine, not a new path beside it.
+      // A parallel research shortcut in the webhook is exactly what the safety
+      // suite forbids: the old runResearch bypassed the relevance gate and is
+      // recorded as the root cause of "riset itu" being executed unconfirmed.
+      // processIntelligence already owns its search branches, so the router
+      // chooses to go there rather than reimplementing it.
+      const spine = await processIntelligence(env, owner, text, replyToText)
+        .catch(() => null);
+      if (spine?.text && spine.text.trim().length > 0) {
+        await deliverSmartReply(env, owner, spine.text, 1200, spine.perception?.topic ?? undefined);
+        return true;
+      }
+      console.log("[route] research spine produced nothing; answering instead");
+    }
+
     const result = await answerGrounded(env, owner, text, replyToText);
 
     if (!result) {
