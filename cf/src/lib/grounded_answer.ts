@@ -29,8 +29,19 @@ import type { Env } from "./db";
 const ANSWERER_SYSTEM = `Kamu menjawab pertanyaan pengguna. Sumber mungkin tersedia; lihat aturan 1.
 
 Aturan yang tidak boleh dilanggar:
-1. Bila cuplikan hasil pencarian diberikan: jawab HANYA dari cuplikan itu, dan bila cuplikan tidak memuat jawabannya katakan terus terang tidak ditemukan.
-   Bila TIDAK ada cuplikan (tertulis "tidak ada hasil pencarian"): jawab dari pengetahuanmu seperti biasa, tapi JANGAN mengarang sitasi, tautan, angka, atau tahun.
+1. Cuplikan hasil pencarian adalah OPSIONAL, bukan gerbang. Failing 5 dari 8 percobaan pada
+   pertanyaan "apa yang dimaksud dengan otoritas" karena aturan ini: retrieval kadang
+   mengembalikan cuplikan yang tidak memuat jawabannya, lalu kamu menjawab "tidak ditemukan
+   dalam sumber" - padahal itu pertanyaan pengetahuan umum yang bisa kamu jawab sendiri.
+   Maka:
+   - Pertanyaan PENGETAHUAN UMUM (apa itu X, bagaimana cara kerja X, apa bedanya X dan Y,
+     mengapa X terjadi): jawab dari pengetahuanmu. Cuplikan boleh sebagai tambahan, tapi
+     JANGAN menggantinya dengan "tidak ditemukan dalam sumber".
+   - Pertanyaan DATA BERUBAH atau SPESIFIK (harga berapa hari ini, nilaiYD sekarang, siapa
+     menang tadi, apa berita terbaru, angka dan tanggal): jawab HANYA dari cuplikan. Bila
+     tidak memuatnya, katakan terus terang tidak ditemukan - jangan mengarang.
+   Jangan pernah menjawab "tidak ditemukan" untuk hal yang bisa kamu jelaskan sendiri, dan
+   jangan pernah mengarang angka yang seharusnya datang dari sumber.
 2. Jawab dalam bahasa pengguna (Indonesia atau Inggris).
 3. Tulis seperti orang ngobrol, bukan seperti laporan. Bahasa sehari-hari, kalimat pendek, kata yang dipakai orang tiap hari. Hindari bahasa academic: "merujuk pada", "memiliki fungsi penting dalam", "berdasarkan hasil penelitian", "pada dasarnya", "dapat disimpulkan bahwa", "merupakan suatu bentuk dari". Kalau suatu istilah memang harus dipakai, jelaskan sekali dengan bahasa biasa.
 4. JANGAN menulis sitasi di dalam teks. Tidak ada 【1†url】, tidak ada kurung siku berisi sumber, tidak ada daftar URL, tidak ada nomor catatan kaki. Pengguna chat di Telegram, bukan baca jurnal - penanda sitasi hanya jadi noise.
@@ -82,8 +93,24 @@ export async function answerGrounded(
   // Best effort, and never the reason a reply does not happen.
   const retrieval = await retrieveKeyless(q).catch(() => ({ hits: [], used: [] as string[] }));
   const passages = retrieval.hits.length ? renderPassages(retrieval.hits) : "";
+  // Retrieval is CONTEXT, not a cage.
+  //
+  // This used to read "sumber satu-satunya yang boleh dipakai" whenever any hit
+  // came back. Retrieval here is flaky by measurement - SearXNG 0/3, DDG
+  // challenged, Bing parser unreliable - and when it returned hits that were
+  // present but irrelevant, the answerer was forbidden from using its own
+  // knowledge and duly replied "tidak ditemukan dalam sumber". Measured on
+  // "apa yang dimaksud dengan otoritas": 5 of 8 runs produced exactly that,
+  // always 29 characters, for a question any assistant answers from memory.
+  //
+  // So passages are offered, never imposed. General knowledge stays available;
+  // what is still forbidden is inventing citations, figures or years, and
+  // pretending not to know something that is not time-sensitive.
   const evidence = passages
-    ? `Hasil pencarian (sumber satu-satunya yang boleh dipakai):\n${passages}\n\n`
+    ? `Konteks hasil pencarian (boleh dipakai, tapi TIDAK mengunci jawaban):\n${passages}\n\n` +
+      `Kalau cuplikan di atas tidak membahas pertanyaannya dan pertanyaannya umum  ` +
+      `yang tidak berubah setiap menit, JAWAB DARI PENGETAHUANMU. Jangan menulis ` +
+      `"tidak ditemukan dalam sumber" untuk hal yang memang kamu ketahui.\n\n`
     : `Tidak ada hasil pencarian yang bisa dipercaya untuk pertanyaan ini. Jawab dari pengetahuanmu, ` +
       `DAN JANGAN mengarang sitasi, tautan, angka, atau tahun. Kalau tidak yakin, katakan tidak yakin.\n\n`;
 
