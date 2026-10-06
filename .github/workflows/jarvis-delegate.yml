@@ -147,6 +147,20 @@ jobs:
             JSON="$(jq -nc --arg id "$TASK_ID" --arg e "$(head -c 3000 /tmp/jarvis-out.txt)" --arg u "$ARTIFACT" \
               '{task_id:($id|tonumber), status:"failed", result:"", error:$e, artifact_url:$u}')"
           fi
-          curl -fsS --max-time 30 -X POST "$WORKER/agent/done?token=$AGENT_TOKEN" \
+          # Auth MUST go in the x-agent-token header, not a query param.
+          #
+          # The worker's privilegedAuth() accepts exactly two forms:
+          #   x-agent-token: <AGENT_TOKEN>          <- this is /agent/*'s form
+          #   ?token=<TELEGRAM_SECRET>             <- a DIFFERENT secret
+          # This step sent AGENT_TOKEN as the query param, so the worker compared
+          # it against TELEGRAM_SECRET, mismatched, and returned 401.
+          #
+          # That is why the delegation looked dead: steps 1-9 all succeeded -
+          # the agent ran, the artifact was committed - and only "Report result
+          # back to JARVIS" failed. The Worker then timed the task out after 30
+          # minutes and recorded "no report within 30 menit", which read as an
+          # executor failure rather than an auth mismatch.
+          curl -fsS --max-time 30 -X POST "$WORKER/agent/done" \
+            -H "x-agent-token: $AGENT_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$JSON"
