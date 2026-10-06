@@ -78,7 +78,6 @@ import { resolveIntent, isHardCommand, looksLikeCommand, type ResolvedIntent } f
 import { tierFor, quotaCheck, ownerOnlyDenial, isOwner, gateCommand } from "../lib/access";
 import { moderateIncoming, recordModerationBlock, REFUSAL_ID } from "../lib/moderation";
 import { answerGrounded } from "../lib/grounded_answer";
-import { routeInput } from "../lib/router";
 import { recordTurn } from "../lib/telegram_context";
 import {
   getGreeting, STATUS, HELP,
@@ -1525,39 +1524,6 @@ function replyTextOf(msg?: { reply_to_message?: { text?: string; caption?: strin
  */
 async function runBrain(env: Env, owner: number, text: string, replyToText?: string): Promise<boolean> {
   try {
-    // One model call decides which existing path handles this. Routing was
-    // previously lexical, and every production drift traced back to it - a
-    // question about the history of inflation was read as a financial ACTION
-    // because the subject looked risky, and deferred four times. Verified live
-    // through /route_diag before this was wired in.
-    const routing = await routeInput(env, text);
-    console.log(`[route] ${routing.route} (${routing.source}, ${routing.latencyMs}ms) chat=${owner} :: ${routing.reason}`);
-
-    if (routing.route === "execute" && routing.command) {
-      // The router can only PROPOSE a command. It re-enters act(), so
-      // resolveIntent re-verifies it and the consent and constitutional gates
-      // apply exactly as they would to a typed command.
-      console.log(`[route] execute -> ${routing.command}`);
-      await act(env, owner, routing.command);
-      return true;
-    }
-
-    if (routing.route === "research") {
-      // Research goes through the EXISTING spine, not a new path beside it.
-      // A parallel research shortcut in the webhook is exactly what the safety
-      // suite forbids: the old runResearch bypassed the relevance gate and is
-      // recorded as the root cause of "riset itu" being executed unconfirmed.
-      // processIntelligence already owns its search branches, so the router
-      // chooses to go there rather than reimplementing it.
-      const spine = await processIntelligence(env, owner, text, replyToText)
-        .catch(() => null);
-      if (spine?.text && spine.text.trim().length > 0) {
-        await deliverSmartReply(env, owner, spine.text, 1200, spine.perception?.topic ?? undefined);
-        return true;
-      }
-      console.log("[route] research spine produced nothing; answering instead");
-    }
-
     const result = await answerGrounded(env, owner, text, replyToText);
 
     if (!result) {
@@ -1574,10 +1540,32 @@ async function runBrain(env: Env, owner: number, text: string, replyToText?: str
       return true;
     }
 
+    // The verifier is the ONLY routing decision in the system. It already runs
+    // on every reply to check relevance, so it also classifies the message: one
+    // model call, not two. A separate router pass was built first and then
+    // removed - it duplicated the decision, doubled the latency, and left two
+    // places for intent to be decided inconsistently.
     if (result.verified.kind === "command" && result.verified.command) {
       console.log(`[pipeline] command branch -> ${result.verified.command}`);
+      // Same entry a typed command uses, so consent, the constitutional guard
+      // and audit all apply. The verifier proposes; it never executes.
       await act(env, owner, result.verified.command);
       return true;
+    }
+
+    if (result.verified.kind === "research") {
+      // Research capability is kept. It is not answered from the draft, and it
+      // goes to the EXISTING spine rather than a new search call beside it: a
+      // parallel research path in the webhook is what the safety suite forbids,
+      // recorded as the root cause of "riset itu" being executed unconfirmed.
+      const spine = await processIntelligence(env, owner, text, replyToText)
+        .catch(() => null);
+      if (spine?.text && spine.text.trim().length > 0) {
+        console.log(`[pipeline] research branch via spine topic=${spine.perception?.topic ?? "-"}`);
+        await deliverSmartReply(env, owner, spine.text, 1200, spine.perception?.topic ?? undefined);
+        return true;
+      }
+      console.log("[pipeline] research spine produced nothing; sending the draft");
     }
 
     console.log(

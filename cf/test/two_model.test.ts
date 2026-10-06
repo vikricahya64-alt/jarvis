@@ -155,7 +155,7 @@ async function main() {
       seen,
     );
     assert.strictEqual(v.ok, true);
-    assert.strictEqual(v.kind, "question", "a risky TOPIC must not be read as a COMMAND");
+    assert.strictEqual(v.kind, "plain", "a risky TOPIC must not be read as a COMMAND");
     assert.strictEqual(v.command, "", "a question carries no command");
   }
 
@@ -182,10 +182,20 @@ async function main() {
     assert.strictEqual(v.command, "", "a non-slash command must be discarded");
   }
 
+  // RESEARCH is separated from PLAIN on purpose: collapsing them is what made
+  // every message pay for search, and search is the least reliable component.
+  {
+    const v = await verifyAnswerWithLines(
+      env, "harga bitcoin hari ini berapa", "Draft.", ["PASS", "RESEARCH", "NONE", "NONE"].join("\n"), [],
+    );
+    assert.strictEqual(v.kind, "research", "a live-value question must route to research");
+    assert.strictEqual(v.command, "", "research carries no command");
+  }
+
   // An unparseable decision must not be read as an instruction to execute.
   {
     const v = await verifyAnswerWithLines(env, "x", "y", "PASS", []);
-    assert.strictEqual(v.kind, "question", "an unreadable kind must not become a command");
+    assert.strictEqual(v.kind, "plain", "an unreadable kind must not become a command");
     assert.strictEqual(v.command, "");
   }
 

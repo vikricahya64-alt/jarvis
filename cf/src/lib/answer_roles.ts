@@ -34,6 +34,21 @@ import type { Env } from "./db";
 
 export type RoleName = "answer" | "verifier";
 
+/** The one routing decision, taken by the verifier in the same pass that
+ *  checks relevance.
+ *
+ *  plain    - the draft IS the output; send it
+ *  research - the question needs external sources; re-enter the existing spine
+ *              (processIntelligence), which owns its search branches
+ *  command  - the draft is not the output; re-enter act() with a canonical
+ *              command, so it is re-verified before anything runs
+ *
+ *  Naming these from one place is the point. An earlier iteration shipped a
+ *  separate router module alongside this file, which meant two sources could
+ *  disagree about the same message. One decision, one definition.
+ */
+export type AnswerKind = "plain" | "research" | "command";
+
 /** Which provider serves which role, overridable per deployment. */
 export type Responder = (
   env: Env,
@@ -77,7 +92,7 @@ export interface Verdict {
    * message was treated differently by three separate gates and ended up
    * deferred by one of them.
    */
-  kind: "question" | "command";
+  kind: AnswerKind;
   /** Canonical command when kind is "command". NEVER executed directly: it is
    *  re-entered through the verified intent gate (resolveIntent) like any
    *  user-typed command, so a model cannot invent a command that skips
@@ -118,12 +133,16 @@ LINE 1: PASS or FAIL
   missing on a topic it did answer, or claims you cannot verify - you are
   checking relevance, not truth.
 
-LINE 2: QUESTION or COMMAND
-  QUESTION - the user is asking something; the draft IS the reply to send.
+LINE 2: PLAIN, RESEARCH or COMMAND
+  PLAIN    - the user is asking something answerable from general knowledge;
+             the draft IS the reply to send.
+  RESEARCH - the answer needs retrieved sources the draft does not have: live
+             values, recent events, specific figures, anything where being wrong
+             matters.
   COMMAND  - the user is asking JARVIS to DO something (create, delete, run,
-             schedule, fetch and store). Being ABOUT a risky topic is not a
-             command: "which is better, forex trading or a money changer" is a
-             QUESTION even though trading is a risky subject.
+             schedule, fetch and store). Being ABOUT a risky topic is PLAIN, not
+             COMMAND: "which is better, forex trading or a money changer" is a
+             PLAIN question even though trading is risky.
 
 LINE 3: if COMMAND, the slash command to run (for example /tugas ...), otherwise NONE
 
@@ -160,7 +179,7 @@ export async function verifyAnswer(
       critique: "",
       verifier: `${name}:unavailable`,
       latencyMs: Date.now() - started,
-      kind: "question",
+      kind: "plain",
       command: "",
     };
   }
@@ -168,15 +187,14 @@ export async function verifyAnswer(
   const head = (lines[0] ?? "").toUpperCase();
   const pass = head.startsWith("PASS");
 
-  // Fail-closed on the decision too. An unparseable answer must not be read as
-  // "question", because that would silently ship a draft the verifier never
-  // cleared, nor as "command", which would execute something unvetted.
+  // Fail-closed on the decision too. An unparseable verdict must never read as
+  // "command" (would execute something unvetted) nor ship as cleared (was never
+  // checked), so it degrades to "plain" with the answer withheld by ok=false.
   const kindLine = (lines[1] ?? "").toUpperCase();
-  const kind: Verdict["kind"] = kindLine.startsWith("COMMAND")
-    ? "command"
-    : kindLine.startsWith("QUESTION")
-      ? "question"
-      : "question";
+  let kind: AnswerKind = "plain";
+  if (kindLine.startsWith("COMMAND")) kind = "command";
+  else if (kindLine.startsWith("RESEARCH")) kind = "research";
+  else if (kindLine.startsWith("PLAIN") || kindLine.startsWith("QUESTION")) kind = "plain";
 
   // A proposed command is only ever a SUGGESTION here. It is re-entered through
   // resolveIntent before anything runs, and it is discarded outright unless it
