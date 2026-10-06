@@ -251,8 +251,24 @@ export async function probeBorrowedPlatforms(env: Env): Promise<BorrowedProbe[]>
   }
 
   // Data & search (no-key, reachability = liveness).
-  const ddg = await reach("https://html.duckduckgo.com/html/?q=jarvis");
-  ok("search_ddg", ddg !== null, ddg !== null ? ddg : null, ddg === null ? "timeout/error" : `HTTP ${ddg}`);
+  // DuckDuckGo is reached through TWO distinct layers in the search cascade
+  // (ai.ts ddgSearchPackage): the Instant Answer API and the HTML scrape.
+  // Probing only html.duckduckgo.com marked the whole provider dead whenever
+  // that single scrape layer was blocked - which it is, from Cloudflare egress
+  // - while the Instant Answer API, SearXNG and Bing were all still serving
+  // results. That produced a red row for a working capability.
+  //
+  // Report per layer, and call the provider live if ANY of its own layers
+  // answer. SearXNG and Bing are probed separately below.
+  const ddgLayers = await Promise.all([
+    reach("https://api.duckduckgo.com/?q=jarvis&format=json&no_html=1"),
+    reach("https://html.duckduckgo.com/html/?q=jarvis"),
+  ]);
+  const ddgLive = ddgLayers.filter((x): x is number => x !== null);
+  ok("search_ddg", ddgLive.length > 0, ddgLive[0] ?? null,
+    ddgLive.length === 0
+      ? "semua layer timeout/error"
+      : `HTTP ${ddgLive.join(" + ")} (${ddgLive.length}/${ddgLayers.length} layer hidup)`);
   const bing = await reach("https://www.bing.com/search?q=jarvis&count=1");
   ok("search_bing", bing !== null, bing !== null ? bing : null, bing === null ? "timeout/error" : `HTTP ${bing}`);
   const searx = await reach("https://searx.be/");
