@@ -125,10 +125,16 @@ jobs:
           cp /tmp/jarvis-artifact.md "artifacts/task_${TASK_ID}.md"
           git add "artifacts/task_${TASK_ID}.md"
           git -c user.name="${{ github.actor }}" -c user.email="${{ github.actor }}@users.noreply.github.com" commit -q -m "artifact(task_$TASK_ID): opencode execution output" || true
-          # NOT masked: a silent '|| true' here means a failed push looks like a
-          # successful task. Push failures must be visible so a lost artifact
-          # cannot be reported as done.
-          git push -q
+          # Detached HEAD: actions/checkout@v4 checks out a commit SHA for a
+          # repository_dispatch event, not a branch. A bare `git push` therefore
+          # fails with "fatal: You are not currently on a branch" - and the
+          # artifact was never actually committed. That failure was invisible for
+          # weeks because the push carried `|| true`.
+          #
+          # Naming the destination explicitly makes the push work from a
+          # detached HEAD. It is deliberately NOT masked again: this exact line
+          # is how the masked failure above was found.
+          git push -q origin HEAD:main
           echo "artifact_url=https://github.com/${{ github.repository }}/blob/main/artifacts/task_${TASK_ID}.md" >> "$GITHUB_OUTPUT"
 
       - name: Report result back to JARVIS
