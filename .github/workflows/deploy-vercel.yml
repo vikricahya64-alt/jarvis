@@ -105,46 +105,79 @@ jobs:
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
         run: npx --yes vercel@latest deploy --prebuilt --prod --token="$VERCEL_TOKEN"
 
-      # Prove the deployment actually answers, and that the two endpoints which
-      # previously had no authentication at all are refused. Those are reachable
-      # without Vercel Authentication on the project's custom domain, so a
-      # green build is not sufficient evidence.
+      # Prove the deployment actually answers, and that the endpoints which
+      # previously had no authentication at all are refused.
+      #
+      # Two things this deliberately does NOT do:
+      #
+      #   * It does not check the per-deployment URL. Deployment Protection
+      #     (Vercel Authentication) is on for this project, so that URL answers
+      #     302 and a check against it would prove nothing. Vercel's own CLI
+      #     output says as much: "Deployment Protection is on ... use vercel curl".
+      #   * It does not parse the CLI output to find the URL. `vercel inspect`
+      #     exited non-zero, and under `set -euo pipefail` that aborted the step
+      #     before any assertion ran - a green build followed by a silent skip.
+      #
+      # It checks the production alias instead, which is the surface that
+      # actually matters: this project is configured
+      # ssoProtection=all_except_custom_domains, so its custom domain answers
+      # with no Vercel Authentication at all. That is where the unauthenticated
+      # endpoints were reachable, so that is where they must be probed.
       - name: Verify the deployment
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
         run: |
-          set -euo pipefail
-          URL="$(npx --yes vercel@latest inspect --token="$VERCEL_TOKEN" \
-                   --scope="$VERCEL_ORG_ID" 2>/dev/null \
-                 | sed -n 's/.*"url":"\([^"]*\)".*/\1/p' | head -1)"
-          if [ -z "$URL" ]; then
-            echo "::notice::could not resolve the deployment URL from inspect; skipping reachability check"
-            exit 0
+          set -uo pipefail
+          BASE="https://jarvis-sigma-navy-gamma.vercel.app"
+
+          # Resolve the production alias from the API; fall back to the known one.
+          alias="$(curl -sS --max-time 30 -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v6/deployments?projectId=$VERCEL_PROJECT_ID&limit=1&target=production" \
+            2>/dev/null | python3 -c 'import json,sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception:
+              sys.exit(0)
+          deps = d.get("deployments") or []
+          if not deps:
+              sys.exit(0)
+          for a in deps[0].get("alias") or []:
+              if a and "git-" not in a:
+                  print(a); break
+          ' 2>/dev/null || true)"
+          if [ -n "$alias" ]; then
+            BASE="https://${alias}"
           fi
-          BASE="https://${URL}"
-          echo "deployment: $BASE"
+          echo "probing: $BASE"
 
-          health="$(curl -sS -o /tmp/h -w '%{http_code}' --max-time 30 "$BASE/api/health" || echo 000)"
-          echo "  GET  /api/health            -> $health"
-          [ "$health" = "200" ] || { echo "::error::health check returned $health"; exit 1; }
+          health="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 40 "$BASE/api/health" 2>/dev/null || echo 000)"
+          echo "  GET  /api/health                  -> $health"
+          if [ "$health" != "200" ]; then
+            echo "::error::health check returned $health"
+            exit 1
+          fi
 
-          # Must be 401. These ran arbitrary caller-supplied code and spent the
-          # owner's LLM quota with no auth until commit ae0bdea.
+          # These run caller-supplied code and spend the owner's LLM quota. They
+          # had no authentication at all until commit ae0bdea. 200 or 302 means
+          # the gate regressed.
+          fail=0
           for ep in orchestrator simulator_proxy; do
-            code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
-                    -X POST "$BASE/api/$ep" \
-                    -H 'Content-Type: application/json' \
-                    -d '{"input":"x","code":"print(1)","telegram_id":1}' || echo 000)"
-            echo "  POST /api/$ep (no token) -> $code"
-            if [ "$code" = "200" ] || [ "$code" = "302" ]; then
-              echo "::error::$ep is reachable without authentication"
-              exit 1
-            fi
-            if [ "$code" != "401" ]; then
-              echo "::error::$ep returned $code, expected 401"
-              exit 1
-            fi
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 40 \
+              -X POST "$BASE/api/$ep" \
+              -H 'Content-Type: application/json' \
+              -d '{"input":"x","code":"print(1)","telegram_id":1}' 2>/dev/null || echo 000)"
+            echo "  POST /api/$ep (no token)        -> $code"
+            [ "$code" = "401" ] || { echo "::error::$ep returned $code, expected 401"; fail=1; }
           done
+
+          # And the wrong token must still be refused, not just a missing one.
+          code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 40 \
+            -X POST "$BASE/api/orchestrator" \
+            -H 'X-Internal-Auth: definitely-wrong' -H 'Content-Type: application/json' \
+            -d '{"input":"x"}' 2>/dev/null || echo 000)"
+          echo "  POST /api/orchestrator (bad token) -> $code"
+          [ "$code" = "401" ] || { echo "::error::wrong token returned $code, expected 401"; fail=1; }
+
+          [ "$fail" = "0" ] || exit 1
           echo "verification OK"
