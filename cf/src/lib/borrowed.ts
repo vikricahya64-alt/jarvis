@@ -127,9 +127,21 @@ const cache = new Map<string, { at: number; value: BorrowedProbe[] }>();
 const TTL_MS = 60_000;
 const TIMEOUT_MS = 3_500;
 
-async function reach(url: string, headers?: Record<string, string>, expectHttp = false): Promise<number | null> {
+/**
+ * Budget for a single probe. TIMEOUT_MS is tuned for cheap API pings and is
+ * deliberately short so /status stays responsive; callers that hit a heavy
+ * HTML endpoint pass a larger budget instead of being silently misreported as
+ * dead. A slow endpoint and an unreachable one look identical if the budget is
+ * too small for the endpoint, so the budget has to fit the endpoint.
+ */
+async function reach(
+  url: string,
+  headers?: Record<string, string>,
+  expectHttp = false,
+  timeoutMs = TIMEOUT_MS,
+): Promise<number | null> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, { headers, signal: ctrl.signal });
     return res.status;
@@ -260,15 +272,24 @@ export async function probeBorrowedPlatforms(env: Env): Promise<BorrowedProbe[]>
   //
   // Report per layer, and call the provider live if ANY of its own layers
   // answer. SearXNG and Bing are probed separately below.
+  const DDG_SCRAPE_MS = 9_000;
   const ddgLayers = await Promise.all([
     reach("https://api.duckduckgo.com/?q=jarvis&format=json&no_html=1"),
-    reach("https://html.duckduckgo.com/html/?q=jarvis"),
+    reach("https://html.duckduckgo.com/html/?q=jarvis", undefined, false, DDG_SCRAPE_MS),
   ]);
   const ddgLive = ddgLayers.filter((x): x is number => x !== null);
+  const [apiLayer, scrapeLayer] = ddgLayers;
+  const parts: string[] = [];
+  if (apiLayer !== null) parts.push(`api ${apiLayer}`);
+  else parts.push("api timeout/error");
+  if (scrapeLayer !== null) parts.push(`html ${scrapeLayer}`);
+  // The scrape is the slow layer and gets the larger budget; say so, so a
+  // future reader can tell "did not answer within 9s" from "does not work".
+  else parts.push(`html timeout/error (>${DDG_SCRAPE_MS / 1000}s)`);
   ok("search_ddg", ddgLive.length > 0, ddgLive[0] ?? null,
     ddgLive.length === 0
       ? "semua layer timeout/error"
-      : `HTTP ${ddgLive.join(" + ")} (${ddgLive.length}/${ddgLayers.length} layer hidup)`);
+      : `${parts.join(" · ")} (${ddgLive.length}/${ddgLayers.length} layer hidup)`);
   const bing = await reach("https://www.bing.com/search?q=jarvis&count=1");
   ok("search_bing", bing !== null, bing !== null ? bing : null, bing === null ? "timeout/error" : `HTTP ${bing}`);
   const searx = await reach("https://searx.be/");
