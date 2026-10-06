@@ -64,3 +64,6 @@ vercel-leg/__pycache__/
 vercel-leg/**/__pycache__/
 *.egg-info/
 .pytest_cache/
+
+# D1 backups are committed by .github/workflows/d1-backup.yml on purpose.
+# The audit found no backup of any kind; nightly exports are force-added here.

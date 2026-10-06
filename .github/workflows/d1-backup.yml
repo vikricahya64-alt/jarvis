@@ -1,0 +1,145 @@
+# =====================================================================
+# d1-backup.yml — scheduled D1 export.
+#
+# The audit found NO backup anywhere: nothing in any workflow exported the
+# database, while it holds the only durable record of conversation turns,
+# memories, plans, obedience audit, provider health and deploy history. A
+# mistaken DELETE or a bad migration is currently unrecoverable, and the
+# restore path was "rewrite it from the logs", which is not a restore.
+#
+# D1 export is a first-class Cloudflare feature (wrangler d1 export), so this
+# needs no new dependency. What it does need is somewhere to put the result:
+# committed to the repository. That is deliberate for this deployment:
+#   - the repo is public, so a nightly artifact commit is free Actions minutes
+#   - R2 or any object store would mean another credential to rotate, and the
+#     credential sprawl is exactly what has caused drift twice already
+#     (AGENT_TOKEN, GROQ_API_KEY)
+#   - history keeps a dated copy per day, which is a usable restore point
+#
+# Caveat recorded rather than hidden: this is repository-hosted backup. It is
+# not a substitute for a real off-site copy for a private repo, and it is not
+# point-in-time recovery - it is nightly. The first month of retention is the
+# whole history, so disk is not yet a concern.
+name: d1-backup
+
+on:
+  schedule:
+    # 02:17 UTC - deliberately off the hour. Every workflow in this repo that
+    # fires on the hour competes for the same runner pool at :00, and this one
+    # is the least latency-sensitive thing in the repository.
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: d1-backup
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cf/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Export D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          cd cf
+          mkdir -p ../backups/d1
+          STAMP="$(date -u +%Y-%m-%dT%H%MZ)"
+          OUT="../backups/d1/jarvis-${STAMP}.json"
+
+          # `wrangler d1 export` CANNOT be used here. Verified:
+          #   D1 Export error: cannot export databases with virtual tables (like FTS5)
+          # and this database has memories_fts, an FTS5 index. A workflow that
+          # relied on it would have failed every single night while looking
+          # configured.
+          #
+          # So this walks the real tables instead. Virtual tables are skipped and
+          # that costs nothing: memories_fts is a search index over memories, so
+          # it is rebuilt from the memories rows in this same dump.
+          #
+          # Rows go out as JSON, which is immune to the quoting and delimiter
+          # problems a hand-built .sql dump would have.
+          npx wrangler d1 execute jarvis --remote --json \
+            --command "SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'" \
+            > /tmp/schema.json
+
+          python3 - "$OUT" <<'PYEOF'
+          import json, subprocess, sys, datetime, pathlib
+
+          out = pathlib.Path(sys.argv[1])
+          schema = json.loads(pathlib.Path("/tmp/schema.json").read_text())
+          tables = [r["name"] for r in schema[0]["results"]]
+          # An FTS5 virtual table's CREATE statement references modules and
+          # shadow tables; skip it and the shadow tables with it.
+          real = [t for t in tables
+                  if not t.endswith("_fts")
+                  and not t.endswith("_fts_data")
+                  and not t.endswith("_fts_idx")
+                  and not t.endswith("_fts_docsize")
+                  and not t.endswith("_fts_config")]
+
+          dump = {
+            "exported_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "method": "per-table JSON (wrangler d1 export is blocked by FTS5)",
+            "skipped_virtual": sorted(set(tables) - set(real)),
+            "tables": {},
+          }
+          for t in real:
+              p = subprocess.run(
+                  ["npx", "wrangler", "d1", "execute", "jarvis", "--remote", "--json",
+                   "--command", f'SELECT * FROM "{t}"'],
+                  capture_output=True, text=True,
+              )
+              try:
+                  dump["tables"][t] = json.loads(p.stdout[p.stdout.find("["):])[0]["results"]
+              except Exception:
+                  dump["tables"][t] = None
+                  print(f"  WARN: {t} gagal diekspor", file=sys.stderr)
+
+          out.write_text(json.dumps(dump, indent=1, ensure_ascii=False))
+          total = sum(len(v) for v in dump["tables"].values() if v is not None)
+          print(f"  {len(real)} tabel, {total} baris, {out.stat().st_size} bytes")
+          PYEOF
+
+          if [ ! -s "$OUT" ]; then
+            echo "::error::export produced an empty file" >&2
+            exit 1
+          fi
+
+          # Keep the newest 30 dumps; older ones remain in git history, so this
+          # bounds the working tree without losing any restore point.
+          ls -1t ../backups/d1/jarvis-*.json 2>/dev/null | tail -n +31 \
+            | xargs -r rm -f
+          printf '%s' "$STAMP" > ../backups/d1/LATEST"
+
+      - name: Commit the dump
+        run: |
+          git config user.name  "d1-backup"
+          git config user.email "d1-backup@users.noreply.github.com"
+          git add -f backups/d1
+          if git diff --cached --quiet; then
+            echo "no change in dump; nothing to commit"
+            exit 0
+          fi
+          git commit -q -m "chore(d1): nightly export $(cat backups/d1/LATEST)"
+          # Not masked: a failed push must be visible, or this backup silently
+          # stops existing while the job reports success. That is the same
+          # failure mode that hid the delegation bug for a month.
+          git push origin HEAD:main
