@@ -72,6 +72,34 @@ function pickResponder(env: Env, role: RoleName): { fn: Responder; name: string 
     : { fn: openrouterRespond as Responder, name: "openrouter" };
 }
 
+/**
+ * The verifier's providers in the order they may be tried.
+ *
+ * The verifier being unreachable is an infrastructure failure, not a judgement
+ * about the draft. Treating it as a rejection meant a single provider outage
+ * turned every question into "I can't answer that with a source I trust" -
+ * observed live when openrouter went down and "apa itu bitcoin" got no answer
+ * even though the retrieval had five hits and the draft was fine.
+ *
+ * Role separation is preserved: the answerer's provider is tried last, because
+ * a verifier that shares weights with the answerer checks less than one that
+ * does not. A different provider still verifies; the same one does not.
+ */
+function verifierCandidates(env: Env): { fn: Responder; name: string }[] {
+  const all: { fn: Responder; name: string }[] = [
+    { fn: workersAiRespond as Responder, name: "workers_ai" },
+    { fn: geminiRespond as Responder, name: "gemini" },
+    { fn: nvidiaNimRespond as Responder, name: "nvidia_nim" },
+  ];
+  const answerer = (env.ANSWER_PROVIDER || "groq").toLowerCase();
+  const primary = pickResponder(env, "verifier");
+  return [
+    primary,
+    ...all.filter((c) => c.name !== primary.name && c.name !== answerer),
+    ...(answerer !== primary.name ? [{ fn: groqRespond as Responder, name: answerer }] : []),
+  ];
+}
+
 export interface Verdict {
   ok: boolean;
   /** Short, user-safe reason when the draft was rejected. */
@@ -156,16 +184,31 @@ export async function verifyAnswer(
   subject = "",
 ): Promise<Verdict> {
   const started = Date.now();
-  const { fn, name } = pickResponder(env, "verifier");
+  const candidates = verifierCandidates(env);
+  let name = candidates[0].name;
   let raw: string | null = null;
-  try {
-    if (verifierOverride) {
+  const prompt = VERIFIER_PROMPT(input, draft, subject);
+  if (verifierOverride) {
+    // Test seam: a fixed verdict, no provider involved.
+    try {
       raw = await verifierOverride(env, input, draft, subject);
-    } else {
-      raw = await fn(env, VERIFIER_PROMPT(input, draft, subject), { skipSearch: true });
+    } catch {
+      raw = null;
     }
-  } catch {
-    raw = null;
+  } else {
+    for (const c of candidates) {
+      try {
+        const out = await c.fn(env, prompt, { skipSearch: true });
+        if (out && out.trim()) {
+          raw = out;
+          name = c.name;
+          break;
+        }
+      } catch {
+        // Try the next provider. An unreachable verifier is an infrastructure
+        // failure, so it must not be mistaken for a verdict on the draft.
+      }
+    }
   }
   if (!raw) {
     // Fail-closed. The comment here used to promise the opposite of what the
