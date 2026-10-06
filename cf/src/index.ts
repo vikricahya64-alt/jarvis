@@ -437,7 +437,8 @@ version: "m9-v11.52",
         stage.answer = res
           ? { verdict: res.verified?.ok, kind: res.verified?.kind, command: res.verified?.command,
               sources: res.sources, answeredBy: res.answeredBy, verifier: res.verified?.verifier,
-              replyChars: res.text?.length ?? 0, reason: res.verified?.reason }
+              replyChars: res.text?.length ?? 0, reason: res.verified?.reason,
+              timings: res.timings }
           : null;
       } catch (e) {
         stage.answerError = (e as Error).message;

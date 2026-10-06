@@ -56,6 +56,8 @@ export interface GroundedResult extends AnswerResult {
    *  turn cannot slide onto something else. Empty when the message was a fresh
    *  question with no established subject. */
   topic: string;
+  /** Per-stage wall clock, added because the chain was measured at 24-78s. */
+  timings?: Record<string, number>;
 }
 
 /**
@@ -86,10 +88,13 @@ export async function answerGrounded(
   const q = (question ?? "").trim();
   if (!q) return null;
 
+  const t0 = Date.now();
   const ctx = await resolveTelegramContext(env, owner, q, replyToText);
+  const tCtx = Date.now();
 
   // Best effort, and never the reason a reply does not happen.
   const retrieval = await retrieveKeyless(q).catch(() => ({ hits: [], used: [] as string[] }));
+  const tRetrieval = Date.now();
   const passages = retrieval.hits.length ? renderPassages(retrieval.hits) : "";
   // Retrieval is CONTEXT, not a cage.
   //
@@ -112,6 +117,7 @@ export async function answerGrounded(
     : `Tidak ada hasil pencarian yang bisa dipercaya untuk pertanyaan ini. Jawab dari pengetahuanmu, ` +
       `DAN JANGAN mengarang sitasi, tautan, angka, atau tahun. Kalau tidak yakin, katakan tidak yakin.\n\n`;
 
+  const timings: Record<string, number> = {};
   const result = await answerAndVerify(
     env,
     q,
@@ -124,10 +130,19 @@ export async function answerGrounded(
     },
     ctx.topic ?? "",
   );
+  timings.answerVerify = Date.now() - tRetrieval;
+  timings.total = Date.now() - t0;
+  timings.context = tCtx - t0;
+  timings.retrieval = tRetrieval - tCtx;
+  timings.sources = retrieval.used.length;
+  timings.hits = retrieval.hits.length;
+  console.log(`[timing] ${JSON.stringify(timings)} q="${q.slice(0, 40)}"`);
+
   if (!result) return null;
 
   return {
     ...result,
+    timings,
     sources: retrieval.used,
     contextReason: ctx.reason,
     // Prefer the continued subject; otherwise the question itself is the topic.

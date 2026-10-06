@@ -85,6 +85,9 @@ function pickResponder(env: Env, role: RoleName): { fn: Responder; name: string 
  * a verifier that shares weights with the answerer checks less than one that
  * does not. A different provider still verifies; the same one does not.
  */
+/** Hard ceiling per verifier candidate before moving to the next provider. */
+const VERIFIER_CANDIDATE_BUDGET_MS = 12_000;
+
 function verifierCandidates(env: Env): { fn: Responder; name: string }[] {
   const all: { fn: Responder; name: string }[] = [
     { fn: workersAiRespond as Responder, name: "workers_ai" },
@@ -202,7 +205,15 @@ export async function verifyAnswer(
   } else {
     for (const c of candidates) {
       try {
-        const out = await c.fn(env, prompt, { skipSearch: true });
+        // Bound each candidate. Measured: answer+verify took 30-79s while
+        // context was 3ms and retrieval ~1s, and the cause is this loop - a
+        // provider that hangs used to be waited out before the next one was
+        // tried. A verifier that cannot answer within VERIFIER_CANDIDATE_BUDGET_MS
+        // is not going to answer at all, so it is abandoned rather than awaited.
+        const out = await Promise.race([
+          c.fn(env, prompt, { skipSearch: true }),
+          new Promise<null>((r) => setTimeout(() => r(null), VERIFIER_CANDIDATE_BUDGET_MS)),
+        ]);
         if (out && out.trim()) {
           raw = out;
           name = c.name;
