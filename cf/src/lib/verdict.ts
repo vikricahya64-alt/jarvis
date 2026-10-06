@@ -28,25 +28,6 @@ export interface Verdict {
   reason: string;
 }
 
-/** true hanya ketika verdict eksplisit "allow". */
-export function gateAllows(g: Gate | { verdict: Gate; reason?: string }): boolean {
-  return (typeof g === "string" ? g : g.verdict) === "allow";
-}
-
-/** true ketika verdict berupa deny ATAU unknown (fail-closed view). */
-export function gateBlocks(g: Gate | { verdict: Gate; reason?: string }): boolean {
-  const v = typeof g === "string" ? g : g.verdict;
-  return v === "deny" || v === "unknown";
-}
-
-export function gateUnknown(g: Gate | { verdict: Gate; reason?: string }): boolean {
-  return (typeof g === "string" ? g : g.verdict) === "unknown";
-}
-
-export function toVerdict(g: Gate, reason: string): Verdict {
-  return { verdict: g, reason };
-}
-
 /**
  * AND-composition untuk jalur KEAMANAN (fail-closed):
  *   satu deny  -> deny   (blokir menang)

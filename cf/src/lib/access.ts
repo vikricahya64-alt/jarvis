@@ -234,18 +234,3 @@ export async function quotaCheck(
     return { allowed: false, reason: "quota_check_unavailable", retryAfterS: 60 };
   }
 }
-
-/** Untuk UI/test: berapa kuota yang tersisa. */
-export async function quotaRemaining(
-  env: Env,
-  userId: number | string,
-): Promise<{ hour: number; day: number }> {
-  const lim = LIMITS[tierFor(env, userId)];
-  try {
-    const hour = Number((await env.CONFIG_KV.get(`quota:${userId}:h:${Math.floor(Date.now() / 3_600_000)}`)) ?? "0");
-    const day = Number((await env.CONFIG_KV.get(`quota:${userId}:d:${new Date().toISOString().slice(0, 10)}`)) ?? "0");
-    return { hour: Math.max(0, lim.maxPerHour - hour), day: Math.max(0, lim.maxPerDay - day) };
-  } catch {
-    return { hour: 0, day: 0 };
-  }
-}

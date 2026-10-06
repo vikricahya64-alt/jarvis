@@ -1462,14 +1462,6 @@ export interface SearchHit {
   institution?: string;
 }
 
-/** Structured search hits WITH URLs (used for citations). Fail-closed: always
- *  returns an array; layers that can't produce a URL are skipped. Deduped by
- *  host so the source list never feels like a link-farm. */
-export async function ddgSearchHits(env: Env, query: string): Promise<SearchHit[]> {
-  const p = await ddgSearchPackage(env, query).catch(() => ({ digest: null, hits: [] as SearchHit[] }));
-  return p.hits;
-}
-
 /** Pure, deterministic source-citation list (markdown) for appending to replies.
  *  ECC deep-research parity: answers carry source attribution — real, DEDUPED
  *  by host, query-noise-free, never invented (fail-closed). */

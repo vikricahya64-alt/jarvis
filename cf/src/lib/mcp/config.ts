@@ -96,11 +96,6 @@ export function resolveMcpServer(env: Env, alias: string): McpServerEntry | unde
   return mcpServers(env).find((e) => e.alias === key);
 }
 
-/** Aliases in allow-list order (for /mcp summaries). */
-export function mcpAliases(env: Env): string[] {
-  return mcpServers(env).map((e) => e.alias);
-}
-
 /** Master switch for the /mcp command surface (MCP_ENABLED=0 turns it off). */
 export function mcpClientEnabled(env: Env): boolean {
   return (env.MCP_ENABLED ?? "1") !== "0";
@@ -111,11 +106,6 @@ export function mcpTimeoutMs(env: Env, fallback = MCP_DEFAULT_TIMEOUT_MS): numbe
   const raw = parseInt(env.MCP_SERVER_TIMEOUT_MS ?? "", 10);
   if (Number.isFinite(raw)) return Math.min(30000, Math.max(1000, raw));
   return fallback;
-}
-
-/** True when the server-side /mcp endpoint can authenticate callers. */
-export function mcpServerConfigured(env: Env): boolean {
-  return Boolean(env.MCP_ACCESS_TOKEN);
 }
 
 /** Constant-time token comparison (discourages timing side channels on the
