@@ -73,7 +73,7 @@ export interface TelegramVideoNote {
 
 export interface TelegramMessage {
   message_id: number;
-  chat: { id: number };
+  chat: { id: number; type?: string; title?: string };
   from?: { id: number; username?: string; first_name?: string };
   text?: string;
   date: number;
@@ -84,6 +84,15 @@ export interface TelegramMessage {
   video_note?: TelegramVideoNote;
   document?: TelegramDocument;
   caption?: string;
+  /** The message this one replies to. This is Telegram's own "the message
+   *  directly above" signal: it is the only authoritative statement the user
+   *  can make about what they are continuing, and it needs no guessing. It was
+   *  absent from this type, so the field was dropped on the floor and every
+   *  follow-up had to be reconstructed from heuristics. See
+   *  lib/telegram_context.ts. */
+  reply_to_message?: TelegramMessage;
+  /** Set when the update came through a forum topic / thread. */
+  message_thread_id?: number;
 }
 
 export interface InlineButton {

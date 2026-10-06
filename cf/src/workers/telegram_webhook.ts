@@ -275,6 +275,15 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   const rawText = msg.text ?? "";
   const text = normalizeInput(rawText);
 
+  // Telegram's own continuity signal: the message this one replies to. Taken
+  // before anything else can dilute it, and forwarded into the brain as the
+  // authoritative statement of "I am continuing THIS".
+  const replyToText: string | undefined =
+    msg.reply_to_message?.text ?? msg.reply_to_message?.caption ?? undefined;
+  if (replyToText) {
+    console.log(`[ctx] direction=reply chat=${msg.chat?.id} prior=${replyToText.slice(0, 60)}`);
+  }
+
   // ------------------------------------------------------------------
   // INPUT MODERATION — before any quota spend, any LLM call, any memory write.
   //
@@ -352,7 +361,7 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // tertunda, "ya"/"oke" biasa tetap ke jalur normal (obrolan/memori) —
   // sandbox TIDAK pernah terbuka tanpa rencana yang benar-benar tertunda.
   // ------------------------------------------------------------------------
-  const resume = await resolveParkedResume(env, from, text);
+  const resume = await resolveParkedResume(env, from, text, replyToText);
   if (resume.consumed) return new Response("ok", { status: 200 });
 
   // Best-effort activity touch  // Best-effort activity touch — a transient D1 error must NEVER silently drop
@@ -1384,6 +1393,9 @@ export async function resolveParkedResume(
   env: Env,
   from: number,
   text: string,
+  /** Telegram's "message above" signal, forwarded so a parked-answer also
+   *  resumes with the right context instead of treating the reply as new. */
+  replyToText?: string,
 ): Promise<{ consumed: boolean; capability?: string }> {
   // m9-v11.53 — GERBANG 2-ARAH (global). Input yang sudah terverifikasi sebagai
   // perintah (slash ATAU verba destruktif) TIDAK BOLEH dimakan sebagai "jawaban"
@@ -1403,7 +1415,7 @@ export async function resolveParkedResume(
     console.log(`[parked_resume] capability=${spec.id} handler=${parked.handler} owner=${from}`);
     switch (parked.handler) {
       case "relevance_resume":
-        await runBrain(env, from, text);
+        await runBrain(env, from, text, replyToText);
         return { consumed: true, capability: spec.id };
       case "nego_resume": {
         const s = await readNegotiation(env, from).catch(() => null);
@@ -1424,9 +1436,15 @@ export async function resolveParkedResume(
  *  gate, fail-closed URL strip and prose rails can never be bypassed by a
  *  parallel webhook research path. Returns true when a real reply was
  *  delivered. */
-async function runBrain(env: Env, owner: number, text: string): Promise<boolean> {
+/** Telegram's continuity signal: the text of the message this one replies to.
+ *  Empty when the user started a fresh message. */
+function replyTextOf(msg?: { reply_to_message?: { text?: string; caption?: string } }): string | undefined {
+  return msg?.reply_to_message?.text ?? msg?.reply_to_message?.caption ?? undefined;
+}
+
+async function runBrain(env: Env, owner: number, text: string, replyToText?: string): Promise<boolean> {
   try {
-    const res = await processIntelligence(env, owner, text);
+    const res = await processIntelligence(env, owner, text, replyToText);
     if (res.text && res.text.trim().length > 0) {
       await deliverSmartReply(env, owner, res.text, 800, res.perception?.topic ?? undefined);
       return true;
@@ -1646,6 +1664,7 @@ async function applyDefault(
   owner: number,
   res: Awaited<ReturnType<typeof routeCommand>>,
   rawText = "",
+  replyToText?: string,
 ): Promise<string> {
   const label: Record<number, string> = {
     100: "Sistem dijalankan.",
@@ -1667,7 +1686,7 @@ async function applyDefault(
   if (rawText.trim().length > 0) {
     try {
       const ctx: MessageContext = { owner, text: rawText, source: "telegram" };
-      const jarvisRes = await processIntelligence(env, ctx.owner, ctx.text);
+      const jarvisRes = await processIntelligence(env, ctx.owner, ctx.text, replyToText);
       if (jarvisRes.text && jarvisRes.text.length > 5) {
         // Anchor ANY substantive LLM reply too (not only search results) so a
         // later "Lanjutkan" can always continue it deterministically.
@@ -1990,7 +2009,7 @@ async function understandMedia(env: Env, owner: number, msg: TelegramMessage): P
      if (SELF_REF_RE.test(transcript.trim())) return JARVIS_IDENTITY.selfRefReply;
      if (mediaIsTaskIntent(transcript)) return delegateNow(env, owner, transcript);
     const ctx: MessageContext = { owner, text: transcript, source: "telegram" };
-    const gl = await processIntelligence(env, ctx.owner, ctx.text);
+    const gl = await processIntelligence(env, ctx.owner, ctx.text, replyTextOf(msg));
     return gl.text && gl.text.length > 5 ? gl.text : null;
   }
 
@@ -2028,7 +2047,7 @@ async function understandMedia(env: Env, owner: number, msg: TelegramMessage): P
     // Vision unavailable: at least let the plain LLM hear the caption.
     if (caption) {
       const ctx: MessageContext = { owner, text: caption, source: "telegram" };
-      const gl = await processIntelligence(env, ctx.owner, ctx.text);
+      const gl = await processIntelligence(env, ctx.owner, ctx.text, replyTextOf(msg));
       return gl.text && gl.text.length > 5 ? gl.text : null;
     }
     return null;

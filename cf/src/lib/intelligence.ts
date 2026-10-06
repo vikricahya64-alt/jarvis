@@ -26,6 +26,7 @@ import {
   type EmotionSignal, type MoodState,
 } from "./emotion";
 import { comprehend, comprehensionNote, LANG_NAMES, type ComprehensionProfile } from "./comprehension";
+import { resolveTelegramContext, recordTurn, type TelegramContext } from "./telegram_context";
 import {
   getSession, type SessionState,
   detectConversationMode, detectTopicContinuity,
@@ -87,6 +88,11 @@ export interface Perception {
    *  signals). When set, cheap chat paths keep the ACTIVE topic as frame. */
   isContinuation: boolean;
   enrichedContext: Array<{ role: string; content: string }>;
+  /** Which of the two directions resolved this turn's context, and why. Always
+   *  populated: a follow-up and a brand-new question must be distinguishable,
+   *  because conflating them is what made the model answer an invented
+   *  subject. See lib/telegram_context.ts. */
+  telegramContext: TelegramContext;
 }
 
 /** Intent classification result. */
@@ -167,6 +173,9 @@ export async function perceive(
   env: Env,
   owner: number,
   text: string,
+  /** Text of update.message.reply_to_message - Telegram's own statement of
+   *  which message this continues. Absent for a fresh message. */
+  replyToText?: string,
 ): Promise<Perception> {
   // Parallel perception tasks (independent of each other). Bahasa dideteksi
   // SEKALI oleh root comprehension (f3) — satu sumber, bukan dua mesin.
@@ -198,15 +207,23 @@ export async function perceive(
   });
 
   // Detect topic continuity
+  // Telegram is the source of truth for "what is this continuing?": direction 1
+  // is the message the user replied to, direction 2 is today's earlier turns.
+  // detectTopicContinuity stays as a signal but no longer decides on its own -
+  // it guessed, and a guess with nothing stored behind it invented subjects.
+  const tctx = await resolveTelegramContext(env, owner, text, replyToText);
   const topicResult = detectTopicContinuity(text, enrichedContext);
   // Contract fix (M2): the brain's topic must use the SAME noun-phrase extractor
   // as the webhook's search path — otherwise whole imperative sentences ("saya
   // butuh analisis ini") became the DDG query. On a detected continuation with
   // no fresh marker, prefer the session's activeTopic so follow-ups stay on the
   // anchored subject instead of the raw sentence prefix.
-  const topic =
-    topicResult.topic ??
-    ((topicResult.isContinuation && session.activeTopic) || extractTopic(text) || text.slice(0, 80));
+  // Direction 1 and 2 win. Only when Telegram says NEW do we fall back to the
+  // heuristic topic, and even then the day's turns ride along as background.
+  const topic = tctx.isContinuation
+    ? (tctx.topic ?? session.activeTopic ?? extractTopic(text) ?? text.slice(0, 80))
+    : (topicResult.topic ?? extractTopic(text) ?? text.slice(0, 80));
+  const isContinuation = tctx.isContinuation || topicResult.isContinuation;
 
   // Classify intent (combines multiple signals)
   const intent = classifyIntent(text, topic);
@@ -220,8 +237,9 @@ export async function perceive(
     topic,
     mode,
     isFollowUp,
-    isContinuation: topicResult.isContinuation,
+    isContinuation,
     enrichedContext,
+    telegramContext: tctx,
   };
 }
 
@@ -1363,11 +1381,28 @@ export async function processIntelligence(
   env: Env,
   owner: number,
   text: string,
+  replyToText?: string,
+): Promise<IntelligenceResponse> {
+  // Record both turns here, at the single point every reply passes through, so
+  // "still today" has data regardless of which of the branches produced the
+  // answer. Without this the day's log was empty and direction 2 could never
+  // fire - which is the amnesia the old anchor scheme also suffered from.
+  const res = await processIntelligenceCore(env, owner, text, replyToText);
+  await recordTurn(env, owner, "user", text).catch(() => {});
+  await recordTurn(env, owner, "assistant", res?.text ?? "").catch(() => {});
+  return res;
+}
+
+async function processIntelligenceCore(
+  env: Env,
+  owner: number,
+  text: string,
+  replyToText?: string,
 ): Promise<IntelligenceResponse> {
   const start = Date.now();
 
   // Phase 1: PERCEIVE
-  const perception = await perceive(env, owner, text);
+  const perception = await perceive(env, owner, text, replyToText);
 
   // RELEVANCE GATE — resume/discard a parked confirmation from an earlier
   // turn BEFORE deciding. A clear confirmation ("1"/"2"/"ya") resumes the

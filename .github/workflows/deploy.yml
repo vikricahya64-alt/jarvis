@@ -81,6 +81,8 @@ jobs:
         run: npm run test:moderation
       - name: Telegram menu registration
         run: npm run test:menu
+      - name: Telegram context gate
+        run: npm run test:ctx
       - name: Go/wasm module (parity + size budget)
         run: npm run test:go
 
