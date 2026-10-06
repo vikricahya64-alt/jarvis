@@ -23,6 +23,12 @@ concurrency:
   group: jarvis-agent
   cancel-in-progress: false
 
+# Declared explicitly rather than inherited from the repository default. This
+# workflow pushes an artifact commit to main, so the capability is real and
+# should be visible here instead of being an accident of org settings.
+permissions:
+  contents: write
+
 jobs:
   execute:
     runs-on: ubuntu-latest
@@ -119,7 +125,10 @@ jobs:
           cp /tmp/jarvis-artifact.md "artifacts/task_${TASK_ID}.md"
           git add "artifacts/task_${TASK_ID}.md"
           git -c user.name="${{ github.actor }}" -c user.email="${{ github.actor }}@users.noreply.github.com" commit -q -m "artifact(task_$TASK_ID): opencode execution output" || true
-          git push -q || true
+          # NOT masked: a silent '|| true' here means a failed push looks like a
+          # successful task. Push failures must be visible so a lost artifact
+          # cannot be reported as done.
+          git push -q
           echo "artifact_url=https://github.com/${{ github.repository }}/blob/main/artifacts/task_${TASK_ID}.md" >> "$GITHUB_OUTPUT"
 
       - name: Report result back to JARVIS
