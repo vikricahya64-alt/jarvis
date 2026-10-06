@@ -42,6 +42,9 @@ export interface VersionHealth {
 
 /** Error pattern detected across versions. */
 export interface ErrorPattern {
+  /** True while the pattern is still recurring. A pattern can be well past the
+   *  occurrence threshold and still be resolved. */
+  active: boolean;
   pattern: string;
   category: string;
   occurrences: number;
@@ -339,6 +342,30 @@ export async function executeAutoRevert(
 // ---------------------------------------------------------------------
 
 /** Detect recurring error patterns across versions. */
+/**
+ * A pattern is ACTIVE only while it is still happening.
+ *
+ * The window below was the only condition: >=3 occurrences in the last 7 days.
+ * Nothing checked whether the pattern was STILL recurring, so a category that
+ * stopped recurring kept re-alerting for a week. Live example: the
+ * degradation_state UNIQUE failure last occurred at 00:00:37 and was fixed by
+ * 06:00, yet the alert kept firing for hours afterwards and would have kept
+ * firing until the row aged out. That is exactly how an owner learns to ignore
+ * alerts - it reports a resolved bug as an active incident.
+ *
+ * So counting and activeness are separated:
+ *   occurrences - size over the 7-day window, kept for context
+ *   ACTIVE_WINDOW_MS - a pattern is live only if it also occurred inside this
+ *                      window. The busiest cron here runs every 6 hours, so this
+ *                      is comfortably longer than one tick and shorter than the
+ *                      window in which an owner would want to know.
+ */
+const ACTIVE_WINDOW_MS = 6 * 3600_000;
+
+export function isPatternActive(p: { lastSeen: number }, now = Date.now()): boolean {
+  return now - p.lastSeen <= ACTIVE_WINDOW_MS;
+}
+
 export async function detectErrorPatterns(env: Env): Promise<ErrorPattern[]> {
   const now = Date.now();
   const last7days = now - 7 * 24 * 3600_000;
@@ -376,6 +403,7 @@ export async function detectErrorPatterns(env: Env): Promise<ErrorPattern[]> {
         affectedVersions: [], // would need version tracking per error
         suggestedFix: fix.fix,
         autoFixable: fix.autoFixable,
+        active: isPatternActive({ lastSeen: row.last_seen }, now),
       });
     }
 

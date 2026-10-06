@@ -976,14 +976,39 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     if (patterns.length === 0) {
       await fire(sendMessage(env, r, "✅ Tidak ada error pattern aktif."));
     } else {
-      const lines = [
-        "🩺 *Recovery Patterns*",
-        "",
-        ...patterns.slice(0, 5).map((p, i) =>
-          `#${i + 1} *${p.category}* (×${p.occurrences}) — ${p.autoFixable ? "auto-fixable" : "manual"}\n  💡 ${p.suggestedFix.slice(0, 120)}`
-        ),
-      ];
-      await fire(sendMessage(env, r, lines.join("\n")));
+      // Active first, then resolved, each labelled. Previously every pattern
+      // was rendered identically, so a bug fixed hours ago looked exactly like a
+      // live incident.
+      const { clip } = await import("../lib/recovery_loop");
+      const live = patterns.filter((p) => p.active);
+      const resolved = patterns.filter((p) => !p.active);
+      const stamp = (ms: number) =>
+        new Date(ms).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+      const lines = ["🩺 *Recovery Patterns*", ""];
+      if (live.length === 0) {
+        lines.push("✅ Tidak ada pattern yang sedang berulang.", "");
+      } else {
+        lines.push(`* masih terjadi (${live.length}) *`, "");
+        live.slice(0, 5).forEach((p, i) => {
+          lines.push(
+            `#${i + 1} *${p.category}* (×${p.occurrences}) — ${p.autoFixable ? "auto-fixable" : "manual"}`,
+            `  💡 ${clip(p.suggestedFix)}`,
+            `  🕒 terakhir ${stamp(p.lastSeen)}`,
+            "",
+          );
+        });
+      }
+      if (resolved.length > 0) {
+        lines.push(`* sudah berhenti / teratasi (${resolved.length}) *`, "");
+        resolved.slice(0, 5).forEach((p) => {
+          lines.push(
+            `• *${p.category}* (×${p.occurrences} total) — terakhir ${stamp(p.lastSeen)}`,
+            `  ✅ tidak berulang lagi dalam 6 jam terakhir`,
+            "",
+          );
+        });
+      }
+      await fire(sendMessage(env, r, lines.join("\n").trimEnd()));
     }
     return new Response("ok", { status: 200 });
   }

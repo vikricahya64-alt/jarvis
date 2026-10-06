@@ -17,6 +17,27 @@ const ALERT_THRESHOLD = 5; // Minimum occurrences to trigger Telegram alert
 
 /** Main recovery loop. Called by cron. Sends Telegram alert for critical
  *  patterns (>= ALERT_THRESHOLD occurrences). Never throws. */
+/**
+ * Shorten a suggestion without cutting mid-word.
+ *
+ * slice(0, 100) produced "…(3) Add retry for tran" in the owner's alert - a
+ * truncated instruction is worse than a shorter complete one, because the owner
+ * reads it as the whole remedy. Cut at the last sentence or numbered-item
+ * boundary instead, and mark it when something was dropped.
+ */
+export function clip(text: string, limit = 140): string {
+  const t = (text ?? "").trim();
+  if (t.length <= limit) return t;
+  const head = t.slice(0, limit);
+  const cut = Math.max(
+    head.lastIndexOf(", "),
+    head.lastIndexOf(". "),
+    head.lastIndexOf(") "),
+  );
+  const boundary = cut > 40 ? head.slice(0, cut + (head[cut + 1] === ")" ? 2 : 1)) : head.trimEnd();
+  return `${boundary.replace(/[,)\s]+$/, "")}…`;
+}
+
 export async function runRecoveryLoop(env: Env, ownerChatId?: number): Promise<{
   patternsDetected: number;
   fixesApplied: number;
@@ -37,14 +58,16 @@ export async function runRecoveryLoop(env: Env, ownerChatId?: number): Promise<{
         console.log(`[recovery] @owner pattern ${p.category} x${p.occurrences}: ${p.suggestedFix.slice(0, 120)}`);
       }
 
-      // Telegram alert for critical patterns (>= threshold)
-      const critical = patterns.filter((p) => p.occurrences >= ALERT_THRESHOLD);
+      // Alert only for patterns that are STILL recurring. Threshold alone kept
+      // re-alerting on a category that stopped hours ago, which trains the owner
+      // to ignore alerts and hides the ones that matter.
+      const critical = patterns.filter((p) => p.occurrences >= ALERT_THRESHOLD && p.active);
       if (critical.length > 0 && ownerChatId) {
         const lines = [
           "🚨 *Error Pattern Alert*",
           "",
           ...critical.slice(0, 3).map((p) =>
-            `• *${p.category}* (×${p.occurrences}): ${p.suggestedFix.slice(0, 100)}`
+            `• *${p.category}* (×${p.occurrences}): ${clip(p.suggestedFix)}`
           ),
           "",
           "Ketik `/recovery status` untuk detail.",
@@ -64,6 +87,8 @@ export async function getRecoveryPatterns(env: Env): Promise<{
   occurrences: number;
   suggestedFix: string;
   autoFixable: boolean;
+  active: boolean;
+  lastSeen: number;
 }[]> {
   try {
     const patterns = await detectErrorPatterns(env);
@@ -72,6 +97,10 @@ export async function getRecoveryPatterns(env: Env): Promise<{
       occurrences: p.occurrences,
       suggestedFix: p.suggestedFix,
       autoFixable: p.autoFixable,
+      // Surfaced so /recovery can tell the owner "this one is fixed" instead of
+      // listing it beside live incidents as though it were still burning.
+      active: p.active,
+      lastSeen: p.lastSeen,
     }));
   } catch {
     return [];
