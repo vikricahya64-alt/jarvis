@@ -83,7 +83,7 @@ function connectorPlatforms(): BorrowedPlatform[] {
 
 function dataAndSearchPlatforms(): BorrowedPlatform[] {
   return [
-    { id: "context7", label: "Context7 (docs)", kind: "eksekutor_data", endpoint: "context7.com/api", egress: "direct", requiresKeys: ["CONTEXT7_API_KEY?"], capability: "grounding docs anti-halusinasi", probe: true },
+    { id: "context7", label: "Context7 (docs)", kind: "eksekutor_data", endpoint: "context7.com/api/v2", egress: "direct", requiresKeys: ["CONTEXT7_API_KEY?"], capability: "grounding docs anti-halusinasi", probe: true },
     { id: "weather", label: "Open-Meteo (cuaca)", kind: "eksekutor_data", endpoint: "api.open-meteo.com", egress: "direct", requiresKeys: [], capability: "/kota", probe: true },
     { id: "search_ddg", label: "DuckDuckGo", kind: "eksekutor_search", endpoint: "duckduckgo.com (api + html)", egress: "direct", requiresKeys: [], capability: "riset & pencarian", probe: true },
     { id: "search_bing", label: "Bing (cadangan)", kind: "eksekutor_search", endpoint: "www.bing.com/search", egress: "direct", requiresKeys: [], capability: "riset (fallback)", probe: true },
@@ -296,8 +296,18 @@ export async function probeBorrowedPlatforms(env: Env): Promise<BorrowedProbe[]>
   ok("search_searx", searx !== null, searx !== null ? searx : null, searx === null ? "timeout/error" : `HTTP ${searx}`);
   const weather = await reach("https://api.open-meteo.com/v1/forecast?latitude=0&longitude=0&current=temperature_2m");
   ok("weather", weather !== null && weather < 500, weather !== null ? weather : null, weather === null ? "timeout/error" : `HTTP ${weather}`);
-  const ctx7 = await reach("https://context7.com/api");
-  ok("context7", ctx7 !== null, ctx7 !== null ? ctx7 : null, ctx7 === null ? "timeout/error" : `HTTP ${ctx7}`);
+  // Probe the endpoint the code actually calls, not the host's base path.
+  //
+  // reach("https://context7.com/api") answers 404 by design - it is an API host
+  // with no root document - so /status has been reporting Context7 as inactive
+  // while it works. Verified directly: /api/v2/libs/search and /api/v2/context
+  // both answer 200 with real results. Every other row in this block probes a
+  // concrete endpoint (api.e2b.app/sandboxes, api.github.com/repos/..., the
+  // open-meteo forecast), so context7 was the only one measuring the wrong
+  // thing, and the only capability in the list whose status was a false negative.
+  const ctx7 = await reach("https://context7.com/api/v2/libs/search?query=react");
+  ok("context7", ctx7 !== null && ctx7 < 400, ctx7,
+    ctx7 === null ? "timeout/error" : `HTTP ${ctx7}${ctx7 >= 400 ? " (endpoint salah)" : ""}`);
   const polli = await reach("https://image.pollinations.ai/");
   ok("pollinations", polli !== null, polli !== null ? polli : null, polli === null ? "timeout/error" : `HTTP ${polli}`);
 

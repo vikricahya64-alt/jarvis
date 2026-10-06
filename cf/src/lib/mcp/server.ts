@@ -23,6 +23,7 @@ import type { Env } from "../db";
 import { searchMemory, rememberMemorySmart } from "../db";
 import { processIntelligence } from "../intelligence";
 import { connectorsStatus } from "../vercel";
+import { answerGrounded } from "../grounded_answer";
 import {
   MCP_SERVER_VERSION,
   MCP_MEMORY_TYPES,
@@ -74,9 +75,28 @@ export function buildJarvisMcpServer(env: Env): McpServer {
       if (!text) return toolError("Parameter 'text' wajib diisi.");
       if (text.length > MCP_ASK_TEXT_CAP) return toolError(MCP_ASK_TEXT_CAP_MSG);
       try {
-        const reply = await processIntelligence(env, owner, text);
+        // Same door as a Telegram message. This called processIntelligence,
+        // which is the OLD route: no relevance verification and no context from
+        // Telegram. So the same question could get a verified, context-aware
+        // answer over Telegram and an unverified one over MCP - two paths to the
+        // same capability that disagree, which is exactly the class of defect
+        // that produced the original topic drift.
+        const result = await answerGrounded(env, owner, text, undefined);
+        if (!result) {
+          return toolError("Tidak bisa menyusun jawaban dari sumber yang tersedia.");
+        }
+        if (!result.verified?.ok) {
+          return toolError(
+            `Jawaban ditolak oleh pemeriksa: ${result.verified?.reason || "tidak menjawab pertanyaan"}`,
+          );
+        }
+        if (result.verified.kind === "command" && result.verified.command) {
+          return toolError(
+            `Pesan itu-perintah, bukan pertanyaan. Jalankan sebagai perintah: ${result.verified.command}`,
+          );
+        }
         return {
-          content: [{ type: "text", text: (reply?.text ?? "(tanpa balasan)").slice(0, 6000) }],
+          content: [{ type: "text", text: (result.text || "(tanpa balasan)").slice(0, 6000) }],
         };
       } catch (e) {
         return toolError(`Otak gagal: ${shortErr(e)}`);

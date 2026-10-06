@@ -1255,7 +1255,13 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
       await fire(sendMessage(env, r, out));
       return new Response("ok", { status: 200 });
     }
-    await env.CONFIG_KV.put(`kota:${r}`, city).catch(() => {/* best-effort */});
+    // Every other CONFIG_KV write in this codebase sets a TTL. This one did not,
+    // so each saved city became a permanent key - an unbounded storage
+    // commitment that outlived any reason to keep it. A year is long enough
+    // that a real preference never disappears mid-use, and short enough that an
+    // abandoned one eventually goes.
+    await env.CONFIG_KV.put(`kota:${r}`, city, { expirationTtl: 31_536_000 })
+      .catch(() => {/* best-effort */});
     await fire(sendMessage(env, r, `✅ Kota disimpan: *${city}*\n${out}`));
     return new Response("ok", { status: 200 });
   }
