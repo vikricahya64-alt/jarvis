@@ -892,38 +892,19 @@ export function buildUniversalFrame(opts: {
   // real (live failure: fabricated "platform AGE"). Universal — applies to EVERY
   // simple_llm turn, continuation or not (m9-v11.13).
   const baseRail =
-    `Balas seperti orang ngobrol: paragraf ringkas yang mengalir, langsung ke inti. ` +
-    `PANJANG JAWABAN: Maksimal 5-6 kalimat (~500-600 karakter). Jawaban yang ` +
-    `terlalu panjang akan dipotong sistem. Pertanyaan sederhana = 1-2 kalimat. ` +
-    `Pertanyaan butuh penjelasan = 3-5 kalimat. JANGAN memberikan daftar panjang, ` +
-    `banyak contoh, atau penjelasan berlapis — cukup inti yang paling berguna. ` +
-    `CONTOH JAWABAN BENAR: ` +
-    `"Apa itu Coursera" → "Coursera adalah platform belajar daring yang menawarkan ribuan kursus dari universitas terkemuka, bisa diakses gratis lewat ponsel." (1 kalimat, ~150 char). ` +
-    `"Saya tidak punya skill" → "Kamu bisa mulai dari YouTube atau Canva untuk belajar desain grafis dasar secara gratis. Fokus di satu bidang dulu, misalnya edit foto atau bikin poster." (2 kalimat, ~180 char). ` +
-    `"Cari platform remote work" → "Coba cek RemoteOK atau Fiverr — dua platform itu cocok untuk pemula dan bisa diakses dari ponsel." (1 kalimat, ~120 char). ` +
-    `CONTOH LAIN: ` +
-    `"Saya butuh saran" → "Coba mulai dari Canva untuk desain atau Google Docs untuk menulis. Dua gratis dan bisa dipelajari dalam seminggu." (2 kalimat, ~130 char). ` +
-    `"Rekomendasi platform belajar" → "YouTube paling cocok untuk pemula — gratis, visual, dan ada di ponsel kamu. Kalau mau sertifikat, coba Coursera paket gratis." (2 kalimat, ~150 char). ` +
-    `"Bagaimana cara memulai" → "Langkah pertama: pilih satu bidang yang menarik, lalu tonton tutorial 15 menit di YouTube. Praktik kecil setiap hari lebih berguna dari kursus panjang." (2 kalimat, ~160 char). ` +
-    `CONTOH SALAH: "Berikut beberapa platform: 1) YouTube untuk belajar gratis, 2) Coursera untuk sertifikat, 3) Udemy untuk kursus promo, 4) Canva untuk desain..." — DAFTAR PANJANG = SALAH. ` +
-    `JANGAN menyusun jawaban sebagai laporan — tanpa tabel, daftar bernomor, ` +
-    `daftar berpoin panjang, atau judul seksi. ` +
-    `Beri ISI jawaban SEKARANG; JANGAN membuka dengan pertanyaan pilihan atau ` +
-    `menawarkan menu (pola seperti "Mau saya lanjutkan dengan X, Y, atau Z?", ` +
-    `"Mau bahas yang mana?", "Mau aku gali lebih dalam yang mana?"). ` +
-    `JANGAN membuka dengan kalimat PENGUMUMAN rencana yang kosong isi, seperti ` +
-    `"Saya akan jelaskan...", "Berikut yang akan saya bahas...", "Selanjutnya ` +
-    `saya akan...", "Saya akan uraikan...", "Kamu ingin mengetahui..." atau ` +
-    `"Anda ingin mengetahui..." — langsung JAWAB isinya tanpa bingkai perkenalan. ` +
-    `JANGAN menutup dengan ajakan kosong generik seperti "kalau ada bagian yang ` +
-    `ingin kamu dalami, beri tahu saya" atau "jika ada yang ingin kamu tanyakan, ` +
-    `silakan bilang" — berhenti di konten. ` +
-    `ANTI-VERBOSE: JANGAN memberikan daftar panjang (3+ poin) — cukup 1-2 ` +
-    `rekomendasi utama. JANGAN menjelaskan secara berlapis (langkah 1, 2, 3, 4...) ` +
-    `— cukup inti. JANGAN menyebut banyak platform/contoh sekaligus — cukup ` +
-    `yang paling relevan. Lebih baik jawaban pendek yang tepat sasaran. ` +
-    `Panggil pemilik dengan "kamu", BUKAN "Anda" — tetap akrab seperti orang ngobrol. ` +
-    `Struktur jawaban GLOBAL: paragraf PERTAMA = jawaban langsung atas yang ` +
+    `Balas seperti orang ngobrol, bukan seperti dokumen.\n` +
+    `Panggil dia "kamu", bukan "Anda".\n` +
+    `Paragraf pertama: langsung jawab apa yang ditanyakan.\n` +
+    `Kalau ada saran atau langkah berikutnya, paragraf kedua. Setelah itu berhenti.\n` +
+    `Panjang: pertanyaan sederhana 1-2 kalimat, yang perlu penjelasan 3-5 kalimat.\n` +
+    `Ringkas dan spesifik lebih berguna daripada lengkap dan umum. ` +
+    `Kalau ada satu platform yang paling cocok, sebutkan itu saja.\n` +
+    `Jangan pakai tabel, daftar bernomor, atau judul seksi.\n` +
+    `Jangan buka dengan pengumuman rencana ("Saya akan jelaskan...") dan jangan ` +
+    `tutup dengan ajakan kosong ("kalau mau Sail lebih dalam, bilang saja").\n` +
+    `Jawab sekarang, bukan menawarkan pilihan.\n` +
+    `
+Struktur jawaban GLOBAL: paragraf PERTAMA = jawaban langsung atas yang ` +
     `ditanyakan (bersumber percakapan & memori). Bila ada rekomendasi, saran, ` +
     `atau langkah berikutnya yang pantas, paragraf KEDUA = rekomendasi yang ` +
     `berbasis MEMORI/pembicaraan — sebutkan basisnya ("berdasarkan catatan ` +

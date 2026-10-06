@@ -138,9 +138,7 @@ export interface Verdict {
  * starts rejecting correct answers.
  */
 const VERIFIER_PROMPT = (input: string, draft: string, subject: string) =>
-  `You do two things about a draft reply, in one pass.
-
-USER MESSAGE:
+  `USER MESSAGE:
 """
 ${input}
 """
@@ -150,52 +148,32 @@ DRAFT REPLY:
 ${draft}
 """
 
-The subject under discussion: ${subject || "(not established yet)"}
+Subject: ${subject || "(none yet)"}
 
 Reply with EXACTLY four lines and nothing else.
 
 LINE 1: PASS or FAIL
-  PASS only if the draft addresses what the user actually sent AND reads like
-  something a person would say out loud.
-
-  REGISTER IS PART OF PASSING. Indonesian users are talking to an assistant,
-  not reading a paper. Fail the draft if it is written in academic or
-  report register - for example "merujuk pada", "memiliki fungsi penting dalam",
-  "berdasarkan hasil penelitian", "pada dasarnya", "dapat disimpulkan bahwa",
-  "merupakan suatu bentuk dari". Plain everyday Indonesian is required:
-  short sentences, everyday words, no defined-term phrasing. Being thorough is
-  fine; sounding like a textbook is not. FAIL if it is
-  about a different subject, ignores an explicit correction, or substitutes a
-  different question. Do not fail for style, length, tone, formatting, detail
-  missing on a topic it did answer, or claims you cannot verify - you are
-  checking relevance and readability, not truth.
-
-  Also FAIL if the draft carries research apparatus meant for a paper rather
-  than a chat message: bracketed citation markers, source tags, footnote
-  numbering, or a bare URL list. Cite nothing inline.
+  PASS if the draft answers what the user actually asked, in ordinary spoken
+  Indonesian - the way a helpful person would say it out loud, not like a
+  report. FAIL if the draft is about something else, ignores a correction the
+  user made, or answers a different question than the one sent.
+  Ignore length, tone, formatting and detail level. Judge the answer, not the
+  writing.
 
 LINE 2: PLAIN, RESEARCH or COMMAND
-  CLASSIFY THE QUESTION, NOT THE DRAFT. The kind is a property of what the user
-  asked, and the draft is not evidence of it. A draft that confidently states a
-  live figure from memory ("bitcoin is around X") does NOT make the question
-  PLAIN - asking for today's price is RESEARCH even when the draft looks like
-  settled fact. Judge only the question on LINE 1.
+  Classify the QUESTION on LINE 1, never the draft. A draft that states today's
+  price from memory does not make the question general knowledge.
+  PLAIN    - answerable from general knowledge; the draft is the reply.
+  RESEARCH - needs live or current data: today's values, recent events.
+  COMMAND  - the user wants JARVIS to DO something.
+  A question asking what a word MEANS is PLAIN, however many sources the draft
+  quotes.
 
-  PLAIN    - the user is asking something answerable from general knowledge;
-             the draft IS the reply to send.
-  RESEARCH - the QUESTION needs retrieved sources: live values, today's prices,
-             recent events, specific current figures, anything where being wrong
-             matters. A question about the MEANING of a word is never RESEARCH,
-             however much the draft quotes sources.
-  COMMAND  - the user is asking JARVIS to DO something (create, delete, run,
-             schedule, fetch and store). Being ABOUT a risky topic is PLAIN, not
-             COMMAND: "which is better, forex trading or a money changer" is a
-             PLAIN question even though trading is risky.
+LINE 3: if COMMAND, the slash command to run, otherwise NONE
 
-LINE 3: if COMMAND, the slash command to run (for example /tugas ...), otherwise NONE
+LINE 4: if FAIL, one short sentence on what the draft answered instead.
+Otherwise NONE`;
 
-LINE 4: if FAIL, one short sentence naming what the draft answered INSTEAD of
-what was asked. Otherwise NONE`;
 
 export async function verifyAnswer(
   env: Env,
