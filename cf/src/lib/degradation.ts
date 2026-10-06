@@ -57,7 +57,10 @@ function safeParseFeatures(raw: string): string[] {
 }
 
 /** Update quota snapshot dan perbarui daftar fitur yang dinonaktifkan */
-export async function updateQuotaSnapshot(env: Env, owner: number): Promise<{ disabledFeatures: string[] }> {
+export async function updateQuotaSnapshot(
+  env: Env,
+  owner: number,
+): Promise<{ disabledFeatures: string[]; changed: boolean }> {
   const now = Date.now();
   const usagePct = await calculateUsagePercent(env);
   const remainingPct = Math.max(0, 100 - usagePct);
@@ -92,15 +95,34 @@ export async function updateQuotaSnapshot(env: Env, owner: number): Promise<{ di
     owner, usagePct, remainingPct, JSON.stringify(disabled), now,
   ).run();
 
-  // Kirim notifikasi pemilik jika ada perubahan
-  if (disabled.length > 0) {
+  // Alert on TRANSITION, not on state.
+  //
+  // This ran whenever `disabled.length > 0`, so with a 5-minute cadence it
+  // would write ~288 identical rows a day and, once the owner is notified at
+  // all, spam them identically. What the owner needs to know is that the set
+  // CHANGED. Compare against what was stored and return the transition so the
+  // caller can act on it.
+  const previous = await env.DB.prepare(
+    "SELECT disabled_features FROM degradation_state WHERE owner_id = ?",
+  ).bind(owner).first<{ disabled_features: string }>();
+  const before = safeParseFeatures(previous?.disabled_features ?? "[]");
+  const changed = before.length !== disabled.length
+    || before.some((f) => !disabled.includes(f));
+
+  if (changed && disabled.length > 0) {
     await env.DB.prepare(
       `INSERT INTO degradation_alerts (owner_id, message, created_at)
        VALUES (?, ?, ?)`,
     ).bind(owner, `⚠️ Fitur non-esensial ditangguhkan: ${disabled.join(", ")}`, now).run();
   }
+  if (changed) {
+    console.log(
+      `[degradation] owner=${owner} remaining=${remainingPct.toFixed(1)}% ` +
+      `disabled ${before.length ? before.join(",") : "(none)"} -> ${disabled.length ? disabled.join(",") : "(none)"}`,
+    );
+  }
 
-  return { disabledFeatures: disabled };
+  return { disabledFeatures: disabled, changed };
 }
 
 /** Hitung penggunaan kuota saat ini (contoh: dms + obedience + auto tasks) */

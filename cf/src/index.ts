@@ -19,7 +19,6 @@ import { runDms } from "./daemons/dead_mans_switch";
 
 import { covenantHash } from "./lib/covenant_core";
 import { createEpoch, markEpochVerified } from "./lib/identity_anchor";
-import { refreshQuotaSnapshot as monitorRefresh } from "./lib/monitor";
 import { ddgSearch } from "./lib/ai";
 import { acquireCronLock, releaseCronLock } from "./lib/resilience";
 import { generateMorningBriefing, runEvolutionLoop, runInsightLifecycle } from "./lib/evolution";
@@ -40,6 +39,7 @@ import { routeCommand } from "./lib/command_hierarchy";
 import { goWasmActive, goNormalizeOrTs, goNormalizeLinkOrTs } from "./lib/go_wasm";
 import { normalize } from "./lib/moderation";
 import { normalizeLinkForCompare } from "./lib/verifier";
+import { refreshQuotaSnapshot as monitorRefresh } from "./lib/monitor";
 
 const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
 const WORKER_URL = "https://jarvis-sovereign.vikricahya64.workers.dev";
