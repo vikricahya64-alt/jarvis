@@ -850,7 +850,9 @@ async function openAICompatRespond(
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
     const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
-    if (!raw) return { ok: false, status: res.status };
+    // HTTP 200 with a blank body: provider is healthy, model returned
+    // nothing usable. Soft fail - must not charge the circuit breaker.
+    if (!raw) return { ok: false, status: res.status, softFail: true };
     reply = data.choices?.[0]?.finish_reason === "length" ? repairTruncatedReply(raw) : isLikelyTruncated(raw) ? repairTruncatedReply(raw) : raw;
     void trackTokenUsage(
       env, cfg.provider,
@@ -982,7 +984,7 @@ export async function geminiRespond(
       if (!res.ok) return { ok: false, status: res.status };
       const data = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>; usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number } };
       const content = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
-      if (!content) return { ok: false, status: res.status };
+      if (!content) return { ok: false, status: res.status, softFail: true };
       reply = data.candidates?.[0]?.finishReason === "MAX_TOKENS" ? repairTruncatedReply(content) : isLikelyTruncated(content) ? repairTruncatedReply(content) : content;
       void trackTokenUsage(
         env, "gemini",
@@ -1123,7 +1125,7 @@ export async function antigravityRespond(
       if (!res.ok) return { ok: false, status: res.status };
       const data = (await res.json()) as Record<string, unknown>;
       const out = extractInteractionText(data);
-      if (!out) return { ok: false, status: res.status };
+      if (!out) return { ok: false, status: res.status, softFail: true };
       reply = isLikelyTruncated(out) ? repairTruncatedReply(out) : out;
       const usage = (typeof data.usage === "object" && data.usage !== null ? data.usage : {}) as Record<string, unknown>;
       const total = typeof usage.total_tokens === "number" ? (usage.total_tokens as number)

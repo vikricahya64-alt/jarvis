@@ -233,7 +233,7 @@ export async function withResilience(
   env: Env,
   provider: string,
   step: number,
-  fn: (timeoutMs: number, attempt: number) => Promise<{ ok: boolean; status: number }>,
+  fn: (timeoutMs: number, attempt: number) => Promise<{ ok: boolean; status: number; softFail?: boolean }>,
 ): Promise<boolean> {
   const start = Date.now();
   const state = await getBreakerState(env, provider);
@@ -248,10 +248,12 @@ export async function withResilience(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const attemptStart = Date.now();
     let ok = false;
+    let softFail = false;
     try {
       const r = await fn(timeoutMs, attempt);
       ok = r.ok;
       lastStatus = r.status;
+      softFail = r.softFail === true;
     } catch {
       ok = false;
       lastStatus = 0; // network abort/timeout
@@ -268,8 +270,14 @@ export async function withResilience(
       await new Promise((resolve) => setTimeout(resolve, backoffMs(attempt)));
       continue;
     }
-    await recordFailure(env, provider);
-    await logRequest(env, provider, "fail", latency, step, `status=${lastStatus}`);
+    // An empty completion is the provider answering HEALTHILY with nothing
+    // usable (HTTP 200, blank body). That says nothing about availability, so
+    // it must not be charged to the circuit breaker: it used to be, which meant
+    // a working provider got ejected from the cascade after enough blank
+    // replies, and the only trace was a misleading "fail status=200" row.
+    if (!softFail) await recordFailure(env, provider);
+    await logRequest(env, provider, "fail", latency, step,
+      softFail ? `empty_completion status=${lastStatus}` : `status=${lastStatus}`);
     return false;
   }
   return false;

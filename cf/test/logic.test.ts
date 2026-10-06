@@ -9,6 +9,7 @@
 //=====================================================================
 
 import assert from "node:assert";
+import { withResilience } from "../src/lib/resilience";
 import { normalizeInput, isEmptyInput, GREETING_RE } from "../src/lib/normalize";
 import { isTranslateCapRequest, matchWebhookPreCapability, capabilityIntent, getCapability, approachForIntent, describeCapabilities } from "../src/lib/capability_registry";
 import { isFollowUpQuery, formatSourceList, resolveFollowUpAnchor, isPureContinuation, tidyContinuation, extractTopic, topicOverlaps, parseTranslate, trackTokenUsage, detectConfusableTopic, extractInteractionText } from "../src/lib/ai";
@@ -2789,6 +2790,83 @@ async function testEmotionDominant() {
   assert.strictEqual(decideAnswerMode(sadP, "masalah saya kacau"), "clarify", "emotion dominant → clarify");
 }
 
+
+/**
+ * An empty completion must not be charged to the circuit breaker.
+ *
+ * openAICompatRespond (shared by groq, openrouter and nvidia_nim) returns
+ * {ok:false, status:200} when the HTTP call succeeds but the body has no
+ * usable content. That used to flow into recordFailure(), so a provider that
+ * was answering perfectly could be ejected from the cascade purely by models
+ * that return blank completions - and the only evidence was a "fail
+ * status=200" row, which reads like a transport fault rather than an empty
+ * answer. A softFail marks the difference without hiding the event.
+ */
+async function testEmptyCompletionDoesNotTripBreaker() {
+  const health = new Map<string, { state: string; failures: number; cooldown_until: number }>();
+
+  // Minimal D1 double: enough for recordFailure/recordSuccess/getBreakerState.
+  const env: any = {
+    KV: undefined,
+    DB: {
+      prepare(sql: string) {
+        const isSelect = /SELECT failures/.test(sql);
+        const isOpen = /'open'/.test(sql);
+        return {
+          bind(...args: any[]) {
+            const provider = String(args[0]);
+            const rec = () => health.get(provider) ?? { state: "closed", failures: 0, cooldown_until: 0 };
+            const self = {
+              run: async () => {
+                if (isSelect) return;
+                // recordSuccess hard-codes the reset in SQL ("VALUES (?,'closed',0,0,0)")
+                // and binds only the provider, so the counters are literals there
+                // rather than bound params. Mirror that instead of reading args[1].
+                const failures = args.length >= 2 ? args[1] : 0;
+                const cooldown = args.length >= 4 ? args[3] : 0;
+                health.set(provider, {
+                  state: isOpen ? "open" : "closed",
+                  failures,
+                  cooldown_until: cooldown,
+                });
+              },
+              first: async () => {
+                const r = rec();
+                return { failures: r.failures, cooldown_until: r.cooldown_until };
+              },
+            };
+            return self;
+          },
+        };
+      },
+    },
+  };
+
+  const P = "test_openrouter";
+  const alwaysEmpty = async () => ({ ok: false, status: 200, softFail: true });
+
+  // Far more empty completions than the breaker threshold.
+  for (let i = 0; i < 12; i++) await withResilience(env, P, 0, alwaysEmpty);
+
+  const after = health.get(P) ?? { state: "closed", failures: 0 };
+  assert.strictEqual(after.failures, 0,
+    "empty completions must not increment breaker failures");
+  assert.notStrictEqual(after.state, "open",
+    "a provider answering 200 with a blank body must not be ejected by the breaker");
+
+  // A real transport failure still counts, or the fix would disable the breaker.
+  await withResilience(env, P, 0, async () => ({ ok: false, status: 503 }));
+  const hard = health.get(P) ?? { failures: 0 };
+  assert.ok(hard.failures > 0,
+    "a genuine HTTP failure must still be charged to the breaker");
+
+  // And a success resets the counter.
+  await withResilience(env, P, 0, async () => ({ ok: true, status: 200 }));
+  const done = health.get(P) ?? { failures: -1 };
+  assert.strictEqual(done.failures, 0, "a success must reset the failure count");
+  assert.strictEqual(done.state, "closed", "a success must close the breaker");
+}
+
 async function main() {
   testSlangExpansion();
   testTypoTolerance();
@@ -2867,6 +2945,7 @@ async function main() {
   await testContextCompression();
   await testResponseHardCap();
   await testEmotionDominant();
+  await testEmptyCompletionDoesNotTripBreaker();
   console.log("LOGIC TESTS PASSED");
 }
 
