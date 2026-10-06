@@ -393,7 +393,14 @@ export async function emitSmartReply(
   }
 
   auditOut("brain", chatId, "brain", (first ?? "").length);
-  await transportDeliverSmartReply(
+  // Delivery is the last step of a long chain - gated answers, a splitter, a KV
+  // write. A throw anywhere in it meant the user saw NOTHING at all, with no
+  // error and no explanation: observed live as a question that was answered
+  // (pipeline verdict true) and then never delivered. A plain fallback line is
+  // strictly better than silence, so the send can never be the thing that fails
+  // silently.
+  try {
+    await transportDeliverSmartReply(
     env,
     chatId,
     rest.length > 0
@@ -401,6 +408,11 @@ export async function emitSmartReply(
       : first,
     retryDelayMs,
   );
+  } catch (e) {
+    console.error("[telegram_gate] delivery failed", (e as Error)?.message ?? String(e));
+    await transportSendMessage(env, chatId, first)
+      .catch(() => undefined);
+  }
 }
 
 /** Outbound photo delivery (imagegen results). Caption is deterministic —
