@@ -128,8 +128,20 @@ function hash(s: string): string {
  * "hapus semua tugas?" cannot dodge the guard by adding a question mark. The
  * constitutional guard, CLARIFY and CONSENT branches are untouched.
  */
-const INTERROGATIVE =
-  /\?\s*$|^\s*(apa|apakah|kenapa|mengapa|siapa|kapan|dimana|di mana|berapa|mana|banding(kan)?|sebutkan|jelaskan|ceritakan|uraikan)\b/i;
+/**
+ * Interrogative by SHAPE, not by subject. Comparative questions carry neither a
+ * front interrogative word nor a question mark: "Lebih baik mana dalam segi
+ * inflasi perdagangan forex dan money charger" starts with "Lebih baik". Missing
+ * that case is what let the constitutional guard's `money` keyword block a plain
+ * comparison question as a financial ACTION.
+ */
+const INTERROGATIVE = new RegExp(
+  "(\\?\\s*$)" +
+  "|^\\s*(apa|apakah|kenapa|mengapa|siapa|kapan|dimana|di mana|berapa|mana|" +
+  "banding(kan)?|sebutkan|jelaskan|ceritakan|uraikan)\\b" +
+  "|\\b(lebih\\s+baik|mana\\s+(yang|antara|lebih)|mana\\s+lebih)\\b",
+  "i",
+);
 const DESTRUCTIVE_HINT =
   /\b(hapus|hapusin|hapush|bersihkan|buang|delete|remove|wipe|reset|batalkan)\b/i;
 const SLASH_COMMAND = /^\s*\//;

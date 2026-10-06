@@ -1941,7 +1941,37 @@ async function testTriStateGates() {
   assert.strictEqual(classifyInsightStability(0.2), "deny");
   assert.strictEqual(classifyInsightStability(0.5), "unknown", "zona tengah → tunggu bukti");
 
-  console.log("  tri-state gate contract OK");
+  
+/**
+ * Retrieval must not gate the ANSWER.
+ *
+ * I had made a grounded reply depend on a successful keyless search, which
+ * capped the bot's reliability to scraped HTML endpoints. Live measurements:
+ * DDG alternates 10 hits / HTTP 202 challenge across identical requests, and
+ * Bing's parse goes empty under repeat load, while every LLM provider's breaker
+ * sits closed with zero failures. A question with three usable sources was
+ * answered with silence, and the empty result fell through to the constitutional
+ * guard, which blocked it as a financial action because the sentence contained
+ * the word "money" (from "money changer").
+ *
+ * This asserts the dependency is gone rather than the behaviour it produced:
+ * answerGrounded must not bail out when retrieval returns nothing.
+ */
+{
+  const src = readFileSync(new URL("../src/lib/grounded_answer.ts", import.meta.url), "utf-8");
+  const fn = src.slice(src.indexOf("export async function answerGrounded"));
+  const body = fn.slice(0, fn.indexOf("\n}\n"));
+  assert.ok(
+    !/retrieval\.hits\.length\s*===\s*0[\s\S]{0,400}?return null/.test(body),
+    "answerGrounded must not return null when retrieval is empty - search grounds the answer, it does not gate it",
+  );
+  assert.ok(
+    /Tidak ada hasil pencarian/.test(src),
+    "the composer must be told when there is no evidence, so it answers without inventing citations",
+  );
+}
+
+console.log("  tri-state gate contract OK");
 }
 
 async function testIntentGate() {

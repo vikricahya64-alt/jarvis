@@ -33,6 +33,10 @@ import { runRecoveryLoop } from "./lib/recovery_loop";
 import { handleMcpRequest } from "./lib/mcp/server";
 import { probeProviders } from "./lib/providers";
 import { probeBorrowedPlatforms, keylessSearchReport } from "./lib/borrowed";
+import { retrieveKeyless } from "./lib/keyless_search";
+import { resolveTelegramContext } from "./lib/telegram_context";
+import { answerGrounded } from "./lib/grounded_answer";
+import { routeCommand } from "./lib/command_hierarchy";
 import { goWasmActive, goNormalizeOrTs, goNormalizeLinkOrTs } from "./lib/go_wasm";
 import { normalize } from "./lib/moderation";
 import { normalizeLinkForCompare } from "./lib/verifier";
@@ -401,6 +405,55 @@ version: "m9-v11.52",
     // challenge looks healthy to a status probe, and an Instant Answer API can
     // return 200 with an empty knowledge graph. Deciding whether answers can be
     // grounded without a search API key needs parsed-result counts per layer.
+    // /pipeline_diag - runs the answering pipeline for a given text and reports
+    // every stage, WITHOUT sending anything to Telegram.
+    //
+    // Added because a free-text question was refused with "Aksi ini saya tunda
+    // dulu" and the only visible signal was the constitutional guard blocking it
+    // downstream. That hid the real fault: the pipeline returned null before
+    // ever calling a provider, and there was no way to see which stage gave up.
+    if (path === "/pipeline_diag") {
+      if (!authed) return respond(new Response("unauthorized", { status: 401 }));
+      const url = new URL(request.url);
+      const text = url.searchParams.get("text") ?? "apa itu inflasi";
+      const stage: Record<string, unknown> = { text };
+
+      try {
+        const ctx = await resolveTelegramContext(env, 6812604983, text, undefined);
+        stage.context = { kind: ctx.kind, topic: ctx.topic, reason: ctx.reason };
+      } catch (e) {
+        stage.contextError = (e as Error).message;
+      }
+
+      try {
+        const r = await retrieveKeyless(text);
+        stage.retrieval = { used: r.used, hits: r.hits.length, sample: r.hits.slice(0, 2).map((h) => h.title) };
+      } catch (e) {
+        stage.retrievalError = (e as Error).message;
+      }
+
+      try {
+        const res = await answerGrounded(env, 6812604983, text, undefined);
+        stage.answer = res
+          ? { verdict: res.verified?.ok, kind: res.verified?.kind, command: res.verified?.command,
+              sources: res.sources, answeredBy: res.answeredBy, verifier: res.verified?.verifier,
+              replyChars: res.text?.length ?? 0, reason: res.verified?.reason }
+          : null;
+      } catch (e) {
+        stage.answerError = (e as Error).message;
+      }
+
+      // And what the compliance pipeline would decide, for contrast.
+      try {
+        const rc = await routeCommand(env, 6812604983, text);
+        stage.routeCommand = { action: rc.decision.action, reason: rc.decision.reason };
+      } catch (e) {
+        stage.routeError = (e as Error).message;
+      }
+
+      return respond(Response.json(stage));
+    }
+
     if (path === "/search_diag") {
       if (!authed) return respond(new Response("unauthorized", { status: 401 }));
       const url = new URL(request.url);

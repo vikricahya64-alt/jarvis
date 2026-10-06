@@ -22,8 +22,7 @@ import { withResilience, fetchWithTimeout } from "../lib/resilience";
 import { synthesizeSpeech } from "../lib/tts";
 import {
   routeCommand, markExplicitStop, setAutonomyPaused, isAutonomyPaused, redact,
-  setPrivacyMode, isPrivacyMode,
-} from "../lib/command_hierarchy";
+  setPrivacyMode, isPrivacyMode, isInterrogativeRequest } from "../lib/command_hierarchy";
 import { checkIn, runDms } from "../daemons/dead_mans_switch";
 import { queueStatus, recordTaskCounters, recentContext, auditIntegrity } from "../lib/db";
 import { comprehend, comprehensionNote } from "../lib/comprehension";
@@ -1331,9 +1330,19 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   try {
     const handled = await runBrain(env, r, text, replyTextOf(msg));
     if (!handled) {
-      // No grounded answer available. Only then fall back to the compliance
-      // pipeline, so capabilities and existing behaviour are still reachable.
-      await act(env, r, text);
+      // No grounded answer available.
+      if (isInterrogativeRequest(text)) {
+        // A question that could not be grounded must NOT be handed to the
+        // compliance pipeline: the constitutional guard scores TOPIC keywords,
+        // so a question mentioning money was blocked as a financial ACTION and
+        // the user got "Aksi ini saya tunda dulu" for a comparison question.
+        await fire(sendMessage(env, r,
+          `Saya belum bisa menjawab itu dengan sumber yang bisa dipercaya.`));
+      } else {
+        // Command-shaped input keeps the full compliance path, so capabilities
+        // and existing behaviour stay reachable.
+        await act(env, r, text);
+      }
     }
   } catch (e) {
     console.error("[webhook] pipeline threw:", (e as Error).message);

@@ -18,6 +18,7 @@
  */
 import assert from "node:assert/strict";
 import { verifyAnswer, answerAndVerify, pickResponderForTest } from "../src/lib/answer_roles";
+import { isInterrogativeRequest } from "../src/lib/command_hierarchy";
 
 /** Records every provider call so tests can prove which role ran. */
 function stubProviders(env: any, scripts: Record<string, string[]>) {
@@ -186,6 +187,26 @@ async function main() {
     const v = await verifyAnswerWithLines(env, "x", "y", "PASS", []);
     assert.strictEqual(v.kind, "question", "an unreadable kind must not become a command");
     assert.strictEqual(v.command, "");
+  }
+
+
+  // --- 9. The production case: a comparative question is interrogative -----
+  //
+  // It has no front interrogative word and no question mark. When it was
+  // classified as command-shaped it fell through to the compliance pipeline,
+  // where the constitutional guard's "money" keyword (from "money changer")
+  // blocked it as a financial ACTION and the user got "Aksi ini saya tunda
+  // dulu" - four times, to a plain comparison question.
+  {
+    const t = "Lebih baik mana dalam segi inflasi perdagangan forex dan money charger";
+    assert.strictEqual(isInterrogativeRequest(t), true,
+      "comparative questions must be interrogative even without '?'");
+    // The exemptions must still hold: a destructive action dressed as a
+    // question must not buy its way past the guard.
+    assert.strictEqual(isInterrogativeRequest("hapus semua tugas pending?"), false,
+      "a destructive action with a question mark is still a command");
+    assert.strictEqual(isInterrogativeRequest("/hapus semua"), false,
+      "an explicit slash command is never interrogative");
   }
 
   console.log("  role separation, fail-closed verifier, single repair, no unverified shipping OK");
