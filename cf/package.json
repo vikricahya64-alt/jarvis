@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit",
     "test:safety": "npx tsx test/safety.test.ts",
     "test:moderation": "npx tsx test/moderation.test.ts",
+    "test:menu": "npx tsx test/telegram_menu.test.ts",
     "test:logic": "npx tsx test/logic.test.ts",
     "test:mcp": "npx tsx test/mcp.test.ts",
     "db:migrate": "wrangler d1 migrations apply jarvis",

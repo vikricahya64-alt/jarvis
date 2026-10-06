@@ -419,8 +419,15 @@ export async function setMyCommands(env: { TELEGRAM_TOKEN?: string }): Promise<b
     { command: "status", description: "Cek kesehatan J.A.R.V.I.S." },
   ];
   try {
+    // call() returns data.result, not data. For setMyCommands the result is
+    // the bare boolean true, so reading an `ok` field off it gave
+    // `undefined ?? false` => this reported failure on EVERY call, even when
+    // Telegram had accepted the menu. ensureTelegramCommands() therefore never
+    // wrote its marker and the bot ran with an empty command menu. call()
+    // already throws when the response is not ok, so reaching here is success;
+    // assert the documented shape rather than inventing a field.
     const res = await call(env, "setMyCommands", { commands });
-    return Boolean((res as { ok?: boolean })?.ok ?? false);
+    return res === true;
   } catch {
     return false;
   }
