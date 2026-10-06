@@ -17,7 +17,7 @@ import {
   createOrder, listOrders, getOrder, updateOrderStatus, salesReport,
   type Order, type OrderInput,
 } from "../lib/db";
-import { emitText as sendMessage, emitSmartReply as deliverSmartReply, emitPhoto as sendPhoto, emitVoice as sendVoice, emitAnswer as answerCallbackQuery, emitEditMarkup as editMessageReplyMarkup, getWebhookInfo, setWebhook, TelegramUpdate, TelegramMessage, downloadTelegramFile } from "../lib/telegram_gate";
+import { emitText as sendMessage, emitSmartReply as deliverSmartReply, emitPhoto as sendPhoto, emitVoice as sendVoice, emitAnswer as answerCallbackQuery, emitEditMarkup as editMessageReplyMarkup, isContinuationWord, servePendingReply, getWebhookInfo, setWebhook, TelegramUpdate, TelegramMessage, downloadTelegramFile } from "../lib/telegram_gate";
 import { withResilience, fetchWithTimeout } from "../lib/resilience";
 import { synthesizeSpeech } from "../lib/tts";
 import {
@@ -1358,6 +1358,19 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
   // regex and could defer a plain comparative question as a risky action, which
   // is how "which is better, forex trading or a money changer" came to be
   // answered "Aksi ini saya tunda dulu" four times.
+  // "lanjut" is a control word, not a question. It must never reach the
+  // pipeline: retrieval on the bare word is meaningless, the draft cannot
+  // answer it, and the verifier correctly rejects - which is why it used to
+  // produce "I can't answer that with a source I trust". It is served from the
+  // remainder stored when the answer was split.
+  if (isContinuationWord(text)) {
+    const served = await servePendingReply(env, r);
+    if (!served) {
+      await fire(sendMessage(env, r, "Tidak ada bagian yang tertunda. Tanya dulu ya."));
+    }
+    return new Response("ok", { status: 200 });
+  }
+
   try {
     const handled = await runBrain(env, r, text, replyTextOf(msg));
     if (!handled) {

@@ -44,6 +44,8 @@ jobs:
         run: npm run test:ctx
       - name: Two-model answer/verify gate
         run: npm run test:twomodel
+      - name: Answer continuation
+        run: npm run test:continuation
       - name: Go/wasm module (parity + size budget)
         run: npm run test:go
 

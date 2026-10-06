@@ -274,7 +274,7 @@ function auditOut(kind: string, chatId: number | string, source: string, len: nu
   console.log(`[telegram_gate] OUT kind=${kind} chat=${chatId} src=${source} len=${len}`);
 }
 
-type EnvLike = { TELEGRAM_TOKEN?: string };
+type EnvLike = { TELEGRAM_TOKEN?: string; CONFIG_KV?: KVNamespace };
 
 /** Single outbound door for deterministic text notifications (cron, agent,
  *  DMS, diagnostics, media captions, plain replies). Audited; no LLM rail
@@ -296,6 +296,43 @@ export async function emitText(
  *  (empty-subject re-gate + memory-citation scrub + output gate scoring)
  *  BEFORE the transport so a confirmation reply is never delivered by mistake.
  *  inputTopic: opsional, topik dari pesan input (untuk output gate). */
+/**
+ * Split a full answer into parts that each fit RESPONSE_HARD_CAP, cutting only
+ * at sentence boundaries so no part ends mid-word.
+ *
+ * Returns every part, not just the first. The previous version returned a
+ * clipped string and told the user to type "lanjut" - but nothing stored the
+ * rest, so that word could only ever produce a refusal. The promise was
+ * unbacked. This returns the remainder so it can actually be kept.
+ */
+export function splitForTelegram(text: string): string[] {
+  const t = (text ?? "").trim();
+  if (!t) return [];
+  if (t.length <= RESPONSE_HARD_CAP) return [t];
+
+  const parts: string[] = [];
+  let rest = t;
+  while (rest.length > RESPONSE_HARD_CAP) {
+    const cut = findLastSentenceBoundary(rest, RESPONSE_HARD_CAP);
+    // A boundary that yields no progress would loop forever; fall back to a
+    // hard cut rather than spinning on text with no sentence punctuation.
+    if (cut <= 0) {
+      parts.push(rest.slice(0, RESPONSE_HARD_CAP).trim());
+      rest = rest.slice(RESPONSE_HARD_CAP);
+      continue;
+    }
+    parts.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) parts.push(rest);
+  return parts.filter((p) => p.length > 0);
+}
+
+/** Key holding the not-yet-delivered remainder of an answer, per chat. */
+export function pendingReplyKey(chatId: number): string {
+  return `pending_reply:${chatId}`;
+}
+
 export async function emitSmartReply(
   env: EnvLike,
   chatId: number,
@@ -304,8 +341,36 @@ export async function emitSmartReply(
   inputTopic?: string,
 ): Promise<void> {
   const safe = brainExitRail(text, inputTopic);
-  auditOut("brain", chatId, "brain", (safe ?? "").length);
-  await transportDeliverSmartReply(env, chatId, safe, retryDelayMs);
+
+  // brainExitRail clips to the cap. Re-split the ORIGINAL text so the remainder
+  // is kept rather than discarded - that is what makes "lanjut" deliverable.
+  const parts = splitForTelegram(safe).length > 1
+    ? splitForTelegram(safe)
+    : splitForTelegram(text ?? "");
+  const first = parts[0] ?? safe;
+  const rest = parts.slice(1);
+
+  if (rest.length > 0 && env.CONFIG_KV) {
+    // Stored with a TTL so an abandoned answer expires instead of resurfacing
+    // hours later as a stale fragment.
+    await env.CONFIG_KV.put(pendingReplyKey(chatId), JSON.stringify(rest), {
+      expirationTtl: 600,
+    }).catch(() => undefined);
+  } else if (env.CONFIG_KV) {
+    // Nothing outstanding: clear any stale remainder so "lanjut" cannot deliver
+    // text that belongs to an older exchange.
+    await env.CONFIG_KV.delete(pendingReplyKey(chatId)).catch(() => undefined);
+  }
+
+  auditOut("brain", chatId, "brain", (first ?? "").length);
+  await transportDeliverSmartReply(
+    env,
+    chatId,
+    rest.length > 0
+      ? `${first}\n\n\ud83d\udccc Lanjut ketik "lanjut" untuk bagian berikutnya.`
+      : first,
+    retryDelayMs,
+  );
 }
 
 /** Outbound photo delivery (imagegen results). Caption is deterministic —
@@ -356,3 +421,52 @@ export async function emitEditMarkup(
 // ---------------------------------------------------------------------
 
 export { setWebhook, setMyCommands, getWebhookInfo, getMe, downloadTelegramFile, stripTelegramMarkdown };
+/**
+ * True only for a bare continuation word. Anything longer is a real message
+ * and must go to the pipeline - this is a control word, not a heuristic.
+ */
+export function isContinuationWord(text: string): boolean {
+  // Only a bare control word, optionally with politeness particles. Free
+  // trailing words are NOT accepted: "lanjutin ya bang" is a sentence the user
+  // actually wrote, and swallowing it would eat a real message.
+  return /^(lanjut|lajut|lanjutin|lanjutkan|teruskan|terus|selengkapnya|sambungkan|sambung|continue|next|lagi)[.!?…]*$|^(lanjut|lajut|lanjutin|lanjutkan|teruskan|terus|selengkapnya|sambung|continue|next|lagi)(\s+(dong|ya|yuk|deh|tolong|aja|sih|pls|please))*[.!?…]*$/i.test(
+    (text ?? "").trim(),
+  );
+}
+
+/**
+ * Deliver the next stored part of an answer. Returns false when nothing is
+ * outstanding. Each call consumes one part and keeps the rest for the next.
+ */
+export async function servePendingReply(
+  env: EnvLike,
+  chatId: number,
+): Promise<boolean> {
+  const raw = await env.CONFIG_KV?.get(pendingReplyKey(chatId));
+  if (!raw) return false;
+  let parts: string[];
+  try {
+    parts = JSON.parse(raw) as string[];
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(parts) || parts.length === 0) return false;
+
+  const next = parts[0];
+  const remaining = parts.slice(1);
+  if (remaining.length > 0) {
+    await env.CONFIG_KV!.put(pendingReplyKey(chatId), JSON.stringify(remaining), {
+      expirationTtl: 600,
+    }).catch(() => undefined);
+  } else {
+    await env.CONFIG_KV!.delete(pendingReplyKey(chatId)).catch(() => undefined);
+  }
+  await transportDeliverSmartReply(
+    env,
+    chatId,
+    remaining.length > 0
+      ? `${next}\n\n\ud83d\udccc Lanjut ketik "lanjut" untuk bagian berikutnya.`
+      : next,
+  );
+  return true;
+}

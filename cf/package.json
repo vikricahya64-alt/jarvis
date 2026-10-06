@@ -17,7 +17,8 @@
     "test:go:fixtures": "tsx scripts/gen_go_fixtures.ts",
     "build:go": "bash scripts/build_go_wasm.sh",
     "test:ctx": "npx tsx test/telegram_context.test.ts",
-    "test:twomodel": "npx tsx test/two_model.test.ts"
+    "test:twomodel": "npx tsx test/two_model.test.ts",
+    "test:continuation": "tsx test/continuation.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.1.0",
