@@ -51,6 +51,10 @@ jobs:
           cache-dependency-path: cf/package-lock.json
 
       - name: Install dependencies
+        # The lockfile lives in cf/, so npm must run there. Running it at the
+        # repo root fails every time with no package-lock.json - which is what
+        # happened every night until this was actually dispatched once.
+        working-directory: cf
         run: npm ci
 
       - name: Export D1
@@ -120,6 +124,18 @@ jobs:
 
           if [ ! -s "$OUT" ]; then
             echo "::error::export produced an empty file" >&2
+            exit 1
+          fi
+          # Silent-zero guard. A dump full of null tables is non-empty on disk,
+          # so the -s check above passes it - but it restores to nothing. If every
+          # table failed to export (auth, transient D1 error, wrangler drift),
+          # this commits an empty backup that looks healthy every single night.
+          # That is the exact failure that hid the delegation bug for a month.
+          ROWS="$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(sum(len(v) for v in d['tables'].values() if v is not None))" "$OUT")"
+          FAILED="$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(sum(1 for v in d['tables'].values() if v is None))" "$OUT")"
+          echo "  rows=$ROWS failed_tables=$FAILED"
+          if [ "$ROWS" -eq 0 ]; then
+            echo "::error::export contains 0 rows across all tables (failed=$FAILED) - refusing to commit an empty backup" >&2
             exit 1
           fi
 
