@@ -39,6 +39,13 @@ concurrency:
   # mid-deploy can leave the project pointed at a half-built deployment.
   cancel-in-progress: false
 
+env:
+  # Pinned deliberately. vercel@latest made every deploy pull whatever was newest
+  # that day, so a green run was not reproducible and a bad release could break
+  # production deploys with no change on our side. Verified against the version
+  # this workflow was last passing with.
+  VERCEL_CLI_VERSION: 62.7.0
+
 jobs:
   deploy:
     name: vercel pull + build + deploy
@@ -80,7 +87,7 @@ jobs:
       - name: Pull environment
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: npx --yes vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
+        run: npx --yes vercel@${{ env.VERCEL_CLI_VERSION }} pull --yes --environment=production --token="$VERCEL_TOKEN"
 
       # Vercel's Python runtime builds dependencies with uv and refuses to
       # start without it: "Error: uv is required but was not found in PATH."
@@ -96,14 +103,14 @@ jobs:
       - name: Build
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: npx --yes vercel@latest build --prod --token="$VERCEL_TOKEN"
+        run: npx --yes vercel@${{ env.VERCEL_CLI_VERSION }} build --prod --token="$VERCEL_TOKEN"
 
       - name: Deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
-        run: npx --yes vercel@latest deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+        run: npx --yes vercel@${{ env.VERCEL_CLI_VERSION }} deploy --prebuilt --prod --token="$VERCEL_TOKEN"
 
       # Prove the deployment actually answers, and that the endpoints which
       # previously had no authentication at all are refused.
