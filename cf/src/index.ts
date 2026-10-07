@@ -763,6 +763,14 @@ version: "m9-v11.52",
         console.log(`[cron] error_loop: scanned=${healResult.scanned} diagnosed=${healResult.diagnosed} fixes=${healResult.fixGenerated} (${Date.now() - start}ms)`);
         const safetyResult = await runDeploySafetyLoop(env);
         console.log(`[cron] deploy_safety: health=${safetyResult.health.healthScore} reverted=${safetyResult.autoReverted} patterns=${safetyResult.patternsDetected} (${Date.now() - start}ms)`);
+        // failStaleAgentTasks existed but was only reachable from
+        // /cron/trigger?mode=autonomy, which nothing calls automatically, so a
+        // task that started and never reported back stayed 'running' forever -
+        // task 36 was found stuck that way. It is wired to the schedule here.
+        const staleTasks = await failStaleAgentTasks(env);
+        if (staleTasks > 0) {
+          console.log(`[cron] agent_stale: failed ${staleTasks} stuck task(s)`);
+        }
         const recoveryResult = await runRecoveryLoop(env, OWNER(env));
         console.log(`[cron] recovery: patterns=${recoveryResult.patternsDetected} auto_fixed=${recoveryResult.fixesApplied} manual=${recoveryResult.manualNeeded} (${Date.now() - start}ms)`);
       } else if (cron === "0 3 * * *") {
