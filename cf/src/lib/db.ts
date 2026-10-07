@@ -1126,40 +1126,6 @@ export async function listBorrowedAgentTasks(env: Env, limit = 6): Promise<Agent
  *  Called on dispatch SUCCESS regardless of whether GitHub returned a run id
  *  (dispatches API returns 204 without one), so a wedged runner can't leave
  *  the task silently "pending" forever (M6 stale-cleanup hole). */
-/**
- * Fail tasks that started and never reported back.
- *
- * Observed in production: task 36 sat at status 'running' indefinitely. The
- * runner marks a task running before dispatching, and only /agent/done ever
- * moves it back - so if the run dies, is cancelled, or 404s before reporting,
- * the row stays 'running' forever. Nothing reads it, nothing warns, and
- * "/tugas lanjut" cannot restart it because markAgentTaskRunning only fires on
- * 'pending'. One dead run becomes a permanently stuck task.
- *
- * Terminal only: a task young enough to still be working is never touched.
- */
-export async function reapStuckAgentTasks(
-  env: Env,
-  maxAgeMs = 45 * 60 * 1000,
-): Promise<number> {
-  try {
-    const cutoff = Date.now() - maxAgeMs;
-    const res = await env.DB.prepare(
-      `UPDATE agent_tasks
-          SET status = 'failed',
-              error = COALESCE(error, '') ||
-                'dihentikan otomatis: tidak ada laporan balik setelah 45 menit',
-              finished_at = ?
-        WHERE status = 'running'
-          AND started_at IS NOT NULL
-          AND started_at < ?`,
-    ).bind(Date.now(), cutoff).run();
-    return Number(res.meta?.changes ?? 0);
-  } catch {
-    return 0;
-  }
-}
-
 export async function markAgentTaskRunning(env: Env, id: number, runId = ""): Promise<void> {
   try {
     await env.DB.prepare(
@@ -1218,9 +1184,16 @@ export async function failStaleAgentTasks(env: Env, timeoutMs = 30 * 60 * 1000):
   try {
     const cutoff = Date.now() - timeoutMs;
     const { meta } = await env.DB.prepare(
+      // COALESCE(started_at, created_at): a running row whose started_at is
+      // NULL would match nothing at all and become permanently immortal. Task
+      // 36 was observed in exactly that state - status 'running', started_at
+      // NULL - so the reaper skipped it forever. Falling back to created_at
+      // cannot fail a young task (created_at is only older than the window
+      // once the task really is stale) and does not assume why started_at is
+      // missing. A row with no start time is stale by any clock.
       `UPDATE agent_tasks SET status = 'failed',
          error = ?, finished_at = ?
-       WHERE (status = 'running' AND started_at IS NOT NULL AND started_at < ?)
+       WHERE (status = 'running' AND COALESCE(started_at, created_at) < ?)
           OR (status = 'pending' AND created_at < ?)`,
     ).bind(
       `executor timeout (no report within ${Math.round(timeoutMs / 60000)} menit)`,
