@@ -122,6 +122,26 @@ export const cmdAlias = (trimmed: string, ...names: string[]): boolean => {
 export const isBareUnknownSlashCmd = (trimmed: string): boolean =>
   /^\/[a-z][a-z0-9_]*(?:-[a-z0-9_]+)?$/i.test(trimmed);
 
+/** Underscore-insensitive match for /mark_stop | /never, args optional.
+ *  Outbound replies pass stripTelegramMarkdown (drops lone underscores), so
+ *  the owner sees and types "/markstop". The router MUST use this — a raw
+ *  startsWith("/mark_stop") sent that spelling to "Perintah tidak dikenal".
+ *  Exported so tests pin the contract (see testSlashUnderscoreTolerance). */
+export const isMarkStopCommand = (trimmed: string): boolean =>
+  /^\/(markstop|never)(?=\s|$)/.test(trimmed.replace(/_/g, ""));
+
+/** Rule phrase for a matched mark-stop turn ("" when bare → usage reply). */
+export const markStopPhrase = (rawText: string): string =>
+  rawText.replace(/^\/(mark_?stop|never)(?=\s|$)\s*/i, "").trim();
+
+/** Underscore-insensitive match for /covenant_sign (same sanitizer cause). */
+export const isCovenantSignCommand = (trimmed: string): boolean =>
+  trimmed === "/covenant_sign" || trimmed === "/covenantsign";
+
+/** Clause for a matched covenant-sign turn ("" when bare → usage reply). */
+export const covenantSignClause = (rawText: string): string =>
+  rawText.replace(/^\/covenant_?sign\s*/i, "").trim();
+
 /** Fire-and-forget Telegram call: never throw so a downstream Telegram outage
  *  can't turn into a 5xx that makes Telegram retry the whole webhook (retry
  *  storm budget burn). Logs and continues. */
@@ -652,8 +672,13 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     return new Response("ok", { status: 200 });
   }
   // Persist explicit 'never/stop' rule (mark_explicit_stop parity).
-  if (trimmed.startsWith("/mark_stop") || trimmed.startsWith("/never ")) {
-    const phrase = rawText.replace(/^\/(mark_stop|never)\s+/i, "").trim();
+  // Underscore-insensitive: every outbound message passes stripTelegramMarkdown,
+  // which drops lone underscores, so the owner SEES "/markstop" for the
+  // advertised "/mark_stop" and types it back — the raw startsWith above sent
+  // that straight to "Perintah tidak dikenal" (same class as the /aidiag
+  // dead-end). Bare forms fall through to the usage reply, never unknown.
+  if (isMarkStopCommand(trimmed)) {
+    const phrase = markStopPhrase(rawText);
     if (phrase) {
       await markExplicitStop(env, r, phrase, true);
       await fire(sendMessage(env, r, `🛑 Aturan "never" disimpan: \`${phrase.slice(0, 120)}\`\nAutonomous akan memblokir aksi serupa.`));
@@ -689,8 +714,12 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     await safeDBReply(env, r, () => covenantStatusText(env));
     return new Response("ok", { status: 200 });
   }
-  if (trimmed === "/covenant_sign") {
-    const clause = rawText.replace(/^\/covenant_sign\s+/i, "").trim();
+  // Underscore-insensitive like /mark_stop above: the usage reply renders
+  // "/covenant_sign" through stripTelegramMarkdown, which drops the lone
+  // underscore, so the owner types "/covenantsign" and the exact match below
+  // used to answer "Perintah tidak dikenal".
+  if (isCovenantSignCommand(trimmed)) {
+    const clause = covenantSignClause(rawText);
     if (!clause) {
       await fire(sendMessage(env, r,
         "Gunakan: /covenant_sign <klausa>\nKlausa ditandatangani immutable (INSERT-only, tak bisa diubah)."));

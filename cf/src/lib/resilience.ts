@@ -209,7 +209,13 @@ export async function releaseCronLock(env: Env, lockName: string, token?: string
  *  Cheap-mode sampling: failures (the expensive-to-miss signal) are ALWAYS
  *  persisted; successes are written 1-in-EVERY_N so the table stays small and
  *  the daily write budget doesn't grow linearly with every LLM call. */
-const REQUEST_LOG_SAMPLE_RATE = 10; // 1-in-N successes
+/**
+ * 1-in-N successes are persisted (failures always). Exported so READERS of
+ * request_log (deploy_safety health math) scale sampled successes back up
+ * instead of dividing by a ~10x-undercounted denominator. If this changes,
+ * every rate computed from the table must change with it.
+ */
+export const REQUEST_LOG_SAMPLE_RATE = 10;
 export async function logRequest(
   env: Env,
   provider: string,

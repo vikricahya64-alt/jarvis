@@ -22,7 +22,7 @@ import { isContext7Request, context7FailureMessage, lookupLibraryDocs } from "..
 import { gatherSuggestionCandidates, URGENCY_THRESHOLD, MAX_OFFER_BATCH, feedbackMultipliers, FEEDBACK_MIN_MULT, FEEDBACK_NEUTRAL } from "../src/lib/predictive";
 import { behaviorAffinity, parseReflection, BEHAVIOR_AFFINITY_MIN, BEHAVIOR_AFFINITY_NEUTRAL, BEHAVIOR_HALF_LIFE_DAYS } from "../src/lib/evolution";
 import { normForMatch, todoDeleteKey, deleteTodoByText, salesReport } from "../src/lib/db";
-import { isBareTodoVerb, parseReminder, tidyVisionReply } from "../src/workers/telegram_webhook";
+import { isBareTodoVerb, parseReminder, tidyVisionReply, isMarkStopCommand, markStopPhrase, isCovenantSignCommand, covenantSignClause } from "../src/workers/telegram_webhook";
 import { emitSmartReply as deliverSmartReply, brainExitRail } from "../src/lib/telegram_gate";
 import { detectTopicContinuity } from "../src/lib/context_manager";
 import { cleanLLMArtifacts, proseifyResearch, buildFinalReply } from "../src/lib/response_formatter";
@@ -251,6 +251,83 @@ async function testBriefingFailureHonesty() {
   const st = await statusReport(mockEnv, false);
   assert.ok(st.includes("Kegagalan terminal (24h):") && st.includes("7"),
     "/status surfaces the same terminal count, not a static 'sehat'");
+}
+
+async function testSlashUnderscoreTolerance() {
+  // Proven live: stripTelegramMarkdown drops lone underscores, so the owner
+  // SEES "/markstop" for the advertised "/mark_stop" and "/covenantsign" for
+  // "/covenant_sign" — and the router answered "Perintah tidak dikenal" (same
+  // class as the /aidiag dead-end). The router must accept both spellings;
+  // glued lookalikes must still fall through to unknown-command.
+  for (const ok of ["/mark_stop jangan kirim berita", "/markstop jangan kirim berita",
+    "/mark_stop", "/markstop", "/never", "/never kirim berita malam"]) {
+    assert.strictEqual(isMarkStopCommand(ok), true, `"${ok}" routes to mark-stop`);
+  }
+  for (const no of ["/nevermore", "/markstopfoo", "/markstopper x", "/status", "/mark"]) {
+    assert.strictEqual(isMarkStopCommand(no), false, `"${no}" must not route to mark-stop`);
+  }
+  assert.strictEqual(markStopPhrase("/mark_stop jangan kirim berita"), "jangan kirim berita", "phrase kept verbatim");
+  assert.strictEqual(markStopPhrase("/markstop jangan kirim berita"), "jangan kirim berita", "no-underscore spelling extracts too");
+  assert.strictEqual(markStopPhrase("/mark_stop"), "", "bare → usage reply, not a saved '/mark_stop' rule");
+  assert.strictEqual(markStopPhrase("/never"), "", "bare /never → usage reply");
+
+  assert.strictEqual(isCovenantSignCommand("/covenant_sign"), true, "canonical spelling routes");
+  assert.strictEqual(isCovenantSignCommand("/covenantsign"), true, "sanitized spelling routes");
+  assert.strictEqual(isCovenantSignCommand("/covenantsignx"), false, "glued lookalike falls through");
+  assert.strictEqual(covenantSignClause("/covenantsign klausa uji"), "klausa uji", "clause extracted");
+  assert.strictEqual(covenantSignClause("/covenant_sign"), "", "bare → usage reply");
+}
+
+async function testDeploySafetyRateHonesty() {
+  // Proven live 2026-10-06/07: an openrouter outage measured 0.90–1.00 error
+  // rate per 30-min slot against the 0.15 revert threshold. The math divided
+  // raw rows, but request_log persists ALL failures and only 1-in-10
+  // successes (plus one row per retried attempt), so the denominator was
+  // ~10x undercounted. The gate must correct for the write contract — and
+  // must still fire on a true outage (safety not neutered).
+  const { getVersionHealth, checkAutoRevert } = await import("../src/lib/deploy_safety");
+  const { REQUEST_LOG_SAMPLE_RATE } = await import("../src/lib/resilience");
+  assert.strictEqual(REQUEST_LOG_SAMPLE_RATE, 10, "reader and writer share one sampling constant");
+
+  const firstFor = async (sql: string, termFails: number, oks: number) => {
+    if (sql.includes("deploy_versions")) {
+      return { version: "v9", deployed_at: Date.now(), deployed_by: "t", error_rate: 0, status: "active", notes: "" };
+    }
+    if (sql.includes("request_log")) return { term_fails: termFails, oks };
+    return null; // recovery_actions: no cooldown
+  };
+  const mockEnv = (termFails: number, oks: number): any => ({
+    DB: {
+      // Note: some readers call .first() with no .bind() (getActiveVersion),
+      // so the statement exposes first/all/run both directly and via bind.
+      prepare: (sql: string) => ({
+        bind: (..._a: unknown[]) => ({
+          run: async () => ({ meta: { changes: 0 } }),
+          all: async () => ({ results: [] }),
+          first: () => firstFor(sql, termFails, oks),
+        }),
+        run: async () => ({ meta: { changes: 0 } }),
+        all: async () => ({ results: [] }),
+        first: () => firstFor(sql, termFails, oks),
+      }),
+    },
+  });
+
+  // Case B — retry storm on mostly-healthy traffic: 5 terminal fails buried
+  // under 80 recovered-retry rows, 10 sampled successes. Raw-row math read
+  // (5+80)/(85+10) ≈ 0.89 → false REVERT_NEEDED. Corrected: 5/(5+10*10).
+  const calm = await getVersionHealth(mockEnv(5, 10));
+  assert.ok(Math.abs(calm.errorRate - 5 / 105) < 1e-9, `retry rows excluded, oks rescaled (got ${calm.errorRate})`);
+  const calmVerdict = await checkAutoRevert(mockEnv(5, 10));
+  assert.strictEqual(calmVerdict?.shouldRevert, false, "healthy traffic → no revert advisory");
+  assert.strictEqual(calmVerdict?.verdict, "allow", "verdict allow, not unknown");
+
+  // Case C — true outage: 90 terminal fails, 1 sampled success. Still denies.
+  const bad = await getVersionHealth(mockEnv(90, 1));
+  assert.ok(bad.errorRate > 0.15, `true outage still reads hot (got ${bad.errorRate})`);
+  const badVerdict = await checkAutoRevert(mockEnv(90, 1));
+  assert.strictEqual(badVerdict?.shouldRevert, true, "true outage → revert advisory fires");
+  assert.strictEqual(badVerdict?.verdict, "deny", "verdict deny carries the reason");
 }
 
 async function testPredictiveUrgencyRanking() {
@@ -3039,6 +3116,8 @@ async function main() {
   await testRelevancePersistence();
   await testAgentExecutorRails();
   await testBriefingFailureHonesty();
+  await testSlashUnderscoreTolerance();
+  await testDeploySafetyRateHonesty();
   await testE2bRails();
   await testE2bExecutorRails();
   await testBorrowedRails();

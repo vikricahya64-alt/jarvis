@@ -18,6 +18,7 @@
 //=====================================================================
 
 import { Env } from "./db";
+import { REQUEST_LOG_SAMPLE_RATE } from "./resilience";
 import { type Gate } from "./verdict";
 
 /** Tracked deployment version. */
@@ -193,23 +194,29 @@ export async function getVersionHealth(env: Env): Promise<VersionHealth> {
     const active = await getActiveVersion(env);
     if (!active) return defaultHealth;
 
-    // Request + failure counts in window — BOTH from request_log so the
-    // numerator and denominator come from the same sampled population.
-    // (Previously errors came from system_errors while successes were sampled
-    // 1-in-10 from request_log, inflating the perceived rate ~10x and making
-    // the auto-revert advisory fire on healthy traffic.)
+    // Failure rate in window, corrected for request_log's write contract
+    // (resilience.logRequest): failures are persisted ALWAYS while successes
+    // are sampled 1-in-REQUEST_LOG_SAMPLE_RATE — so fails/(fails+oks) on raw
+    // rows overstates the true rate ~10x, and recovered retries (note
+    // 'retry:%', one row per attempt) inflate the numerator on top. Proven
+    // live 2026-10-06/07: an openrouter outage measured 0.90–1.00 per 30-min
+    // slot against a 0.15 revert threshold, yet no revert was warranted
+    // (transient upstream, breaker recovered on its own). Terminal failures
+    // only, sampled successes scaled back up by the same constant the
+    // writer uses.
     const reqs = await env.DB.prepare(
       `SELECT
-         COUNT(*) AS count,
-         SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) AS fails
+         SUM(CASE WHEN status = 'fail' AND note NOT LIKE 'retry:%' THEN 1 ELSE 0 END) AS term_fails,
+         SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS oks
        FROM request_log WHERE ts >= ?`,
-    ).bind(windowStart).first<{ count: number; fails: number | null }>();
+    ).bind(windowStart).first<{ term_fails: number | null; oks: number | null }>();
 
     // request_log might not exist (or be empty this early): fall back to a
     // neutral estimate instead of a fabricated nonzero error rate.
-    const hasData = (reqs?.count ?? 0) > 0;
-    const requestCount = hasData ? (reqs?.count ?? 0) : 0;
-    const errorCount = hasData ? (reqs?.fails ?? 0) : 0;
+    const termFails = reqs?.term_fails ?? 0;
+    const sampledOk = reqs?.oks ?? 0;
+    const requestCount = termFails + sampledOk * REQUEST_LOG_SAMPLE_RATE;
+    const errorCount = termFails;
 
     const errorRate = requestCount > 0 ? errorCount / requestCount : 0;
 
