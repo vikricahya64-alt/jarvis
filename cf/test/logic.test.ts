@@ -189,6 +189,70 @@ async function testAgentExecutorRails() {
   }
 }
 
+async function testBriefingFailureHonesty() {
+  // Two live-observed defects, both proven before fixing:
+  // (1) the morning briefing pointed at /aidiag, which was never a registered
+  // command — the owner typed it and got "Perintah tidak dikenal";
+  // (2) the "N kegagalan" count tallied every retried attempt (withResilience
+  // logs one row per attempt), so recovered retries inflated the headline.
+  const { countTerminalFailures } = await import("../src/lib/resilience");
+  const { generateMorningBriefing } = await import("../src/lib/evolution");
+  const { statusReport } = await import("../src/workers/telegram_webhook");
+
+  const seenSql: string[] = [];
+  const db = {
+    prepare: (sql: string) => ({
+      bind: (..._a: unknown[]) => ({
+        run: async () => ({ meta: { changes: 0 } }),
+        all: async () => ({ results: [] }),
+        first: async () => {
+          seenSql.push(sql);
+          if (sql.includes("request_log") && sql.includes("COUNT")) {
+            if (sql.includes("note NOT LIKE")) return { n: 7 };
+            return { count: 100 };
+          }
+          return null;
+        },
+      }),
+    }),
+  };
+  const kvStore = new Map<string, string>();
+  const mockEnv: any = {
+    APP_ENV: "test",
+    OWNER_TELEGRAM_ID: "6812604983",
+    DB: db,
+    CONFIG_KV: {
+      get: async (k: string) => kvStore.get(k) ?? null,
+      put: async (k: string, v: string) => { kvStore.set(k, v); },
+      delete: async (k: string) => { kvStore.delete(k); },
+      list: async () => ({ keys: [] }),
+    },
+  };
+
+  // Helper excludes recovered retries at the SQL layer.
+  const n = await countTerminalFailures(mockEnv, Date.now() - 86_400_000);
+  assert.strictEqual(n, 7, "helper returns the terminal count");
+  assert.ok(seenSql.some((s) => s.includes("note NOT LIKE 'retry")),
+    "retry attempts are excluded in SQL, not filtered afterwards");
+  // DB failure degrades to 0, never throws into the briefing.
+  const dead = await countTerminalFailures({
+    DB: { prepare: () => { throw new Error("d1 down"); } },
+  } as any, 0);
+  assert.strictEqual(dead, 0, "DB outage → 0 failures (fail-closed)");
+
+  // Briefing names a command that exists and uses the honest count.
+  const brief = await generateMorningBriefing(mockEnv, 6812604983);
+  assert.ok(brief, "briefing fires when terminal failures exist");
+  assert.ok(!brief!.includes("aidiag"), "dead /aidiag reference is gone");
+  assert.ok(brief!.includes("7 kegagalan") && brief!.includes("/status"),
+    "briefing shows the terminal count and points at /status");
+
+  // /status is the real inspection point (probes stubbed: APP_ENV=test).
+  const st = await statusReport(mockEnv, false);
+  assert.ok(st.includes("Kegagalan terminal (24h):") && st.includes("7"),
+    "/status surfaces the same terminal count, not a static 'sehat'");
+}
+
 async function testPredictiveUrgencyRanking() {
   // Deterministic ranking: approval (open/expiring proposals) must rank first,
   // followed by the most urgent of (task/insight/preference). All are derived
@@ -2974,6 +3038,7 @@ async function main() {
   testRelevanceGate();
   await testRelevancePersistence();
   await testAgentExecutorRails();
+  await testBriefingFailureHonesty();
   await testE2bRails();
   await testE2bExecutorRails();
   await testBorrowedRails();

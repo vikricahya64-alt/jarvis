@@ -27,6 +27,7 @@
 
 import { Env, statAgentTasksRecent } from "./db";
 import { llmRespond } from "./ai";
+import { countTerminalFailures } from "./resilience";
 import { isAutonomyPaused } from "./command_hierarchy";
 import { BUG_PATTERNS } from "./identity";
 import { type Gate } from "./verdict";
@@ -330,10 +331,13 @@ export async function generateMorningBriefing(env: Env, owner: number): Promise<
   const lines: string[] = [];
   const paused = await isAutonomyPaused(env, owner).catch(() => false);
   try {
-    const errors = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM request_log WHERE status='fail' AND ts >= ?`,
-    ).bind(last24h).first<{ n: number }>();
-    if ((errors?.n ?? 0) > 0) lines.push(`⚠️ ${errors?.n} kegagalan 24 jam terakhir — cek /aidiag.`);
+    // Terminal failures only (recovered retries excluded — see
+    // countTerminalFailures), pointed at a command that exists. The old text
+    // referenced /aidiag, which was never a registered command: the owner
+    // typed it and got "Perintah tidak dikenal", a dead end on top of an
+    // inflated count.
+    const failures = await countTerminalFailures(env, last24h);
+    if (failures > 0) lines.push(`⚠️ ${failures} kegagalan 24 jam terakhir — cek /status.`);
 
     const driftReport = await generateDriftReport(env);
     if (driftReport) lines.push(driftReport);

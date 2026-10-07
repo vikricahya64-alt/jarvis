@@ -227,6 +227,28 @@ export async function logRequest(
   } catch { /* best-effort */ }
 }
 
+/**
+ * Terminal failure count since `sinceMs` — the failures the owner felt.
+ *
+ * withResilience logs one row per ATTEMPT, so a single flaky call recovered
+ * on retry leaves `retry:N` rows that never surfaced. Counting those as
+ * "kegagalan" inflated the morning briefing (owner saw "89 kegagalan" for
+ * events that mostly healed themselves) with no way to inspect them. The
+ * only writer is logRequest above; its fail-note taxonomy is `breaker:open`
+ * and `retry:N …` (intermediate) vs `status:X` / `empty_completion …`
+ * (terminal). `note` is NOT NULL DEFAULT '' (mig 0006), so no NULL guard.
+ */
+export async function countTerminalFailures(env: Env, sinceMs: number): Promise<number> {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM request_log WHERE status='fail' AND ts >= ? AND note NOT LIKE 'retry:%'`,
+    ).bind(sinceMs).first<{ n: number }>();
+    return Number(row?.n ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
 /** Wrapped provider call with retry + breaker + timeout + observability.
  *  fn(attempt) performs one raw attempt and returns { ok, status }. */
 export async function withResilience(

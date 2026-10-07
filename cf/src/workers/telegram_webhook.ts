@@ -18,7 +18,7 @@ import {
   type Order, type OrderInput,
 } from "../lib/db";
 import { emitText as sendMessage, emitSmartReply as deliverSmartReply, emitPhoto as sendPhoto, emitVoice as sendVoice, emitAnswer as answerCallbackQuery, emitEditMarkup as editMessageReplyMarkup, isContinuationWord, servePendingReply, getWebhookInfo, setWebhook, TelegramUpdate, TelegramMessage, downloadTelegramFile } from "../lib/telegram_gate";
-import { withResilience, fetchWithTimeout } from "../lib/resilience";
+import { withResilience, fetchWithTimeout, countTerminalFailures } from "../lib/resilience";
 import { synthesizeSpeech } from "../lib/tts";
 import {
   routeCommand, markExplicitStop, setAutonomyPaused, isAutonomyPaused, redact,
@@ -2196,7 +2196,7 @@ async function understandMedia(env: Env, owner: number, msg: TelegramMessage): P
 }
 
 /** Compose the /status reply (static health + live provider probe). */
-async function statusReport(env: Env, paused: boolean): Promise<string> {
+export async function statusReport(env: Env, paused: boolean): Promise<string> {
   const lines = [
     `📊 *Status J.A.R.V.I.S.*`,
     ``,
@@ -2215,6 +2215,12 @@ async function statusReport(env: Env, paused: boolean): Promise<string> {
       lines.push(`📈 *Requests (24h):* ${reqCount.count}`);
       lines.push(``);
     }
+    // Same terminal-failure predicate the morning briefing uses, so /status
+    // is the real inspection point the briefing points at (it used to name
+    // /aidiag, which never existed). Shown always — "0" is information too.
+    const terminalFails = await countTerminalFailures(env, last24h);
+    lines.push(`⚠️ *Kegagalan terminal (24h):* ${terminalFails}`);
+    lines.push(``);
   } catch { /* count optional */ }
   try {
     const probe = await probeProviders(env);
