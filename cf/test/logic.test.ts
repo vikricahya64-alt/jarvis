@@ -140,6 +140,53 @@ async function testAgentExecutorRails() {
   const res = await delegateToGithub(env, 1, long);
   assert.strictEqual(res.truncated, true, "long task → truncated flag surfaced (fail-closed, no network)");
   assert.strictEqual(res.error, "executor-not-configured", "no executor → fail-closed error preserved alongside truncated flag");
+
+  // Dispatch audit observability: production showed zero `dispatch:*` keys in
+  // KV despite tasks that provably dispatched (status 'running' is only set
+  // after delegateToGithub succeeds, and both success paths await the audit).
+  // The old silent `catch {}` made an empty trail undiagnosable. A failed
+  // audit must now leave a log line; dispatch itself must be unaffected.
+  const realFetch = globalThis.fetch;
+  const realConsoleError = console.error;
+  try {
+    (globalThis as any).fetch = async (url: any) =>
+      new Response(null, { status: String(url).includes("/dispatches") ? 204 : 500 });
+    // Case A: KV write throws → dispatch still succeeds, failure is logged.
+    const loggedA: string[] = [];
+    console.error = ((...a: any[]) => { loggedA.push(a.map(String).join(" ")); }) as any;
+    let wroteA: string[] = [];
+    const envAuditFail = {
+      GITHUB_REPO: "o/r",
+      GITHUB_TOKEN: "t",
+      VERCEL_CONNECTOR_URL: "",
+      VERCEL_CONNECTOR_TOKEN: "",
+      CONFIG_KV: { put: async (k: string) => { wroteA.push(k); throw new Error("KV down"); } },
+    };
+    const resA = await delegateToGithub(envAuditFail as any, 42, "tugas audit");
+    assert.strictEqual(resA.error, undefined, "audit failure must never break dispatch");
+    assert.deepStrictEqual(wroteA, ["dispatch:42"], "audit attempted under the dispatch:{id} key");
+    assert.ok(loggedA.some((l) => l.includes("dispatch audit") && l.includes("task=42")),
+      "failed audit leaves a log line with the task id (was silently swallowed)");
+    // Case B: KV write succeeds → record lands, no error logged.
+    const loggedB: string[] = [];
+    console.error = ((...a: any[]) => { loggedB.push(a.map(String).join(" ")); }) as any;
+    const store = new Map<string, string>();
+    const envAuditOk = {
+      GITHUB_REPO: "o/r",
+      GITHUB_TOKEN: "t",
+      VERCEL_CONNECTOR_URL: "",
+      VERCEL_CONNECTOR_TOKEN: "",
+      CONFIG_KV: { put: async (k: string, v: string) => { store.set(k, v); } },
+    };
+    const resB = await delegateToGithub(envAuditOk as any, 43, "tugas audit ok");
+    assert.strictEqual(resB.error, undefined, "dispatch succeeds on the direct path");
+    const rec = JSON.parse(store.get("dispatch:43") ?? "null");
+    assert.strictEqual(rec?.via, "direct", "audit record carries the dispatch path");
+    assert.ok(!loggedB.some((l) => l.includes("dispatch audit")), "successful audit stays silent");
+  } finally {
+    (globalThis as any).fetch = realFetch;
+    console.error = realConsoleError;
+  }
 }
 
 async function testPredictiveUrgencyRanking() {

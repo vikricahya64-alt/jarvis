@@ -174,22 +174,40 @@ async function dispatchViaConnector(
   }
 }
 
-/** Immutable dispatch audit record in KV (gateguard; never breaks dispatch). */
+/**
+ * Immutable dispatch audit record in KV (gateguard; never breaks dispatch).
+ *
+ * Returns true when the record landed, false when it was skipped or the write
+ * failed. Observed in production: zero `dispatch:*` keys existed in KV despite
+ * tasks that provably dispatched (a row can only reach status 'running' after
+ * delegateToGithub reported success, and both success paths await this
+ * function). The previous `catch {}` swallowed the failure with no log and no
+ * return, so an empty audit trail was undiagnosable — which is exactly why the
+ * /agent/done 404 could not be traced to a task_id. A failed audit must leave
+ * a log line (Worker logs) instead of vanishing; dispatch itself is untouched.
+ * Only taskId+via are logged, never task content.
+ */
 async function recordDispatchAudit(
   env: Env,
   taskId: number,
   repo: string,
   task: string,
   via: "connector" | "direct",
-): Promise<void> {
-  if (env.CONFIG_KV) {
-    try {
-      await env.CONFIG_KV.put(
-        `dispatch:${taskId}`,
-        JSON.stringify({ ts: Date.now(), repo, via, task: task.slice(0, 200) }),
-        { expirationTtl: 7 * 86400 },
-      );
-    } catch { /* audit is best-effort */ }
+): Promise<boolean> {
+  if (!env.CONFIG_KV) {
+    console.error(`[delegate] dispatch audit skipped (no CONFIG_KV): task=${taskId} via=${via}`);
+    return false;
+  }
+  try {
+    await env.CONFIG_KV.put(
+      `dispatch:${taskId}`,
+      JSON.stringify({ ts: Date.now(), repo, via, task: task.slice(0, 200) }),
+      { expirationTtl: 7 * 86400 },
+    );
+    return true;
+  } catch (e) {
+    console.error(`[delegate] dispatch audit write failed: task=${taskId} via=${via} err=${String(e).slice(0, 120)}`);
+    return false;
   }
 }
 
