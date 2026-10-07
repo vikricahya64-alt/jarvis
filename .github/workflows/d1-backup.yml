@@ -92,8 +92,16 @@ jobs:
           tables = [r["name"] for r in schema[0]["results"]]
           # An FTS5 virtual table's CREATE statement references modules and
           # shadow tables; skip it and the shadow tables with it.
+          # _cf_KV is Cloudflare's own KV index, not application data. Reading it
+          # is refused by the engine - verified:
+          #   access to _cf_KV.key is prohibited: SQLITE_AUTH [code: 7500]
+          # So it can never be exported and never needed to be. It is excluded
+          # by name so it stops appearing as a failed table and so a failure
+          # count stays a real signal rather than a permanent false positive.
+          INTERNAL = {"_cf_KV"}
           real = [t for t in tables
-                  if not t.endswith("_fts")
+                  if t not in INTERNAL
+                  and not t.endswith("_fts")
                   and not t.endswith("_fts_data")
                   and not t.endswith("_fts_idx")
                   and not t.endswith("_fts_docsize")
@@ -103,6 +111,7 @@ jobs:
             "exported_at": datetime.datetime.utcnow().isoformat() + "Z",
             "method": "per-table JSON (wrangler d1 export is blocked by FTS5)",
             "skipped_virtual": sorted(set(tables) - set(real)),
+            "skipped_internal": sorted(set(tables) & INTERNAL),
             "tables": {},
           }
           for t in real:
