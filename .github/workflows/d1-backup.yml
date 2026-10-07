@@ -146,13 +146,15 @@ jobs:
           # set -e on the very first run - after a successful export, and before
           # LATEST or the commit. That is why run 1 produced 1975 rows and
           # still ended in failure.
-          # Keep the newest 30 dumps. find + -printf is used deliberately: under
-          # `set -o pipefail` a plain `ls ... 2>/dev/null` still exits 2 when the
-          # glob matches nothing, which kills the step via set -e on the first run,
-          # after a successful export and before LATEST or the commit.
+          # Keep the newest 30 dumps. find with -printf is used deliberately:
+          # under pipefail, a plain ls still exits 2 when the glob matches
+          # nothing, which kills the step via set -e on the first run - after a
+          # successful export and before LATEST or the commit.
+          # NOTE: no backticks or nested quotes in these comments. A bash script
+          # body runs command substitution even inside a comment.
           find ../backups/d1 -maxdepth 1 -name 'jarvis-*.json' -printf '%T@ %p\n' > /tmp/bk_listing 2>/dev/null || true
           sort -rn /tmp/bk_listing 2>/dev/null | tail -n +31 | cut -d' ' -f2- | xargs -r rm -f || true
-          printf '%s' "$STAMP" > ../backups/d1/LATEST"
+          printf '%s' "$STAMP" > ../backups/d1/LATEST
 
       - name: Commit the dump
         run: |
