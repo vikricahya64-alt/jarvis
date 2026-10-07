@@ -43,6 +43,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history. With the default shallow clone this workflow cannot
+          # rebase, so once main moves the nightly push is rejected as
+          # non-fast-forward and the backup silently stops being written -
+          # while the export itself still succeeds and looks fine.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -178,4 +184,11 @@ jobs:
           # Not masked: a failed push must be visible, or this backup silently
           # stops existing while the job reports success. That is the same
           # failure mode that hid the delegation bug for a month.
+          # Catch up with main before pushing, so a concurrent commit - another
+          # workflow's artifact commit - cannot reject this push.
+          git fetch origin main --quiet
+          git rebase origin/main --quiet || {
+            echo "::error::could not rebase the nightly dump onto main" >&2
+            exit 1
+          }
           git push origin HEAD:main
