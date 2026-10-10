@@ -11,6 +11,7 @@
     "test:menu": "npx tsx test/telegram_menu.test.ts",
     "test:logic": "npx tsx test/logic.test.ts",
     "test:mcp": "npx tsx test/mcp.test.ts",
+    "test:rig": "npx tsx test/rig-bridge.test.ts",
     "db:migrate": "wrangler d1 migrations apply jarvis",
     "db:local": "wrangler d1 migrations apply jarvis --local",
     "test:go": "bash scripts/build_go_wasm.sh && cd gomod && go test ./...",

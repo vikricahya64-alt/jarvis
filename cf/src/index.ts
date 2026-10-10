@@ -8,10 +8,10 @@
 // the queue consumer, both bounded. All GOTCHA-free, no external SDK.
 //=====================================================================
 
-import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders, getAgentTask, finishAgentTask, listAgentTasks, failStaleAgentTasks, pruneOldAgentTasks, rememberMemory, appendMemory } from "./lib/db";
+import { Env, auditIntegrity, sweepExpiredProposals, obedienceWeekly, violationSummary, sweepExpiredMemories, consolidateMemories, checkDueReminders, getAgentTask, finishAgentTask, listAgentTasks, failStaleAgentTasks, pruneOldAgentTasks, rememberMemory, appendMemory, claimAgentTask } from "./lib/db";
 import { pollE2bAgentRuns } from "./lib/e2b_executor";
 import { pollBorrowedRuns } from "./lib/borrowed_executor";
-import { sanitizeAgentReport, flagAgentReport } from "./lib/agent_executor";
+import { sanitizeAgentReport, flagAgentReport, executorLabel } from "./lib/agent_executor";
 import { fireDueAgentRules } from "./lib/agent_rules";
 import { handleUpdate, ensureWebhook } from "./workers/telegram_webhook";
 import { emitText as sendMessage, setWebhook, getWebhookInfo, getMe, setMyCommands, handleIncoming, registerUpdateRouter } from "./lib/telegram_gate";
@@ -550,10 +550,12 @@ version: "m9-v11.52",
     }
 
     //------------------------------------------------------------------
-    // AGENT executor callbacks (GitHub Actions ↔ worker bridge)
-    // These let JARVIS "borrow" real-world execution from a FREE cloud VM
-    // (opencode headless on a GitHub runner). Auth = AGENT_TOKEN (a shared
-    // secret also stored as a GitHub Actions secret + worker secret).
+    // AGENT executor callbacks (GitHub Actions ↔ worker bridge, plus
+    // rig-bridge ↔ worker polling). These let JARVIS "borrow" real-world
+    // execution from a FREE cloud VM (opencode headless on a GitHub runner)
+    // or a scheduled poller (claimed via /agent/claim).
+    // Auth = AGENT_TOKEN (a shared secret also stored as a GitHub Actions
+    // secret + worker secret + poller config).
     //------------------------------------------------------------------
 
     // /agent/env?key=<ALLOWED> — the workflow fetches the LLM key it needs to
@@ -630,24 +632,25 @@ version: "m9-v11.52",
           }
         }
       }
-      // Best-effort learning: a finished cloud task becomes an episodic memory
+      // Best-effort learning: a finished task becomes an episodic memory
       // so the nightly dream cycle can generalize patterns from real outcomes.
+      const execLabel = executorLabel(task.executor ?? "");
       if (st === "done") {
         const headline = (gatedResult || task.task).replace(/\s+/g, " ").trim().slice(0, 140);
-        await rememberMemory(env, `Eksekusi cloud #${tid} berhasil: ${headline}`, {
+        await rememberMemory(env, `Eksekusi ${execLabel} #${tid} berhasil: ${headline}`, {
           type: "fact", tags: ["agent_task", "executor"], importance: 3, source: "agent_task",
           ownerId: task.owner_id,
         }).catch(() => {});
         // EPISODIC MEMORY: condensed summary for recentContext() recall.
         const core = (gatedResult || "").replace(/\s+/g, " ").trim().slice(0, 300);
         if (core) {
-          const summary = `[Eksekusi cloud] Tugas: ${(task.task ?? "").slice(0, 80)}. Hasil: ${core}${(gatedResult || "").length > 300 ? "…" : ""}`;
+          const summary = `[Eksekusi ${execLabel}] Tugas: ${(task.task ?? "").slice(0, 80)}. Hasil: ${core}${(gatedResult || "").length > 300 ? "…" : ""}`;
           await appendMemory(env, task.owner_id, "assistant", summary, "").catch(() => {});
         }
       }
       const prefix = st === "done"
-        ? `✅ Tugas *#${tid}* selesai (eksekutor cloud)`
-        : `❌ Tugas *#${tid}* gagal di eksekutor cloud`;
+        ? `✅ Tugas *#${tid}* selesai (${execLabel})`
+        : `❌ Tugas *#${tid}* gagal di ${execLabel}`;
       const detail = st === "done"
         ? (gatedResult || "(tanpa output)").slice(0, 2800)
         : (rawError || "-").slice(0, 300).replace(/\s+/g, " ");
@@ -658,6 +661,35 @@ version: "m9-v11.52",
       const text = `${prefix}:\n\n${detail}${artLine}${warnLine}\n(_riwayat: /tugas list_)`;
       await sendMessage(env, task.owner_id, text).catch(() => {});
       return respond(Response.json({ ok: true }));
+    }
+
+    // /agent/claim — EXTERNAL poller (rig-bridge) mengklaim SATU task pending
+    // tertua milik executor tertentu, atomik (pending→running berpagar;
+    // poller yang kalah lomba menerima empty). Auth = AGENT_TOKEN, sama
+    // seperti /agent/done. Executor allowlist ketat: hanya 'rig' — jalur
+    // 'github' tetap push-only via repository_dispatch.
+    if (path === "/agent/claim") {
+      const tok = url.searchParams.get("token") ?? request.headers.get("x-agent-token") ?? "";
+      if (!env.AGENT_TOKEN || tok !== env.AGENT_TOKEN) {
+        return respond(new Response("unauthorized", { status: 401 }));
+      }
+      if (method !== "POST") return respond(new Response("POST only", { status: 405 }));
+      let executor = "rig";
+      let runId = "";
+      try {
+        const body = (await request.json()) as { executor?: string; run_id?: string };
+        if (typeof body?.executor === "string" && body.executor.trim()) executor = body.executor.trim();
+        if (typeof body?.run_id === "string") runId = body.run_id.slice(0, 120);
+      } catch {
+        return respond(new Response("bad json", { status: 400 }));
+      }
+      if (executor !== "rig") return respond(new Response("unknown executor", { status: 400 }));
+      const claimed = await claimAgentTask(env, executor, runId);
+      if (!claimed) return respond(Response.json({ ok: true, empty: true }));
+      return respond(Response.json({
+        ok: true,
+        task: { id: claimed.id, task: claimed.task, owner_id: claimed.owner_id, run_id: claimed.run_id },
+      }));
     }
 
     // /agent/list?token=... — task statuses (used by /tugas list + manual ops).

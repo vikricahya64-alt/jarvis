@@ -1,0 +1,67 @@
+# =====================================================================
+# rig-bridge-poll.yml — poller /tugas TANPA mesin lokal.
+#
+# Tiap 15 menit (atau manual via workflow_dispatch), SATU runner ephemeral:
+#   1. claim SATU task pending (executor='rig') via POST /agent/claim
+#      (atomik di worker — runner yang kalah lomba menerima empty:true),
+#   2. eksekusi headless dengan opencode (persis runner jarvis-delegate),
+#   3. lapor via POST /agent/done → worker DM owner.
+#
+# Repo PUBLIC → Actions minutes UNLIMITED & FREE (lihat jarvis-delegate.yml).
+# Idle run hanya checkout+node+claim (puluhan detik). Tidak ada artifact
+# commit (hindari push-race antar runner) — hasil inline ≤60KB via /agent/done.
+#
+# Secrets yang dipakai (SUDAH ADA untuk jarvis-delegate, tidak ada yang baru):
+#   AGENT_TOKEN, GROQ_API_KEY / GROQ_MODEL, OPENROUTER_API_KEY / OPENROUTER_MODEL
+# Syarat worker: RIG_EXECUTOR=prefer|only (wrangler secret).
+# =====================================================================
+name: rig-bridge-poll
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+# Tanpa concurrency group: klaim atomik mencegah double-work; runner boleh
+# tumpang-tindih mengerjakan task BERBEDA. Push-race dihindari karena tidak
+# ada commit artifact di jalur ini.
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install opencode (headless)
+        run: |
+          npm install -g opencode-ai
+          opencode --version
+
+      - name: Pick model (Groq dulu, fallback OpenRouter)
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ secrets.GROQ_MODEL || 'openai/gpt-oss-120b' }}
+          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free' }}
+        run: |
+          if [ -n "$GROQ_API_KEY" ]; then
+            echo "MODEL=groq/$GROQ_MODEL" >> "$GITHUB_ENV"
+          else
+            echo "MODEL=openrouter/$OPENROUTER_MODEL" >> "$GITHUB_ENV"
+          fi
+
+      - name: Claim + execute + report (--once)
+        env:
+          JARVIS_WORKER_URL: "https://jarvis-sovereign.vikricahya64.workers.dev"
+          JARVIS_AGENT_TOKEN: ${{ secrets.AGENT_TOKEN }}
+          EXECUTOR_CMD: "opencode run --dangerously-skip-permissions --model ${{ env.MODEL }}"
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          RIG_QUEUE_MIRROR: "0"
+          RUN_TIMEOUT_MS: "1080000"
+        run: node rig-bridge/poller.mjs --once

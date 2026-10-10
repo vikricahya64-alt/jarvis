@@ -1,0 +1,30 @@
+version: "0.2"
+name: tugas
+summary: >
+  Tim eksekutor /tugas JARVIS: builder + reviewer Codex di repository ini.
+  rig-bridge/poller.mjs mengklaim task dari worker (POST /agent/claim) dan
+  mengeksekusinya headless; rig ini memberi wadah tim yang persisten,
+  antrean kerja, dan alamat yang stabil untuk hasilnya.
+
+culture_file: CULTURE.md
+
+pods:
+  - id: tugas
+    label: Eksekutor
+    members:
+      - id: build
+        agent_ref: "local:../../../agents/development/implementer"
+        runtime: codex
+        profile: default
+        cwd: "."
+      - id: review
+        agent_ref: "local:../../../agents/development/qa"
+        runtime: codex
+        profile: default
+        cwd: "."
+    edges:
+      - kind: delegates_to
+        from: build
+        to: review
+
+edges: []

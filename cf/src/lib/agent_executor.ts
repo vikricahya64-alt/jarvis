@@ -78,6 +78,37 @@ export function truncationWarning(sent: DelegateResult): string {
     : "";
 }
 
+/** Executor route for heavy tasks. 'rig' = antre di D1 untuk diklaim
+ *  rig-bridge (POST /agent/claim, polling tanpa ingress — runner GH cron
+ *  atau mesin lokal). 'github' = perilaku lama (repository_dispatch push).
+ *  Dikontrol env RIG_EXECUTOR: 'only'|'prefer' → rig; default/'off' → github. */
+export type ExecutorRoute = "rig" | "github";
+export function routeExecutor(env: Env): ExecutorRoute {
+  const mode = (env.RIG_EXECUTOR ?? "off").trim().toLowerCase();
+  return mode === "only" || mode === "prefer" ? "rig" : "github";
+}
+
+/** Human label per executor tag (dipakai pesan owner + memori). */
+export function executorLabel(executor: string): string {
+  return executor === "rig" ? "tim lokal (OpenRig)" : "eksekutor cloud";
+}
+
+export type DispatchResult = DelegateResult & { via: ExecutorRoute };
+
+/** Route-aware dispatch: 'rig' hanya antre (status tetap pending sampai
+ *  diklaim rig-bridge — TANPA mark running di sini); 'github' perilaku
+ *  lama (delegateToGithub). Tidak pernah throw. */
+export async function dispatchAgentTask(
+  env: Env,
+  id: number,
+  task: string,
+  opts: { riset?: boolean } = {},
+): Promise<DispatchResult> {
+  if (routeExecutor(env) === "rig") return { via: "rig" };
+  const sent = await delegateToGithub(env, id, task, opts);
+  return { ...sent, via: "github" as const };
+}
+
 /** Queue a task to the GitHub repository_dispatch webhook — via the Vercel
  *  Connector FIRST (token lives there, not in this worker), falling back to a
  *  direct GitHub API call when the connector is unconfigured/unreachable.

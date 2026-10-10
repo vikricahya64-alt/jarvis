@@ -61,7 +61,7 @@ import { covenantStatusText, signClause } from "../lib/covenant_core";
 import { identityStatusText } from "../lib/identity_anchor";
 import { getPlans, getScheduledTasks } from "../lib/maestro";
 import { getDegradationStatus } from "../lib/degradation";
-import { delegateToGithub, flagAgentReport, truncationWarning, usesDeepResearchProtocol, stripDeepResearchFlag } from "../lib/agent_executor";
+import { delegateToGithub, dispatchAgentTask, routeExecutor, flagAgentReport, truncationWarning, usesDeepResearchProtocol, stripDeepResearchFlag } from "../lib/agent_executor";
 import { e2bRun, e2bConfigured, e2bSummary, e2bStateHint } from "../lib/e2b";
 import { parseBorrowedTarget, borrowedExecutorTag, borrowedExecutorLabel, BORROWED_EXECUTOR_IDS } from "../lib/borrowed_executor";
 import { buildIterationConstraint, type ExecutablePlan } from "../lib/translator";
@@ -444,9 +444,15 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<Re
     }
     const dlUrl = `${env.WORKER_URL ?? "https://jarvis-sovereign.vikricahya64.workers.dev"}/dl/${uuid}`;
     const text = `Analisis lampiran "${label}". ${instruction} <dlurl:${dlUrl}>`;
-    const id = await addAgentTask(env, from, text);
+    const id = await addAgentTask(env, from, text, routeExecutor(env));
     if (!id) {
       await fire(sendMessage(env, from, "⚠️ Gagal membuat tugas analisis lampiran (D1). Coba lagi."));
+      return new Response("ok", { status: 200 });
+    }
+    if (routeExecutor(env) === "rig") {
+      await fire(sendMessage(env, from,
+        `📎 Lampiran *${label.slice(0, 60)}* (${(dl.bytes.byteLength / 1024).toFixed(0)} KB) diterima.\n` +
+        `Tugas #${id}: analisis mengantre di tim lokal (OpenRig) — hasil kubalas di sini.`));
       return new Response("ok", { status: 200 });
     }
     await fire(sendMessage(env, from,
@@ -2141,7 +2147,8 @@ function mediaIsTaskIntent(text: string): boolean {
 /** Directly store + dispatch a task from free-form text (used by voice notes
  *  with delegation intent). Returns a DM-ready acknowledgement, never throws. */
 async function delegateNow(env: Env, from: number, text: string): Promise<string> {
-  if (!env.AGENT_TOKEN || !env.GITHUB_TOKEN || !env.GITHUB_REPO) {
+  const viaRig = routeExecutor(env) === "rig";
+  if (!env.AGENT_TOKEN || (!viaRig && (!env.GITHUB_TOKEN || !env.GITHUB_REPO))) {
     return "⚙️ Eksekutor cloud belum dikonfigurasi (AGENT_TOKEN, GITHUB_TOKEN, GITHUB_REPO).";
   }
   const clean = text.replace(/^\s*(?:tugas|delegasikan|delegasi|kerjakan|jalankan)\b[^\w]*/i, "").trim();
@@ -2149,7 +2156,9 @@ async function delegateNow(env: Env, from: number, text: string): Promise<string
   if (body.length < 10 || body.length > 4000) {
     return "📦 Untuk tugas via suara, jelaskan pekerjanya dengan jelas (minimal 10 karakter).";
   }
-  const id = await addAgentTask(env, from, body);
+  const id = await addAgentTask(env, from, body, routeExecutor(env));
+  if (!id) return "Gagal menyimpan tugas (error D1). Coba lagi.";
+  if (viaRig) return `⏳ Tugas #${id} mengantre di tim lokal (OpenRig) — hasil kubalas di sini. /tugas list untuk status.`;
   if (!id) return "Gagal menyimpan tugas (error D1). Coba lagi.";
   const sent = await delegateToGithub(env, id, body);
   if (sent.error) return `⚠️ Tugas #${id} tersimpan tapi gagal dispatch (${sent.error}). Status tetap ⏳ — /tugas list.`;
@@ -3176,14 +3185,19 @@ async function dispatchNegotiation(env: Env, owner: number, s: NegoSession): Pro
   // so a later "/tugas lanjut <id>" re-detects the source-citation protocol
   // via the task text (same mechanism as the pre-negotiation add-path).
   const finalTask = `${s.riset ? "--riset " : ""}${(s.final ?? s.task).trim()}`;
-  const id = await addAgentTask(env, owner, finalTask);
+  const id = await addAgentTask(env, owner, finalTask, routeExecutor(env));
   if (!id) {
     await saveNegotiation(env, owner, s);
     await fire(sendMessage(env, owner, "⚠️ Gagal menyimpan tugas (D1). Coba lagi."));
     return;
   }
   await clearNegotiation(env, owner);
-  const sent = await delegateToGithub(env, id, finalTask);
+  const sent = await dispatchAgentTask(env, id, finalTask);
+  if (sent.via === "rig") {
+    await fire(sendMessage(env, owner,
+      `⏳ Tugas #${id} mengantre di tim lokal (OpenRig). Hasil kubalas di sini setelah diambil rig-bridge. \`/tugas list\` untuk status.`));
+    return;
+  }
   if (sent.error) {
     await fire(sendMessage(env, owner,
       `⚠️ Tugas #${id} tersimpan tapi *gagal dispatch* (${sent.error}). Status tetap ⏳. Cek /tugas list.`));
@@ -3342,6 +3356,15 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
     }
     if (target.status === "running") {
       await fire(sendMessage(env, from, `⚠️ Tugas #${retry[1]} sedang berjalan di eksekutor — tunggu hasilnya.`));
+      return;
+    }
+    // Baris milik rig tidak perlu dispatch ulang: cukup pastikan pending
+    // (klaim oleh rig-bridge yang akan mengambilnya).
+    if (target.executor === "rig") {
+      if (target.status === "done" || target.status === "failed") {
+        await restartAgentTask(env, target.id);
+      }
+      await fire(sendMessage(env, from, `⏳ Tugas #${retry[1]} mengantre di tim lokal (OpenRig) — hasil kubalas di sini.`));
       return;
     }
     if (target.status === "pending") {

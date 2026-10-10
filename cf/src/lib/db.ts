@@ -63,6 +63,10 @@ export interface Env {
   AGENT_TOKEN?: string;
   GITHUB_TOKEN?: string;
   GITHUB_REPO?: string;
+  // Rig bridge: 'off' (default) = /tugas push ke GitHub seperti biasa;
+  // 'prefer'|'only' = tugas baru antre (executor='rig') untuk diklaim
+  // rig-bridge via POST /agent/claim. Bukan secret → boleh di [vars].
+  RIG_EXECUTOR?: string;
   WORKER_URL?: string;
   VERCEL_CONNECTOR_URL?: string;
   VERCEL_CONNECTOR_TOKEN?: string;
@@ -1132,6 +1136,34 @@ export async function markAgentTaskRunning(env: Env, id: number, runId = ""): Pr
       `UPDATE agent_tasks SET status = 'running', run_id = ?, started_at = ? WHERE id = ? AND status = 'pending'`,
     ).bind(runId || "", Date.now(), id).run();
   } catch { /* best-effort */ }
+}
+
+/** Atomic claim for EXTERNAL pollers (rig-bridge): ambil task pending
+ *  tertua milik executor tertentu dan kunci jadi 'running' dalam satu
+ *  langkah berpagar — dua poller paralel tidak bisa double-claim baris
+ *  yang sama (UPDATE … WHERE status='pending', cek changes>0; yang kalah
+ *  menerima null). Kembalikan baris fresh, atau null bila antrean kosong
+ *  / kalah lomba / error. runId opsional untuk ketertelusuran
+ *  (mis. "rig:<host>:<ts>"), terlihat di /tugas list. */
+export async function claimAgentTask(env: Env, executor: string, runId = ""): Promise<AgentTaskItem | null> {
+  try {
+    const exec = (executor || "").trim() || "rig";
+    const cand = await env.DB.prepare(
+      `SELECT * FROM agent_tasks WHERE executor = ? AND status = 'pending' ORDER BY id ASC LIMIT 1`,
+    ).bind(exec).all<AgentTaskItem>();
+    const row = cand.results?.[0];
+    if (!row) return null;
+    const upd = await env.DB.prepare(
+      `UPDATE agent_tasks SET status = 'running', run_id = ?, started_at = ? WHERE id = ? AND status = 'pending'`,
+    ).bind(runId || "", Date.now(), row.id).run();
+    if ((upd.meta.changes ?? 0) === 0) return null;
+    const fresh = await env.DB.prepare(
+      `SELECT * FROM agent_tasks WHERE id = ?`,
+    ).bind(row.id).all<AgentTaskItem>();
+    return fresh.results?.[0] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** Reset a previously terminal task (done/failed) back to 'pending' so a

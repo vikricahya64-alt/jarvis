@@ -19,7 +19,7 @@
 //=====================================================================
 
 import { Env, addAgentTask, getDueAgentRules, updateAgentRuleFired, getDmsConfig, markAgentTaskRunning } from "./db";
-import { delegateToGithub, truncationWarning } from "./agent_executor";
+import { delegateToGithub, routeExecutor, truncationWarning } from "./agent_executor";
 import { emitText as sendMessage } from "./telegram_gate";
 
 const WIB_OFFSET_MIN = 7 * 60; // UTC+7
@@ -141,10 +141,19 @@ export async function fireDueAgentRules(
     // once advanced, the SELECT no longer matches the rule. M6 audit fix.
     const claimed = await updateAgentRuleFired(env, rule.id, now, next);
     if (!claimed) continue; // another tick already claimed it
-    const instanceId = await addAgentTask(env, rule.owner_id, rule.task, "github", rule.id);
+    const instanceId = await addAgentTask(env, rule.owner_id, rule.task, routeExecutor(env), rule.id);
     if (!instanceId) {
       console.error(`[agent_rules] instans #rule ${rule.id} gagal (advance tetap dipertahankan)`);
       failed++;
+      continue;
+    }
+    // Rute rig: biarkan pending — rig-bridge mengklaim via /agent/claim.
+    if (routeExecutor(env) === "rig") {
+      console.log(`[agent_rules] rule #${rule.id} fired instans #${instanceId} (antre rig) claimed=${claimed}`);
+      fired++;
+      await sendMessage(env, rule.owner_id,
+        `🗓️ Jadwal *#${rule.id}* dijalankan — "_${rule.task.slice(0, 90)}…_" (tugas ${instanceId}). Mengantre di tim lokal (OpenRig); hasil kubalas di sini.`)
+        .catch(() => {});
       continue;
     }
     const sent = await delegateToGithub(env, instanceId, rule.task);

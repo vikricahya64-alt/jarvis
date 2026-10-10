@@ -53,6 +53,11 @@ index_name = "memory-vectors"
 # lalu hapus baris di bawah ini.
 OWNER_TELEGRAM_ID = "6812604983"
 APP_ENV = "production"
+# Rig bridge (OpenRig/poller sebagai eksekutor /tugas): 'off' (default) =
+# push ke GitHub seperti biasa; 'prefer'/'only' = tugas baru antre
+# (executor='rig') untuk diklaim via POST /agent/claim. Bukan secret.
+# Aktifkan via secret agar tidak tergantung file: wrangler secret put RIG_EXECUTOR
+# RIG_EXECUTOR = "off"
 # Google Antigravity (last-resort managed-agent tier). Rides the free Gemini
 # key by default —— so no new secret is REQUIRED. OPTIONAL:
 #   * ANTIGRAVITY_API_KEY  (dedicated free key from Google AI Studio, tracked
