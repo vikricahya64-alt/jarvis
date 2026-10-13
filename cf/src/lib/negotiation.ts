@@ -1,17 +1,21 @@
 //=====================================================================
-// negotiation.ts — /tugas negotiation bridge (translator + negotiator).
+// negotiation.ts — /tugas single-pass router (pengganti Q&A bridge lama).
 //
-// Principle (owner, m9-v11.31): JARVIS is NOT a verbatim pass-through to
-// the cloud executor. It is a translator + negotiator — the human language
-// of the owner becomes a precise, unambiguous instruction for opencode,
-// AFTER a short Q&A so the executed work matches the owner's intent. This
-// mirrors discussing a buyer's request with the service provider, with
-// JARVIS as the third party ensuring both sides agree BEFORE the job runs.
+// Prinsip: SATU panggilan model menafsirkan input pemilik menjadi SALAH SATU:
+//   * PERINTAH — instruksi final siap eksekusi, atau
+//   * PERTANYAAN — SATU pertanyaan klarifikasi paling penting.
 //
-// Flow: /tugas <x> → generate 1-3 clarifying questions → owner answers in
-// chat (one per turn) → JARVIS compiles the final instruction → shows it →
-// owner replies GO → dispatch to GitHub/openOJIS. KV-backed (nego:<owner>)
-// so the conversation survives cold starts; TTL-bounded failure-closed.
+// Mengapa jalur lama dibuang: generator 3 pertanyaan memanggil LLM TANPA
+// teks tugas ikut terkirim (skipUserMessage + konteks kosong), sehingga model
+// mengarang dari memori percakapan; parser lama menerima kalimat apa pun
+// (8-200 char) sebagai "pertanyaan". Hasilnya: Q1 berupa rangkuman ngawur.
+// Jalur baru: teks tugas SELALU dikirim eksplisit sebagai pesan user, output
+// model TERKUNCI pada kontrak JENIS:/ISI:, dan sesi parkir maksimal 2 putaran.
+//
+// Alur: /tugas <x> → routeTaskInput → perintah (tampil + tunggu GO) ATAU
+// pertanyaan (tampil, tunggu 1 jawaban) → answerPending → perintah (tampil +
+// tunggu GO). GO → dispatch; batal → buang; catatan → refineFinal (sekali,
+// deterministik-bounded). KV-backed (nego:<owner>), TTL fail-closed.
 //=====================================================================
 
 import { Env } from "./db";
@@ -20,12 +24,11 @@ import { llmRespond } from "./ai";
 const NEGO_TTL_SEC = 30 * 60;
 
 export interface NegoSession {
-  task: string; // original task text passed by the owner (verbatim)
-  riset: boolean; // owner opted into the source-citation protocol (--riset)
-  questions: string[]; // 1-3 clarifying questions asked of the owner
-  answers: string[]; // collected answers, parallel to questions
-  step: "ask" | "confirm"; // ask = collecting answers; confirm = final shown, awaiting GO
-  final?: string; // compiled final instruction (translated), set at confirm
+  task: string; // teks tugas asli pemilik (verbatim)
+  riset: boolean; // opt-in protokol sitasi (--riset)
+  tanya: string; // SATU pertanyaan pending ("" = tak ada; sesi menunggu GO)
+  putaran: number; // 1 = jawaban pertama dinanti; 2 = ronde pemoles (maks)
+  final?: string; // perintah final siap eksekusi
   ts: number;
 }
 
@@ -39,7 +42,10 @@ export async function readNegotiation(
     const raw = await env.CONFIG_KV.get(NEGO_KEY(owner), "json");
     if (!raw) return null;
     const s = raw as unknown as NegoSession;
-    if (!s || typeof s.task !== "string" || !Array.isArray(s.questions)) return null;
+    // Bentuk sesi Q&A lama ({questions,answers,step}) DITOLAK di sini —
+    // pemilik cukup kirim ulang; TTL 30 mnt membersihkan sisanya.
+    if (!s || typeof s.task !== "string" || typeof s.tanya !== "string") return null;
+    if (typeof s.putaran !== "number" || (s.tanya && !s.final && s.putaran < 1)) return null;
     return s;
   } catch {
     return null;
@@ -49,7 +55,7 @@ export async function readNegotiation(
 export async function saveNegotiation(env: Env, owner: number, s: NegoSession): Promise<void> {
   try {
     await env.CONFIG_KV.put(NEGO_KEY(owner), JSON.stringify(s), { expirationTtl: NEGO_TTL_SEC });
-  } catch { /* fail-closed: a lost session just means the owner re-sends */ }
+  } catch { /* fail-closed: sesi hilang = pemilik kirim ulang */ }
 }
 
 export async function clearNegotiation(env: Env, owner: number): Promise<void> {
@@ -58,101 +64,143 @@ export async function clearNegotiation(env: Env, owner: number): Promise<void> {
   } catch { /* best-effort */ }
 }
 
-/** Parse the LLM's answer into a clean question list. Pure + fail-closed. */
-export function parseGeneratedQuestions(text: string): string[] {
-  const lines = (text ?? "")
-    .split(/\n+/)
-    .map((l) => l.replace(/^[-*\d\.)\s]+/, "").trim())
-    .filter((l) => l.length >= 8 && l.length <= 200);
-  const out: string[] = [];
-  for (const l of lines) {
-    if (out.length >= 3) break;
-    if (!out.some((e) => e.toLowerCase() === l.toLowerCase())) out.push(l);
+/** Kata kerja aksi: sinyal deterministik bahwa tugas punya target kerja.
+// Dipakai isVagueTask — BUKAN untuk menebak maksud, hanya untuk memutuskan
+// apakah input layak dikirim ke model atau langsung ditanya balik. */
+const ACTION_VERBS =
+  /bua?t(kan)?|bikin|carikan|cari|riset|tulis|ringkas|rangkum|analisis|analisa|perbaiki|jadwalkan|jadwal|kirim|ambil|download|unduh|terjemahkan?|kerjakan|jalankan|lakukan|eksekusi|cek|periksa|bandingkan|desain|rancang|hitung|monitor|ingatkan|catat|simpan|baca|bacakan|susun|review|audit|selidiki|rencanakan|optimalkan|tampilkan|tunjukkan/i;
+
+/** True bila baris berbentuk pertanyaan (diakhiri ? atau diawali kata tanya).
+// Murni + fail-closed: yang bukan pertanyaan TIDAK PERNAH lolos sebagai tanya. */
+export function isQuestionLine(line: string): boolean {
+  const l = (line ?? "").trim();
+  if (l.length < 8 || l.length > 200) return false;
+  if (/\?\s*$/.test(l)) return true;
+  return /^(apa|apakah|bagaimana|gimana|berapa|kapan|di\s?mana|ke\s?mana|dari\s?mana|mengapa|kenapa|siapa|yang\s+mana|mana|seberapa|tolong|jelaskan|sebutkan|konfirmasi|mau|ingin\s+tahu)/i.test(l);
+}
+
+/** True bila tugas tak punya sinyal aksi yang bisa dieksekusi (tanpa kata
+// kerja aksi dan bukan kalimat tanya) — mis. "pilih opsi tindakan yang
+// tepat". Murni + konservatif: ragu = tidak vague (biar model yang menilai). */
+export function isVagueTask(task: string): boolean {
+  const t = (task ?? "").trim();
+  if (!t) return true;
+  if (/\?\s*$/.test(t)) return false;
+  return !new RegExp(`\\b(?:${ACTION_VERBS.source})\\b`, "i").test(t);
+}
+
+/** Pertanyaan baku deterministik untuk input vague — TANPA memanggil model
+// (permukaan halusinasi nol, biaya nol). */
+export const VAGUE_TASK_QUESTION =
+  "Aku belum menangkap pekerjaan konkretnya — tugas apa tepatnya yang harus kukerjakan? " +
+  "Sebutkan aksi + objeknya, mis. 'riset harga emas hari ini' atau 'buatkan ringkasan markdown'.";
+
+export type RoutedTask =
+  | { kind: "perintah"; instruksi: string }
+  | { kind: "pertanyaan"; tanya: string };
+
+/** Parse output ketat model menjadi RoutedTask. Format kontrak:
+//   JENIS: PERINTAH|PERTANYAAN
+//   ISI: <teks, boleh multi-baris>
+// Di luar kontrak = null (pemanggil pakai fallback deterministik). */
+export function parseRouterReply(text: string): RoutedTask | null {
+  const lines = (text ?? "").split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return null;
+  const jenis = /^JENIS:\s*(PERINTAH|PERTANYAAN)\s*$/i.exec(lines[0] ?? "");
+  if (!jenis) return null;
+  const rest = lines.slice(1).join("\n");
+  const isiMatch = /^ISI:\s?([\s\S]*)$/.exec(rest);
+  if (!isiMatch) return null;
+  const isi = (isiMatch[1] ?? "").trim();
+  if (isi.length < 10 || isi.length > 2000) return null;
+  if (jenis[1].toUpperCase() === "PERTANYAAN") {
+    // PERTANYAAN boleh multi-baris di model, tapi yang disimpan = baris
+    // interogatif pertama (bukti: kasus Q1-rangkuman-ngawur).
+    const first = isi.split(/\n+/).map((l) => l.trim()).find((l) => isQuestionLine(l));
+    if (!first) return null;
+    return { kind: "pertanyaan", tanya: first };
   }
-  return out;
+  return { kind: "perintah", instruksi: isi };
 }
 
-/** Deterministic fallback questions when the LLM is unavailable. */
-export function fallbackQuestions(task: string): string[] {
-  const base: string[] = [
-    "Output akhirnya seperti apa — ringkasan, laporan markdown, atau tabel?",
-    "Seberapa dalam? Cukup ringkas-cepat atau sampai analisis mendalam?",
-    "Ada kriteria atau batasan khusus yang harus dipenuhi?",
-  ];
-  void task;
-  return base;
+/** Kompilasi deterministik tanpa model: tugas + Q&A ditempel apa adanya.
+// Dipakai saat model gagal di ronde kedua (bounded) atau refine — tidak ada
+// ronde ketiga, tidak ada tebakan baru. */
+export function compileDeterministic(task: string, tanya: string, jawaban: string): string {
+  const t = (task ?? "").trim();
+  const j = (jawaban ?? "").trim();
+  if (!j) return t;
+  return `${t}\n\nKlarifikasi pemilik (${tanya.slice(0, 120)}):\n${j}`;
 }
 
-/** Compile final instruction when the LLM is unavailable (deterministic). */
-export function fallbackCompile(task: string, answers: string[]): string {
-  const qa = answers.map((a, i) => `• ${a}`).join("\n").trim();
-  return qa ? `${task}\n\nTambahan dari pemilik (klarifikasi):\n${qa}` : task;
-}
+const ROUTER_SYSTEM =
+  "Kamu adalah penafsir tugas JARVIS. Di bawah ada permintaan pemilik. Balas HANYA dengan format persis ini:\n" +
+  "JENIS: PERINTAH\nISI: <instruksi final siap eksekusi>\natau\nJENIS: PERTANYAAN\nISI: <satu pertanyaan klarifikasi>\n" +
+  "Aturan: permintaan yang sudah jelas → PERINTAH (terjemahkan ke instruksi konkret, JANGAN tambah hal baru, JANGAN beri pembuka/penutup). " +
+  "Permintaan yang kabur/tak bisa dieksekusi → PERTANYAAN (SATU saja, maks 25 kata, tanyakan aksi+objek konkret yang kurang). " +
+  "ISI perintah 10-2000 karakter. Tidak ada teks di luar format itu.";
 
-const QUESTIONS_SYSTEM =
-  "Kamu adalah JARVIS. Pemilik ingin mendelegasikan tugas kepada eksekutor cloud (opencode). " +
-  "Sebelum eksekusi, ajukan MAKSIMAL 3 pertanyaan klarifikasi singkat (maks 25 kata per pertanyaan, " +
-  "Bahasa Indonesia natural) yang paling penting untuk membuat instruksi final tidak ambigu: " +
-  "format output, kedalaman, cakupan, kriteria/batasan. HANYA tanya yang benar-benar diperlukan — " +
-  "jika tugas sudah cukup jelas, cukup 1-2 pertanyaan konfirmasi penting. Jawab HANYA pertanyaannya, " +
-  "satu per baris, tanpa nomor, tanpa bullet, tanpa pembuka/penutup.";
-
-/** Generate 1-3 clarifying questions for the task via the LLM cascade. */
-export async function generateClarifyQuestions(
-  env: Env,
-  owner: number,
-  task: string,
-): Promise<string[]> {
+/** Satu-satunya panggilan model per putaran. Teks tugas SELALU dikirim
+// eksplisit sebagai pesan user (skipUserMessage:false) — pelajaran dari bug
+// Q1-ngawur: tanpa ini model menjawab dari memori, bukan dari tugas. */
+async function callRouter(env: Env, owner: number, userText: string): Promise<RoutedTask | null> {
   try {
-    const g = await llmRespond(env, task, { owner,
-      systemOverride: QUESTIONS_SYSTEM,
-      skipUserMessage: true,
+    const g = await llmRespond(env, userText, { owner,
+      systemOverride: ROUTER_SYSTEM,
+      skipUserMessage: false,
     }).catch(() => ({ reply: null, source: null }));
-    const parsed = parseGeneratedQuestions(g.reply ?? "");
-    return parsed.length > 0 ? parsed.slice(0, 3) : fallbackQuestions(task);
+    return parseRouterReply(g.reply ?? "");
   } catch {
-    return fallbackQuestions(task);
+    return null;
   }
 }
 
-const COMPILE_SYSTEM =
-  "Kamu adalah JARVIS, penerjemah presisi antara bahasa manusia dan instruksi eksekusi. " +
-  "Pemilik mendelegasikan tugas ke eksekutor cloud (opencode). Di bawah ada permintaan asli pemilik " +
-  "beserta jawaban klarifikasinya. Susun SATU teks instruksi final yang jelas, spesifik, dan tidak " +
-  "ambigu dalam Bahasa Indonesia, yang mewakili PERSIS keinginan pemilik, dengan menggabungkan semua " +
-  "jawaban klarifikasi ke dalamnya (mis. format output, cakupan, batasan). Jangan menambah hal " +
-  "yang tidak diminta pemilik. Hasil akhir = instruksi yang siap kirim ke eksekutor, tanpa sapaan, " +
-  "tanpa pembuka, tanpa penomoran berlebihan.";
-
-/** Kisah tulisan pertanyaan: grounding for compile. */
-export interface AskedTerm {
-  q: string;
-  a: string;
-}
-
-/** Compile the final instruction from the original task + clarification Q&A. */
-export async function compileFinalInstruction(
+/** Rute input /tugas baru: vague → pertanyaan baku (tanpa LLM);
+ *  jelas → satu panggilan model; gagal parse → perintah verbatim (perilaku
+ *  pra-negosiasi: teruskan apa adanya, keputusan akhir tetap di pemilik
+ *  lewat konfirmasi GO). Tidak pernah throw. */
+export async function routeTaskInput(
   env: Env,
   owner: number,
   task: string,
-  qa: AskedTerm[],
+): Promise<RoutedTask> {
+  const t = (task ?? "").trim();
+  if (isVagueTask(t)) return { kind: "pertanyaan", tanya: VAGUE_TASK_QUESTION };
+  const routed = await callRouter(env, owner, `TUGAS PEMILIK:\n${t}`);
+  if (routed) return routed;
+  return { kind: "perintah", instruksi: t };
+}
+
+/** Olah JAWABAN atas pertanyaan pending menjadi perintah. Bila model
+ *  mengembalikan pertanyaan lagi: hanya di putaran 1 dikembalikan sebagai
+ *  pertanyaan susulan (putaran 2, terakhir); di putaran ≥2 langsung kompilasi
+ *  deterministik — TIDAK ADA ronde ketiga. Tidak pernah throw. */
+export async function answerPending(
+  env: Env,
+  owner: number,
+  s: NegoSession,
+  jawaban: string,
+): Promise<RoutedTask> {
+  const j = (jawaban ?? "").trim().replace(/\s+/g, " ").slice(0, 600);
+  const routed = await callRouter(env, owner,
+    `TUGAS PEMILIK:\n${s.task}\nPERTANYAAN YANG DIAJUKAN:\n${s.tanya}\nJAWABAN PEMILIK:\n${j}`);
+  if (routed?.kind === "perintah") return routed;
+  if (routed?.kind === "pertanyaan" && s.putaran < 2) return routed;
+  return { kind: "perintah", instruksi: compileDeterministic(s.task, s.tanya, j) };
+}
+
+/** Poles perintah final dengan catatan pemilik — SEKALI panggil, dipaksa
+ *  PERINTAH (tanya dari refine diabaikan → fallback deterministik). */
+export async function refineFinal(
+  env: Env,
+  owner: number,
+  s: NegoSession,
+  catatan: string,
 ): Promise<string> {
-  const body = [
-    `PERMINTAAN ASLI PEMILIK:\n${task}`,
-    "",
-    qa.length
-      ? `JAWABAN KLARIFIKASI:\n${qa.map((x, i) => `${i + 1}. ${x.q}\n   → ${x.a}`).join("\n")}`
-      : "TANPA KLARIFIKASI TAMBAHAN.",
-  ].join("\n");
-  try {
-    const g = await llmRespond(env, body, { owner,
-      systemOverride: COMPILE_SYSTEM,
-      skipUserMessage: true,
-    }).catch(() => ({ reply: null, source: null }));
-    const out = (g.reply ?? "").trim();
-    if (out.length >= 10) return out;
-    return fallbackCompile(task, qa.map((x) => x.a));
-  } catch {
-    return fallbackCompile(task, qa.map((x) => x.a));
-  }
+  const c = (catatan ?? "").trim().replace(/\s+/g, " ").slice(0, 600);
+  const routed = await callRouter(env, owner,
+    `TUGAS PEMILIK:\n${s.task}\nPERINTAH SAAT INI:\n${s.final ?? s.task}\nCATATAN TAMBAHAN PEMILIK:\n${c}\n` +
+    `Hasilkan PERINTAH final yang menggabungkan catatan itu.`);
+  if (routed?.kind === "perintah") return routed.instruksi;
+  return compileDeterministic(s.final ?? s.task, "catatan tambahan", c);
 }

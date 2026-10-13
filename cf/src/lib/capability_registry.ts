@@ -505,7 +505,7 @@ export const CAPABILITY_COMMANDS: CommandCapabilitySpec[] = [
         key: (o) => `nego:${o}`,
         kind: "always",
         handler: "nego_resume",
-        note: "Sesi negosiasi /tugas (jawab pertanyaan / konfirmasi GO-batal).",
+        note: "Sesi /tugas single-pass (jawab 1 pertanyaan / konfirmasi GO-batal).",
       },
     ],
   },

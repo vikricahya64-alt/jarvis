@@ -68,7 +68,7 @@ import { buildIterationConstraint, type ExecutablePlan } from "../lib/translator
 import { planAndParkProject, launchParkedProject, readProjectMeta } from "../lib/project_plan";
 import { isRelevantExecutorTask } from "../lib/relevance";
 import { parseRecurSpec } from "../lib/agent_rules";
-import { readNegotiation, saveNegotiation, clearNegotiation, generateClarifyQuestions, compileFinalInstruction, type NegoSession } from "../lib/negotiation";
+import { readNegotiation, saveNegotiation, clearNegotiation, routeTaskInput, answerPending, refineFinal, type NegoSession } from "../lib/negotiation";
 import {
   listInsights, setPreference, disablePreference, getActivePreferences,
   auditPhantomRules,
@@ -3209,15 +3209,13 @@ async function dispatchNegotiation(env: Env, owner: number, s: NegoSession): Pro
     truncationWarning(sent)));
 }
 
-/** Answer/message the owner sends while a /tugas negotiation is parked.
+/** Jawaban/catatan pemilik selama sesi /tugas parkir (single-pass router).
  *
- *  Bridge (m9-v11.31): JARVIS does NOT dispatch to the cloud executor
- *  immediately — it negotiates like discussing a buyer's request with the
- *  service provider. Step "ask": the reply is the answer to the current
- *  clarifying question (next one is asked, or we compile + show the final
- *  instruction). Step "confirm": GO → dispatch; batal → cancel; anything
- *  else → refine (compile again with the added note). Returns true when it
- *  consumed the message (the caller should stop the pipeline). Fail-closed:
+ *  Dua keadaan sesi, tanpa ronde ketiga:
+ *  - tanya pending → jawaban diolah answerPending menjadi perintah (atau
+ *    MAKSIMAL satu pertanyaan susulan), lalu tampil + tunggu GO.
+ *  - final siap (tanya kosong) → GO dispatch; batal buang; catatan poles
+ *    via refineFinal. Returns true bila pesan dikonsumsi. Fail-closed:
  *  never throws, never dispatches on ambiguity. */
 async function resumeNegotiation(
   env: Env,
@@ -3226,30 +3224,26 @@ async function resumeNegotiation(
   text: string,
 ): Promise<boolean> {
   try {
-    const answer = text.trim().replace(/\s+/g, " ").slice(0, 600);
-
-    // Step "ask": collect the answer to the current question.
-    if (s.step === "ask") {
-      s.answers.push(answer);
-      const idx = s.answers.length;
-      if (idx < s.questions.length) {
+    // Langkah tanya: ada satu pertanyaan pending.
+    if (s.tanya) {
+      const r = await answerPending(env, owner, s, text);
+      if (r.kind === "pertanyaan") {
+        s.tanya = r.tanya;
+        s.putaran = 2;
         await saveNegotiation(env, owner, s);
         await fire(sendMessage(env, owner,
-          `✍️ Pertanyaan ${idx + 1}/${s.questions.length}: ${s.questions[idx]}\n_\nKetik /tugas batal kapan saja untuk membatalkan._`));
+          `✍️ Satu hal lagi: *${r.tanya}*\n\nBalas jawabanmu. _/tugas batal untuk batalkan._`));
         return true;
       }
-      // All questions answered → compile the final instruction and show it.
-      s.final = await compileFinalInstruction(env, owner, s.task, s.questions.map((q, i) => ({
-        q, a: s.answers[i] || "",
-      })));
-      s.step = "confirm";
+      s.final = r.instruksi;
+      s.tanya = "";
       await saveNegotiation(env, owner, s);
       await fire(sendMessage(env, owner,
         `🧾 *Instruksi final* yang akan kukirim ke eksekutor:\n\n${s.final}\n\nBalas *GO* untuk menjalankannya, atau beri catatan tambahan.`));
       return true;
     }
 
-    // Step "confirm": GO / batal / refine.
+    // Langkah konfirmasi: GO / batal / poles.
     const low = text.trim().toLowerCase();
     if (/^(go|gas|gaske|gaskeun|jalan|jalankan|kirim|kirimkan|lanjut|lah|ok|oke|ya|y|siap|setuju|eksekusi)\b/.test(low)) {
       await dispatchNegotiation(env, owner, s).catch(async () => {
@@ -3262,11 +3256,9 @@ async function resumeNegotiation(
       await fire(sendMessage(env, owner, "🗑️ Negosiasi dibatalkan. Kirim lagi kapan saja dengan `/tugas <pekerjaan>`."));
       return true;
     }
-    // Refinement: appends the owner's extra note, recompiles, shows again.
-    s.answers.push(`(tambahan) ${answer}`);
-    s.final = await compileFinalInstruction(env, owner, s.task, s.answers.map((a, i) => ({
-      q: s.questions[i] || "Catatan tambahan", a,
-    })));
+    // Poles: catatan pemilik digabung ke final (satu panggilan, bounded).
+    const note = text.trim().replace(/\s+/g, " ").slice(0, 600);
+    s.final = await refineFinal(env, owner, s, note);
     await saveNegotiation(env, owner, s);
     await fire(sendMessage(env, owner,
       `✏️ Catatan diterima — instruksi diperbarui:\n\n${s.final}\n\nBalas *GO* untuk menjalankannya.`));
@@ -3527,27 +3519,33 @@ async function handleAgentCommand(env: Env, from: number, raw: string): Promise<
     return;
   }
 
-  // NEGOTIATION BRIDGE (m9-v11.31): don't dispatch immediately. Park a
-  // negotiate session and ask 1-3 clarifying questions so the final compiled
-  // instruction (.final, set after Q&A) is what actually runs — exactly what
-  // the owner wants, translated into a precise executor instruction. If a
-  // previous session is parked, the new task REPLACES it (fail-closed).
-  const questions = await generateClarifyQuestions(env, from, taskPlain).catch(() => []);
+  // SINGLE-PASS ROUTER: model menafsirkan input SEKALI menjadi perintah siap
+  // eksekusi (tampil + tunggu GO) ATAU satu pertanyaan tajam (tampil, tunggu
+  // 1 jawaban). Teks tugas selalu ikut terkirim ke model; output terkunci
+  // kontrak JENIS:/ISI:. Sesi baru MENGGANTIKAN sesi parkir lama (fail-closed).
+  const routed = await routeTaskInput(env, from, taskPlain);
+  if (routed.kind === "pertanyaan") {
+    await saveNegotiation(env, from, {
+      task: taskPlain,
+      riset,
+      tanya: routed.tanya,
+      putaran: 1,
+      ts: Date.now(),
+    });
+    await fire(sendMessage(env, from,
+      `📦 Sebelum kukirim ke eksekutor, kupastikan dulu satu hal:\n\n*${routed.tanya}*\n\nBalas dengan jawabanmu. _/tugas batal untuk batalkan._`));
+    return;
+  }
   await saveNegotiation(env, from, {
     task: taskPlain,
     riset,
-    questions,
-    answers: [],
-    step: "ask",
+    tanya: "",
+    putaran: 1,
+    final: routed.instruksi,
     ts: Date.now(),
   });
-  if (questions.length === 0) {
-    await fire(sendMessage(env, from,
-      `📦 Tugas diterima — setelah kupastikan detailnya, instruksinya akan kukirim ke eksekutor.\n_Task: ${taskPlain.slice(0, 200)}_\n\nFormat output / fokus / batasan? Balas keterangannya (mis. "laporan markdown, 3 halaman"), lalu *GO* untuk jalankan.`));
-    return;
-  }
   await fire(sendMessage(env, from,
-    `📦 Sebelum kukirim ke eksekutor, kupastikan dulu beberapa hal (1/${questions.length}):\n\n*${questions[0]}*\n\nBalas dengan jawabanmu. _/tugas batal untuk batalkan._`));
+    `🧾 *Instruksi final* yang akan kukirim ke eksekutor:\n\n${routed.instruksi}\n\nBalas *GO* untuk menjalankannya, atau beri catatan tambahan.`));
 }
 
 // ---------------------------------------------------------------------
