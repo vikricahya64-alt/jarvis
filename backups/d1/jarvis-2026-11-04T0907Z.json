@@ -1,15 +1,18 @@
 {
- "exported_at": "2026-10-07T00:15:03.590194Z",
+ "exported_at": "2026-11-04T09:07:17.403257Z",
  "method": "per-table JSON (wrangler d1 export is blocked by FTS5)",
  "skipped_virtual": [
+  "_cf_KV",
   "memories_fts",
   "memories_fts_config",
   "memories_fts_data",
   "memories_fts_docsize",
   "memories_fts_idx"
  ],
+ "skipped_internal": [
+  "_cf_KV"
+ ],
  "tables": {
-  "_cf_KV": null,
   "d1_migrations": [
    {
     "id": 1,
@@ -132,10 +135,10 @@
    },
    {
     "owner_id": 6812604983,
-    "last_interaction": 1791330109236,
-    "last_heartbeat": 1791330109236,
+    "last_interaction": 1791904807914,
+    "last_heartbeat": 1791904807914,
     "source": "telegram",
-    "updated_at": 1791330109236
+    "updated_at": 1791904807914
    },
    {
     "owner_id": 8752886135,
@@ -7172,14 +7175,14 @@
     "owner_id": 6812604983,
     "stage": "idle",
     "last_heartbeat": 0,
-    "last_interaction": 1791330109236,
+    "last_interaction": 1791904807914,
     "grace_days": 30,
     "stage1_at": 0,
     "stage2_at": 0,
     "executed_at": 0,
     "contacts_json": "[]",
     "config_json": "{\"autonomy_paused\":false}",
-    "updated_at": 1791330109236
+    "updated_at": 1791904807914
    }
   ],
   "legacy_vault_metadata": [],
@@ -9572,10 +9575,10 @@
   "degradation_state": [
    {
     "owner_id": 6812604983,
-    "quota_snapshot": 1.133,
-    "remaining_pct": 98.867,
+    "quota_snapshot": 0,
+    "remaining_pct": 100,
     "disabled_features": "[]",
-    "updated_at": 1791331219707
+    "updated_at": 1793772045244
    }
   ],
   "degradation_alerts": [],
@@ -10711,6 +10714,894 @@
     "covenant_hash": "4cdea98744bb3c71",
     "timestamp": 1791331218665,
     "verified": 1
+   },
+   {
+    "epoch_id": "337b72b8ee8173230e27cfe97242150fbd5ae6c597a166224f188bbd55e35e25",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "3bd089b8d4982ac0fc6e7b18d737105f85b8b850151910679064e759996a3624",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791352818906,
+    "verified": 1
+   },
+   {
+    "epoch_id": "fea02814d81f4c9a10f66e48d90cef2c5b2fe61ce431f70c09bde3c5ee89262d",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "337b72b8ee8173230e27cfe97242150fbd5ae6c597a166224f188bbd55e35e25",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791374418661,
+    "verified": 1
+   },
+   {
+    "epoch_id": "f0045eefae0253b3f03ff1b4f35f0c0fe0bac86a34720704e889fb2a8e4aa16a",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "fea02814d81f4c9a10f66e48d90cef2c5b2fe61ce431f70c09bde3c5ee89262d",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791396011453,
+    "verified": 1
+   },
+   {
+    "epoch_id": "f0a58a8ea9adeb286a9d5a03a72a6681210ca8a27b49b271305dfe1514620007",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "f0045eefae0253b3f03ff1b4f35f0c0fe0bac86a34720704e889fb2a8e4aa16a",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791417611469,
+    "verified": 1
+   },
+   {
+    "epoch_id": "057660ba9672659d736d7845ad4a049d05ae77708f81df6cf9b6127e83b5cde8",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "f0a58a8ea9adeb286a9d5a03a72a6681210ca8a27b49b271305dfe1514620007",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791439211564,
+    "verified": 1
+   },
+   {
+    "epoch_id": "0389585e6227b2a0bc4199ec240c3c881cfe65a040eaeb9126ea153c4bdf75cc",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "057660ba9672659d736d7845ad4a049d05ae77708f81df6cf9b6127e83b5cde8",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791460811517,
+    "verified": 1
+   },
+   {
+    "epoch_id": "5e42381f97d0072d9ee9c0e9a6c73d70083d8db9b0fcc8d59c4187126857746e",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "0389585e6227b2a0bc4199ec240c3c881cfe65a040eaeb9126ea153c4bdf75cc",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791482411459,
+    "verified": 1
+   },
+   {
+    "epoch_id": "c624d0e1012465d72eaaa1bdc75b0c03c32542471603eca28e9db4a38101406e",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "5e42381f97d0072d9ee9c0e9a6c73d70083d8db9b0fcc8d59c4187126857746e",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791504045059,
+    "verified": 1
+   },
+   {
+    "epoch_id": "55647148c143db98fcf4ae31d800cd51371f0be7e72b3692000dd6fb003e2aca",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "c624d0e1012465d72eaaa1bdc75b0c03c32542471603eca28e9db4a38101406e",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791525662175,
+    "verified": 1
+   },
+   {
+    "epoch_id": "eeb861808b0a8451dd93da2c7af484f8be95cd51d122a59905eb53f728fa1d71",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "55647148c143db98fcf4ae31d800cd51371f0be7e72b3692000dd6fb003e2aca",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791547249062,
+    "verified": 1
+   },
+   {
+    "epoch_id": "cd59c0881e9cb141d62de3981d0939b0220cece159c63e895ef3aa637eb88b36",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "eeb861808b0a8451dd93da2c7af484f8be95cd51d122a59905eb53f728fa1d71",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791568846566,
+    "verified": 1
+   },
+   {
+    "epoch_id": "89c080901a51a46cb7adc4ff05097005a1a8eec9f8c3ab1377065b664f79c246",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "cd59c0881e9cb141d62de3981d0939b0220cece159c63e895ef3aa637eb88b36",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791590444373,
+    "verified": 1
+   },
+   {
+    "epoch_id": "da9a656d93d29a5fbab96a105a3d6e2fb71ba38e0d0dfa14f7bab03ac1900706",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "89c080901a51a46cb7adc4ff05097005a1a8eec9f8c3ab1377065b664f79c246",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791612041689,
+    "verified": 1
+   },
+   {
+    "epoch_id": "cdf5ca53af93a917f4e1331224e9808dd43de672df68482b28e06163845eca7e",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "da9a656d93d29a5fbab96a105a3d6e2fb71ba38e0d0dfa14f7bab03ac1900706",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791633669047,
+    "verified": 1
+   },
+   {
+    "epoch_id": "24c3224c4b52496140fd08cc10ca9f1f5e981840eace0aecf980028b76c8077d",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "cdf5ca53af93a917f4e1331224e9808dd43de672df68482b28e06163845eca7e",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791655278945,
+    "verified": 1
+   },
+   {
+    "epoch_id": "5316d27204dfbcf870eb929aa2d0cbf666b6e4170ae6bd8ae08df4baf59da406",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "24c3224c4b52496140fd08cc10ca9f1f5e981840eace0aecf980028b76c8077d",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791676881610,
+    "verified": 1
+   },
+   {
+    "epoch_id": "cbb6f019d54ab459da9d696d18e4920e79e24c51d30b98bf0a15278ef083cf84",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "5316d27204dfbcf870eb929aa2d0cbf666b6e4170ae6bd8ae08df4baf59da406",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791698469057,
+    "verified": 1
+   },
+   {
+    "epoch_id": "9914cdf8f26d72c50640e2d18124aab1941aa9687550a6838db33f04b38b6565",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "cbb6f019d54ab459da9d696d18e4920e79e24c51d30b98bf0a15278ef083cf84",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791720068367,
+    "verified": 1
+   },
+   {
+    "epoch_id": "8c52820e66d558ff0407df0de52e59817c708633b7503488ae34b33fe089229e",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "9914cdf8f26d72c50640e2d18124aab1941aa9687550a6838db33f04b38b6565",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791741674941,
+    "verified": 1
+   },
+   {
+    "epoch_id": "d98821c7f9fa0d69bd6009cadf065121cbf9071483a9242f1f9d2dd22df30938",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "8c52820e66d558ff0407df0de52e59817c708633b7503488ae34b33fe089229e",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791763274355,
+    "verified": 1
+   },
+   {
+    "epoch_id": "51017f7f3b9a5102e47fae9a22d35ccb720aeae42b6cec65865b06299822be22",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "d98821c7f9fa0d69bd6009cadf065121cbf9071483a9242f1f9d2dd22df30938",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791784873066,
+    "verified": 1
+   },
+   {
+    "epoch_id": "dd5b6ebd6c319a2e7cc234654dab5c0efd1dd3fce1b0fc24e40a7db845100d49",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "51017f7f3b9a5102e47fae9a22d35ccb720aeae42b6cec65865b06299822be22",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791806473067,
+    "verified": 1
+   },
+   {
+    "epoch_id": "0f2336cf4e8b4db8213b03452497d60e4307529dac7b80dee00c2da0fc1f3903",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "dd5b6ebd6c319a2e7cc234654dab5c0efd1dd3fce1b0fc24e40a7db845100d49",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791828077946,
+    "verified": 1
+   },
+   {
+    "epoch_id": "c83619f5a02f3440c181e131539ab02043bde6a69c4d032cd04cc0a155983d31",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "0f2336cf4e8b4db8213b03452497d60e4307529dac7b80dee00c2da0fc1f3903",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791849675541,
+    "verified": 1
+   },
+   {
+    "epoch_id": "873a5ea439a9a5ed4420510de88c18c1d42fc9c026f087d79a9f6e2e5ccd25b4",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "c83619f5a02f3440c181e131539ab02043bde6a69c4d032cd04cc0a155983d31",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791871265269,
+    "verified": 1
+   },
+   {
+    "epoch_id": "dc3b70b6f30ad5bf92d74a713439ebbd4801b5edd87a3a6034299a14f419fa4a",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "873a5ea439a9a5ed4420510de88c18c1d42fc9c026f087d79a9f6e2e5ccd25b4",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791892868788,
+    "verified": 1
+   },
+   {
+    "epoch_id": "424441fd66e5fa3d19c14aec144e7e301a4416be068771bab754bb6187c85039",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "dc3b70b6f30ad5bf92d74a713439ebbd4801b5edd87a3a6034299a14f419fa4a",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791914470928,
+    "verified": 1
+   },
+   {
+    "epoch_id": "5523ff30babe06605c4c704f6fd0a042fbc80c8c2743a9b1db086ecf8a1eac81",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "424441fd66e5fa3d19c14aec144e7e301a4416be068771bab754bb6187c85039",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791936027489,
+    "verified": 1
+   },
+   {
+    "epoch_id": "077d1ca85276c045a802a855869940cbd3696ecc88df7c91d50d4d29794533e1",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "5523ff30babe06605c4c704f6fd0a042fbc80c8c2743a9b1db086ecf8a1eac81",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791957631987,
+    "verified": 1
+   },
+   {
+    "epoch_id": "cea778edcd6b442d773a411ff81cce374144457dfb550748ed8cc12923dc6f44",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "077d1ca85276c045a802a855869940cbd3696ecc88df7c91d50d4d29794533e1",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1791979224735,
+    "verified": 1
+   },
+   {
+    "epoch_id": "a9e44697aa86d1e98bf92e4b95fe075edc42a160ecdbc4d323f770ee0b4fe347",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "cea778edcd6b442d773a411ff81cce374144457dfb550748ed8cc12923dc6f44",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792000835770,
+    "verified": 1
+   },
+   {
+    "epoch_id": "ecff066dd9bdf51c17815bf488cdd02d679ae0c8d479fe6a1b723d0ae8dc31f2",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "a9e44697aa86d1e98bf92e4b95fe075edc42a160ecdbc4d323f770ee0b4fe347",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792022436482,
+    "verified": 1
+   },
+   {
+    "epoch_id": "fb85a28a8c181a632cae844f919c45e9efff30097568f98356ce68c92066577b",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "ecff066dd9bdf51c17815bf488cdd02d679ae0c8d479fe6a1b723d0ae8dc31f2",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792044033435,
+    "verified": 1
+   },
+   {
+    "epoch_id": "506287ab027c5965e92f822e2897f5b8cdacf9b39e04a0f42fa16931bbe4f503",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "fb85a28a8c181a632cae844f919c45e9efff30097568f98356ce68c92066577b",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792065626347,
+    "verified": 1
+   },
+   {
+    "epoch_id": "f042eef402d618373746f549491b7bb2b598dc386908dbf66381e6e47a637b21",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "506287ab027c5965e92f822e2897f5b8cdacf9b39e04a0f42fa16931bbe4f503",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792087234236,
+    "verified": 1
+   },
+   {
+    "epoch_id": "d6b6a068e958706f895321f84c63bca50fb7ba019fb89501f2ce2f6cfe6bb82e",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "f042eef402d618373746f549491b7bb2b598dc386908dbf66381e6e47a637b21",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792108826859,
+    "verified": 1
+   },
+   {
+    "epoch_id": "b2ddb748086b273c3c54affdbb92d196eca27257324a61dff80c9eb69b11bd45",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "d6b6a068e958706f895321f84c63bca50fb7ba019fb89501f2ce2f6cfe6bb82e",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792130431377,
+    "verified": 1
+   },
+   {
+    "epoch_id": "fdd9882aca423b918a6f07147c09e2c65505dfc368b4326edbf34a80fe521e73",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "b2ddb748086b273c3c54affdbb92d196eca27257324a61dff80c9eb69b11bd45",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792152019321,
+    "verified": 1
+   },
+   {
+    "epoch_id": "f194ed58964384e57f3b483a07b340427a3a6d0646880c6e2397de38e352efb3",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "fdd9882aca423b918a6f07147c09e2c65505dfc368b4326edbf34a80fe521e73",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792173621041,
+    "verified": 1
+   },
+   {
+    "epoch_id": "41e5ae62653287feb157e0473dc989eaae4e880251664d2f0c450be00c745d19",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "f194ed58964384e57f3b483a07b340427a3a6d0646880c6e2397de38e352efb3",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792195219496,
+    "verified": 1
+   },
+   {
+    "epoch_id": "9a1dbeafcbcbcb02104f5135d5691cd91d13801e94920c64e54841ca37e328ee",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "41e5ae62653287feb157e0473dc989eaae4e880251664d2f0c450be00c745d19",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792216831963,
+    "verified": 1
+   },
+   {
+    "epoch_id": "174e8fa73e76160e8e113ea88cc32d9e86ae9cd90503e443d02a6670ca39809c",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "9a1dbeafcbcbcb02104f5135d5691cd91d13801e94920c64e54841ca37e328ee",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792238431738,
+    "verified": 1
+   },
+   {
+    "epoch_id": "beea07d8eac1834d1c459f4e7375d85ceedff016936959db02d131b1a6df77dd",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "174e8fa73e76160e8e113ea88cc32d9e86ae9cd90503e443d02a6670ca39809c",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792260031812,
+    "verified": 1
+   },
+   {
+    "epoch_id": "ceed2d7a39584eaa5cfb4948590f0df64aa4229ff28f064d001d6d30682aef91",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "beea07d8eac1834d1c459f4e7375d85ceedff016936959db02d131b1a6df77dd",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792281631736,
+    "verified": 1
+   },
+   {
+    "epoch_id": "ea0f6dbf1e396c726093cd9d5d42ff7870e764b1761ee5eff1fc4363a3e1892b",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "ceed2d7a39584eaa5cfb4948590f0df64aa4229ff28f064d001d6d30682aef91",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792303231942,
+    "verified": 1
+   },
+   {
+    "epoch_id": "d68cb8d8d8df37736ff3e2abd25fd5d00502bd3743cd185d500a1f44e0a52867",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "ea0f6dbf1e396c726093cd9d5d42ff7870e764b1761ee5eff1fc4363a3e1892b",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792324831900,
+    "verified": 1
+   },
+   {
+    "epoch_id": "d93e828a53465bf768bd6295120dadea602315d34fb1e893823a5bd652d81018",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "d68cb8d8d8df37736ff3e2abd25fd5d00502bd3743cd185d500a1f44e0a52867",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792346431869,
+    "verified": 1
+   },
+   {
+    "epoch_id": "40f4059b4ade389a95459b68189eeeb838780d04627450ab4fd99cedbd240dbc",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "d93e828a53465bf768bd6295120dadea602315d34fb1e893823a5bd652d81018",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792368041692,
+    "verified": 1
+   },
+   {
+    "epoch_id": "d593d4394fcf2a0b977d47c683e550e8bc6123c4ef5da287cb9bc0e91a161a6e",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "40f4059b4ade389a95459b68189eeeb838780d04627450ab4fd99cedbd240dbc",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792389644640,
+    "verified": 1
+   },
+   {
+    "epoch_id": "46f4cba4672df7e14aed1914a5bb194d78c30b98d8ccbf12e39adcfc8f1db44a",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "d593d4394fcf2a0b977d47c683e550e8bc6123c4ef5da287cb9bc0e91a161a6e",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792411241738,
+    "verified": 1
+   },
+   {
+    "epoch_id": "ff3508b21a44328fe949a12d7dea0e7a99e8e73509c1dd943c4f4eb33b338930",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "46f4cba4672df7e14aed1914a5bb194d78c30b98d8ccbf12e39adcfc8f1db44a",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792432842146,
+    "verified": 1
+   },
+   {
+    "epoch_id": "25c3e434ccf02493ff2c41f2febe56ec07cead956a14e35101ca1e62ce3dd53a",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "ff3508b21a44328fe949a12d7dea0e7a99e8e73509c1dd943c4f4eb33b338930",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792454441580,
+    "verified": 1
+   },
+   {
+    "epoch_id": "8253e49f9abc59634a8a411c593f306030c418073e78563185a2e5aadf586e18",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "25c3e434ccf02493ff2c41f2febe56ec07cead956a14e35101ca1e62ce3dd53a",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792476045182,
+    "verified": 1
+   },
+   {
+    "epoch_id": "c9383a572c0d302c1cea0994cb8ae65a8707e49c73ed114decd06a38cbcf12cf",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "8253e49f9abc59634a8a411c593f306030c418073e78563185a2e5aadf586e18",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792497642768,
+    "verified": 1
+   },
+   {
+    "epoch_id": "3286a03fcfb8d5759acf1844313ba7c2afb6e93359b4df07b70836f6056b5721",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "c9383a572c0d302c1cea0994cb8ae65a8707e49c73ed114decd06a38cbcf12cf",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792519241647,
+    "verified": 1
+   },
+   {
+    "epoch_id": "5adc3297426b0b956e0dc27175cb22239783547e8ed9bfc49846b8bddddac7d2",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "3286a03fcfb8d5759acf1844313ba7c2afb6e93359b4df07b70836f6056b5721",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792540841046,
+    "verified": 1
+   },
+   {
+    "epoch_id": "e68dd72cd6f558410449cf1f184370a7ea0a8d837b5ba9603f70487430b5c72f",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "5adc3297426b0b956e0dc27175cb22239783547e8ed9bfc49846b8bddddac7d2",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792562442973,
+    "verified": 1
+   },
+   {
+    "epoch_id": "8d7561b95dcc260cb75e3e27459bf77f8703452f52fdaa2da3725e0933469ed8",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "e68dd72cd6f558410449cf1f184370a7ea0a8d837b5ba9603f70487430b5c72f",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792584041809,
+    "verified": 1
+   },
+   {
+    "epoch_id": "0b928969f775886254e3e4d816e9a5839a108749e90e675fd580bc948ed56e7a",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "8d7561b95dcc260cb75e3e27459bf77f8703452f52fdaa2da3725e0933469ed8",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792605641638,
+    "verified": 1
+   },
+   {
+    "epoch_id": "1ef2b277149f8899c22eae2958cecefa2632724e1ba1dc039df41057e1adf60c",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "0b928969f775886254e3e4d816e9a5839a108749e90e675fd580bc948ed56e7a",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792627270813,
+    "verified": 1
+   },
+   {
+    "epoch_id": "d7dec64ef3cc09493a9b0ec0884e3bf7efeaddd45b4c64842198d712cc129fc2",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "1ef2b277149f8899c22eae2958cecefa2632724e1ba1dc039df41057e1adf60c",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792648858118,
+    "verified": 1
+   },
+   {
+    "epoch_id": "04f0e71cf511ee4bc1fab8e92ac27a761904d2ed5c0c8ebf23fa7b27a0fbb2c2",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "d7dec64ef3cc09493a9b0ec0884e3bf7efeaddd45b4c64842198d712cc129fc2",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792670466853,
+    "verified": 1
+   },
+   {
+    "epoch_id": "fdcd3adeeb8d9700468d97d22191e6bed594de94de5a3f955a6bdaf199832ef7",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "04f0e71cf511ee4bc1fab8e92ac27a761904d2ed5c0c8ebf23fa7b27a0fbb2c2",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792692057778,
+    "verified": 1
+   },
+   {
+    "epoch_id": "60920f36919c6df2923914ae3f03e03c202e3221407799b8f906e4ab116cee27",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "fdcd3adeeb8d9700468d97d22191e6bed594de94de5a3f955a6bdaf199832ef7",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792713663664,
+    "verified": 1
+   },
+   {
+    "epoch_id": "60843dbc9b9532e96d4c72b7065b956486136a1247abac94c1532d215d4af728",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "60920f36919c6df2923914ae3f03e03c202e3221407799b8f906e4ab116cee27",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792735272960,
+    "verified": 1
+   },
+   {
+    "epoch_id": "3ed68f6ecff49f39951c95697b4b297c4733dddf343a3286868c49864b7508d8",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "60843dbc9b9532e96d4c72b7065b956486136a1247abac94c1532d215d4af728",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792756866145,
+    "verified": 1
+   },
+   {
+    "epoch_id": "37e8c9b3c0011b381cfce5e2aa7e42c740f8d713659ecbb97f68cedd478ed4c4",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "3ed68f6ecff49f39951c95697b4b297c4733dddf343a3286868c49864b7508d8",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792778468470,
+    "verified": 1
+   },
+   {
+    "epoch_id": "ec80b0a4fa697a9d3dd52b7cabecf4b26cfdb94afe0ca922175fb6a6ced69af6",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "37e8c9b3c0011b381cfce5e2aa7e42c740f8d713659ecbb97f68cedd478ed4c4",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792800063490,
+    "verified": 1
+   },
+   {
+    "epoch_id": "e19b7be8225d1acab34066b01b3215113b559a7c29d08a133400624ed9a5f0d8",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "ec80b0a4fa697a9d3dd52b7cabecf4b26cfdb94afe0ca922175fb6a6ced69af6",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792821668189,
+    "verified": 1
+   },
+   {
+    "epoch_id": "9705335796bd148b569a6a0cc50e052c62aa61a95a00659494b4807599939d10",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "e19b7be8225d1acab34066b01b3215113b559a7c29d08a133400624ed9a5f0d8",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792843267171,
+    "verified": 1
+   },
+   {
+    "epoch_id": "758cd57978bddf2236d5448e03c0f6622ddb79894b68d1ad7dfc348639eb2a2d",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "9705335796bd148b569a6a0cc50e052c62aa61a95a00659494b4807599939d10",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792864862460,
+    "verified": 1
+   },
+   {
+    "epoch_id": "98099870131dec78ea43b6008c9f335ebf23fc8c5b485b6a9891a423668452e4",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "758cd57978bddf2236d5448e03c0f6622ddb79894b68d1ad7dfc348639eb2a2d",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792886461022,
+    "verified": 1
+   },
+   {
+    "epoch_id": "52c366d1f2f35a2c1f26afa7b29b33d0e2e984c5f83d93c9505f77c220d47b4c",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "98099870131dec78ea43b6008c9f335ebf23fc8c5b485b6a9891a423668452e4",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792951263588,
+    "verified": 1
+   },
+   {
+    "epoch_id": "a3f391f227d8ee0f5a8fb1ebfacad565236a6220611255b74951c8f4bc5a51f0",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "52c366d1f2f35a2c1f26afa7b29b33d0e2e984c5f83d93c9505f77c220d47b4c",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792972858987,
+    "verified": 1
+   },
+   {
+    "epoch_id": "9b88186a2185bd111acdbc2646fca67d3e77ac32cdf35d2d4b992368732b6d6c",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "a3f391f227d8ee0f5a8fb1ebfacad565236a6220611255b74951c8f4bc5a51f0",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1792994466556,
+    "verified": 1
+   },
+   {
+    "epoch_id": "8712503020db2f040954c5c49f156532a797bc391fffd14d93cf516dadf4ed80",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "9b88186a2185bd111acdbc2646fca67d3e77ac32cdf35d2d4b992368732b6d6c",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793016065155,
+    "verified": 1
+   },
+   {
+    "epoch_id": "f05235f650f54060000dd0c1a61f838654812c7923b3f81614758a2ebce13288",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "8712503020db2f040954c5c49f156532a797bc391fffd14d93cf516dadf4ed80",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793037662115,
+    "verified": 1
+   },
+   {
+    "epoch_id": "fb3fe70becb2a6b0ad644bf4932a4f5cc4b8ff6365967f3c7670995bc1da92f9",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "f05235f650f54060000dd0c1a61f838654812c7923b3f81614758a2ebce13288",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793059264281,
+    "verified": 1
+   },
+   {
+    "epoch_id": "90ec10f293ec35141b71851fe8077d81e22b10dec33c6c42379e18152553546e",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "fb3fe70becb2a6b0ad644bf4932a4f5cc4b8ff6365967f3c7670995bc1da92f9",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793080858103,
+    "verified": 1
+   },
+   {
+    "epoch_id": "7daf0f25c5a0a0802e2756591c5cc3f262bc717de8d0595d7b220c3d89b10be9",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "90ec10f293ec35141b71851fe8077d81e22b10dec33c6c42379e18152553546e",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793102459202,
+    "verified": 1
+   },
+   {
+    "epoch_id": "7d2e89888e7b66b4644199f067540a0c26449d2499563575371ab3e3a457bb48",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "7daf0f25c5a0a0802e2756591c5cc3f262bc717de8d0595d7b220c3d89b10be9",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793124062394,
+    "verified": 1
+   },
+   {
+    "epoch_id": "7b24419675d4781b35df100f160b7f4d1720a0886199905ff1322e0299c028a5",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "7d2e89888e7b66b4644199f067540a0c26449d2499563575371ab3e3a457bb48",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793145661179,
+    "verified": 1
+   },
+   {
+    "epoch_id": "4500f7010d3fa3c52b35344e9a52cbc69d33679e9f9e49ba8f4123c8a19f431c",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "7b24419675d4781b35df100f160b7f4d1720a0886199905ff1322e0299c028a5",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793167263650,
+    "verified": 1
+   },
+   {
+    "epoch_id": "048690a736fc3e2609d28177a68b20083fc221bd8b053b15df054602b06dc212",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "4500f7010d3fa3c52b35344e9a52cbc69d33679e9f9e49ba8f4123c8a19f431c",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793188859600,
+    "verified": 1
+   },
+   {
+    "epoch_id": "c87349774806866a962e91c777dc5106e6483c62d67a9325e5d6086899ab586c",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "048690a736fc3e2609d28177a68b20083fc221bd8b053b15df054602b06dc212",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793210460966,
+    "verified": 1
+   },
+   {
+    "epoch_id": "7aa59a3135669707ac1df9bf9d2c65bcc11beb69390353c1cf46c631828e64c7",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "c87349774806866a962e91c777dc5106e6483c62d67a9325e5d6086899ab586c",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793232034772,
+    "verified": 1
+   },
+   {
+    "epoch_id": "9e0db843cbc11e5c6972c51f4775e9370cff4c848808c573f8072b9e13932258",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "7aa59a3135669707ac1df9bf9d2c65bcc11beb69390353c1cf46c631828e64c7",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793253648795,
+    "verified": 1
+   },
+   {
+    "epoch_id": "914c04d86773c31136e7496d1608eb3adc328d60c64fc5a6712fe8ae7523465a",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "9e0db843cbc11e5c6972c51f4775e9370cff4c848808c573f8072b9e13932258",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793275253704,
+    "verified": 1
+   },
+   {
+    "epoch_id": "355be5ec126189cf04d4dd1473934ddb6892d01b993953f639cd375b5b050cca",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "914c04d86773c31136e7496d1608eb3adc328d60c64fc5a6712fe8ae7523465a",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793296856839,
+    "verified": 1
+   },
+   {
+    "epoch_id": "51978031f0f2ff19df44fe39061c97c0f2eea1685c22ee51f2bd6d14f0ac54b4",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "355be5ec126189cf04d4dd1473934ddb6892d01b993953f639cd375b5b050cca",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793318451382,
+    "verified": 1
+   },
+   {
+    "epoch_id": "3d19dd5cd296bd36379282994a6387e025115fccdc1e2fc4142ac8a6976480ab",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "51978031f0f2ff19df44fe39061c97c0f2eea1685c22ee51f2bd6d14f0ac54b4",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793340053197,
+    "verified": 1
+   },
+   {
+    "epoch_id": "a7c0775a880a93b2be8d3407d29ead1cc1b3b97b7f1ce2711be6cf02cd9cb6dd",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "3d19dd5cd296bd36379282994a6387e025115fccdc1e2fc4142ac8a6976480ab",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793361651275,
+    "verified": 1
+   },
+   {
+    "epoch_id": "6b014800e17969d6a1e5de55787af34191a2a0ddba7ebdf2e7290dd8faf1528c",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "a7c0775a880a93b2be8d3407d29ead1cc1b3b97b7f1ce2711be6cf02cd9cb6dd",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793383249549,
+    "verified": 1
+   },
+   {
+    "epoch_id": "ec71b346cfed8e4512c86bb8dcf3867eb898966e4f54bc423b181507b85ebb9a",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "6b014800e17969d6a1e5de55787af34191a2a0ddba7ebdf2e7290dd8faf1528c",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793404816750,
+    "verified": 1
+   },
+   {
+    "epoch_id": "e48eadaaa4fdc89cbb5f627634ec9e6e4be4eaf358ba3afba0beb2d1949ca5d8",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "ec71b346cfed8e4512c86bb8dcf3867eb898966e4f54bc423b181507b85ebb9a",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793426416704,
+    "verified": 1
+   },
+   {
+    "epoch_id": "d8f00bc0359c0ea7298821436bd247ee96c2d90ed6d757a289d1be132191f52d",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "e48eadaaa4fdc89cbb5f627634ec9e6e4be4eaf358ba3afba0beb2d1949ca5d8",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793448016821,
+    "verified": 1
+   },
+   {
+    "epoch_id": "b399e84fbf3762d214a8ba82d58a9d7e5df1f9be0fa3b252d5ec7d7ff20de778",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "d8f00bc0359c0ea7298821436bd247ee96c2d90ed6d757a289d1be132191f52d",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793469617031,
+    "verified": 1
+   },
+   {
+    "epoch_id": "b8924133ce8ef0c4b9fe23ff2de69fc48205d5c4327fc292120f75cafae70ab5",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "b399e84fbf3762d214a8ba82d58a9d7e5df1f9be0fa3b252d5ec7d7ff20de778",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793491216731,
+    "verified": 1
+   },
+   {
+    "epoch_id": "a4acf6ac9fdb3db51d22451ef559e836d2f2d777f929640bcec3c80d00a366ad",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "b8924133ce8ef0c4b9fe23ff2de69fc48205d5c4327fc292120f75cafae70ab5",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793512816809,
+    "verified": 1
+   },
+   {
+    "epoch_id": "8e329a10b603fce2cd22d37f4467c54a1d6a2f71b30919f81dc32956afe5b804",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "a4acf6ac9fdb3db51d22451ef559e836d2f2d777f929640bcec3c80d00a366ad",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793534416784,
+    "verified": 1
+   },
+   {
+    "epoch_id": "88b0fc8ecffe822e86bec05f6711a26f909f6973843f61ca92e8b13e41b5aeb7",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "8e329a10b603fce2cd22d37f4467c54a1d6a2f71b30919f81dc32956afe5b804",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793556017021,
+    "verified": 1
+   },
+   {
+    "epoch_id": "e546b2050ca1e1812fd7bd434c6a3ac543e57a4c002c687c6e5db3ca7c8182d1",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "88b0fc8ecffe822e86bec05f6711a26f909f6973843f61ca92e8b13e41b5aeb7",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793577649277,
+    "verified": 1
+   },
+   {
+    "epoch_id": "0c52c77eb6d6b301a35f76a8187b1195fd3bb360b89b5dd8806963ef0766754b",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "e546b2050ca1e1812fd7bd434c6a3ac543e57a4c002c687c6e5db3ca7c8182d1",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793599248510,
+    "verified": 1
+   },
+   {
+    "epoch_id": "a242974390a4de04a91202766f7a715caf2de5b52b4ef061fc9224f95f1b5102",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "0c52c77eb6d6b301a35f76a8187b1195fd3bb360b89b5dd8806963ef0766754b",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793620861827,
+    "verified": 1
+   },
+   {
+    "epoch_id": "0f3883cced54f660cd1dd9931f4c50a3f9414209fc147f642dc6eba686aea2f2",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "a242974390a4de04a91202766f7a715caf2de5b52b4ef061fc9224f95f1b5102",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793642455731,
+    "verified": 1
+   },
+   {
+    "epoch_id": "bec93b3c5e14b7d2ae713aaba6411f6a4aae8816859f0610a9c18dee5f77cdd9",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "0f3883cced54f660cd1dd9931f4c50a3f9414209fc147f642dc6eba686aea2f2",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793664049028,
+    "verified": 1
+   },
+   {
+    "epoch_id": "ed4b9201f230562e30551377799aeabbef5a270cdae53eae0ea92a11e8ebaa0e",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "bec93b3c5e14b7d2ae713aaba6411f6a4aae8816859f0610a9c18dee5f77cdd9",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793685646464,
+    "verified": 1
+   },
+   {
+    "epoch_id": "4ff8da378ba62f0de175bfec8c424310f0e985e37b5e7d41279e995efad3bbe2",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "ed4b9201f230562e30551377799aeabbef5a270cdae53eae0ea92a11e8ebaa0e",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793707245865,
+    "verified": 1
+   },
+   {
+    "epoch_id": "b961c4685487ee19619bd59593cf15c905422d03e449b9af198205617ad10066",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "4ff8da378ba62f0de175bfec8c424310f0e985e37b5e7d41279e995efad3bbe2",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793728847008,
+    "verified": 1
+   },
+   {
+    "epoch_id": "3de2ca14a746eec10bc70d94f255797b4fc8bee72495f061e45047c0e80ed8cc",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "b961c4685487ee19619bd59593cf15c905422d03e449b9af198205617ad10066",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793750444572,
+    "verified": 1
+   },
+   {
+    "epoch_id": "8a331458bbd3f4542eac30d96dd7d33ae9400e3317a47bad6b112a63a51629a5",
+    "config_hash": "18dbda32aaad7ed03866fdd2c132365fd05e9eb79cd7c387244dbe7a2477a7d5",
+    "previous_epoch_hash": "3de2ca14a746eec10bc70d94f255797b4fc8bee72495f061e45047c0e80ed8cc",
+    "covenant_hash": "4cdea98744bb3c71",
+    "timestamp": 1793772044154,
+    "verified": 1
    }
   ],
   "quota_metrics": [],
@@ -10747,32 +11638,6 @@
   ],
   "memories": [
    {
-    "id": "7883d2b2-d569-425d-b2d8-90ddba5ed152",
-    "type": "context",
-    "content": "[2026-09-04] User menanyakan tentang: pendapatmu tentang penurunan mata uang rupiah",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788517347283,
-    "expires_at": 0,
-    "last_retrieved": 1788517814303,
-    "access_count": 5,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "b0cc2f49-c781-4bf3-a76c-63f0008a7f53",
-    "type": "context",
-    "content": "[2026-09-04] User menanyakan tentang: uang bisa kamu lakukan",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788528310040,
-    "expires_at": 0,
-    "last_retrieved": 1788567491815,
-    "access_count": 10,
-    "owner_id": 6812604983
-   },
-   {
     "id": "42beb825-840c-45d8-8b92-51516276fb6e",
     "type": "fact",
     "content": "[singkong] 3lom4all.com https://www.3lom4all.com › object كلية الهندسة الصناعية - معلومات لكل مهتم بالتسجيل بهذه الكلية تعرف معنا وعلى موقع علوم للجميع على كلية الهندسة الصناعية - معلومات لكل مهتم بالتسجيل بهذه الكلية لكل شخص يريد دخول الكلية وتسجيلها بالمفاضلة علوم تقنية و علوم أقتصادية و …",
@@ -10786,32 +11651,6 @@
     "owner_id": 6812604983
    },
    {
-    "id": "135a0bcd-ee71-45ee-a041-dfa0084c4fa4",
-    "type": "context",
-    "content": "[2026-09-05] User menanyakan tentang: singkong",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788574353778,
-    "expires_at": 0,
-    "last_retrieved": 1788591653852,
-    "access_count": 1,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "a0037841-94a9-4d11-b126-909304e735ef",
-    "type": "context",
-    "content": "[2026-09-06] User menanyakan tentang: bisnis apa di tahun 2026 uang paling minum modal dan tanya skill",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788721467234,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
     "id": "1a378a0c-b66b-4542-8d54-2534cd092780",
     "type": "fact",
     "content": "[bisnis uang cocok di tahun 2026 tanya skill minum modal] amazon.de https://www. amazon .de Amazon .de: G&#252;nstige Preise f&#252;r Elektronik & Foto, Filme, Musik, B&#252;ch… Entdecken, shoppen und einkaufen bei Amazon.de: G&#252;nstige Preise f&#252;r Elektronik & Foto, Filme, Musik, B&#252;cher, Games, Spielzeug, …",
@@ -10822,123 +11661,6 @@
     "expires_at": 0,
     "last_retrieved": 1788730464714,
     "access_count": 2,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "34472312-89a0-4328-b5cd-a7dac6b1d676",
-    "type": "context",
-    "content": "[2026-09-06] User menanyakan tentang: bisnis uang cocok di tahun 2026 tanya skill minum modal",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788728726536,
-    "expires_at": 0,
-    "last_retrieved": 1788730464714,
-    "access_count": 2,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "8d3e6f17-aaa0-400d-a095-69d9cd122dc2",
-    "type": "fact",
-    "content": "[bisnis uang cocok di tahun 2026 tanya skill minum modal] 60millions-mag.com https:// www.60millions-mag.com 60 Millions de Consommateurs — Accueil 60 millions de consommateurs, un magazine ind&#233;pendant au service de tous les consommateurs.",
-    "tags": "[\"learned\",\"bisnis uang cocok di tahun 2026 tanya skill minum \"]",
-    "importance": 0.5,
-    "source": "web_search_synthesized",
-    "created_at": 1788730473457,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "3033fd31-8534-47c3-8040-9b4796e4469f",
-    "type": "fact",
-    "content": "[seo] moz.com https://moz.com › learn › seo › what-is-seo What Is SEO ? Search Engine Optimization Best Practices - Moz Apr 14, 2025 &#0183;&#32;Search engine optimization (SEO) is a set of practices designed to improve the appearance and positioning of web pages in …",
-    "tags": "[\"learned\",\"seo\"]",
-    "importance": 0.5,
-    "source": "web_search_synthesized",
-    "created_at": 1788730534559,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "d03c02e2-fd2a-4e4f-bcbf-2845d819bffe",
-    "type": "context",
-    "content": "[2026-09-06] User menanyakan tentang: seo",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788730535732,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "a161cd7f-cf9f-43f6-9a31-f80a8a989732",
-    "type": "fact",
-    "content": "Eksekusi cloud #7 berhasil: SELAMAT PAGI. Test konsolidasi memori.",
-    "tags": "[\"agent_task\",\"executor\"]",
-    "importance": 0.5,
-    "source": "agent_task",
-    "created_at": 1788742794077,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "b11dbd00-6723-4cb0-8c74-5b21f59d5f88",
-    "type": "fact",
-    "content": "[bisnis jangka panjang tanya skill minum modal] google.com https://support.google.com › maps › answer Get directions and show routes in Google Maps - Computer - Google … Get directions in Google Maps On your computer, open Google Maps. Click Directions . Enter the starting point and destination. Click points on …",
-    "tags": "[\"learned\",\"bisnis jangka panjang tanya skill minum modal\"]",
-    "importance": 0.5,
-    "source": "web_search_synthesized",
-    "created_at": 1788762326578,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "c35837c7-5264-4157-a979-27bba0765dda",
-    "type": "context",
-    "content": "[2026-09-07] User menanyakan tentang: bisnis jangka panjang tanya skill minum modal",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788762327801,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "1b762450-105a-47c5-9a07-afecfad43d8e",
-    "type": "fact",
-    "content": "[bisnis jangka panjang tanpa skill minim modal] 11 Ide Bisnis Tanpa Modal 2026 Minim Pesaing — Temukan 11 ide bisnis tanpa modal 2026 yang minim pesaing, mulai dari penulisan lepas hingga layanan pengantaran barang lokal, cocok untuk pemula.",
-    "tags": "[\"learned\",\"bisnis jangka panjang tanpa skill minim modal\"]",
-    "importance": 0.5,
-    "source": "web_search_synthesized",
-    "created_at": 1788763250762,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "ef1b8170-cf16-4742-961c-3b3ecdef34f3",
-    "type": "context",
-    "content": "[2026-09-07] User menanyakan tentang: bisnis jangka panjang tanpa skill minim modal",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788763252042,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
     "owner_id": 6812604983
    },
    {
@@ -10968,58 +11690,6 @@
     "owner_id": 6812604983
    },
    {
-    "id": "9e9366a2-9ede-42be-8f22-571c8a4904e4",
-    "type": "context",
-    "content": "[2026-09-07] User menanyakan tentang: bisnis kerajinan",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788779843240,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "bcc48130-9727-48e6-bfd2-ee0e42c9dfd0",
-    "type": "fact",
-    "content": "[minimal produksi untuk pertama kami buka] merriam-webster.com https:// www.merriam-webster.com › dictionary › minimal MINIMAL Definition & Meaning - Merriam-Webster 2 days ago &#0183;&#32;The meaning of MINIMAL is relating to or being a minimum. How to use minimal in a sentence.",
-    "tags": "[\"learned\",\"minimal produksi untuk pertama kami buka\"]",
-    "importance": 0.5,
-    "source": "web_search_synthesized",
-    "created_at": 1788780045712,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "ffd5ed82-1b9e-48a2-aceb-3f16af087f51",
-    "type": "context",
-    "content": "[2026-09-07] User menanyakan tentang: minimal produksi untuk pertama kami buka",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788780046947,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "5f783768-6a00-4849-99e4-f799c2afcc05",
-    "type": "context",
-    "content": "[2026-09-07] User menanyakan tentang: cara menentukan harga jual",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788780108474,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
     "id": "22dc6028-9d09-4dc7-81ae-c1e3e6efedae",
     "type": "fact",
     "content": "[machine learning] wikipedia.org https://en.wikipedia.org › wiki › Machine_learning Machine learning - Wikipedia Machine learning - Wikipedia",
@@ -11033,45 +11703,6 @@
     "owner_id": 6812604983
    },
    {
-    "id": "2a8d8441-0c86-46bf-b51c-badedec3059b",
-    "type": "context",
-    "content": "[2026-09-07] User menanyakan tentang: machine learning",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788815229213,
-    "expires_at": 0,
-    "last_retrieved": 1788850819231,
-    "access_count": 4,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "c5221a6e-0e32-4875-9b35-ba0fcde1bae8",
-    "type": "context",
-    "content": "[2026-09-07] User menanyakan tentang: kelebihan dan kekurangan bekerja remote",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788815351188,
-    "expires_at": 0,
-    "last_retrieved": 1789234201772,
-    "access_count": 32,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "f6ceddc2-e77f-4db7-997e-c0ba45391bb1",
-    "type": "context",
-    "content": "[2026-09-08] User menanyakan tentang: machine learning",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788825663475,
-    "expires_at": 0,
-    "last_retrieved": 1788850819231,
-    "access_count": 3,
-    "owner_id": 6812604983
-   },
-   {
     "id": "e7a77111-9c26-4c74-a70b-09073c895657",
     "type": "fact",
     "content": "[paling besar saat ini] rybnik.sr.gov.pl https:// rybnik .sr.gov.pl rybnik .sr.gov.pl We would like to show you a description here but the site won’t allow us. Learn more",
@@ -11082,45 +11713,6 @@
     "expires_at": 0,
     "last_retrieved": 1788909467370,
     "access_count": 1,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "150d6680-7821-4a30-89b5-20cbe9e70ae3",
-    "type": "context",
-    "content": "[2026-09-08] User menanyakan tentang: paling besar saat ini",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788852586142,
-    "expires_at": 0,
-    "last_retrieved": 1788909467370,
-    "access_count": 1,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "cbe31059-e2ef-45d1-b82a-aacf32d91b48",
-    "type": "context",
-    "content": "[2026-09-08] User menanyakan tentang: saat ini yang paling banyak",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788852734044,
-    "expires_at": 0,
-    "last_retrieved": 1788854425318,
-    "access_count": 6,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "cd1ea747-61b7-4336-8153-f5262482746d",
-    "type": "context",
-    "content": "[2026-09-08] User menanyakan tentang: kebutuhan pasar dan referensinya menurut lembaga riset lokal",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788869844148,
-    "expires_at": 0,
-    "last_retrieved": 1788874508370,
-    "access_count": 3,
     "owner_id": 6812604983
    },
    {
@@ -11147,45 +11739,6 @@
     "expires_at": 0,
     "last_retrieved": 1788874508370,
     "access_count": 2,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "5b9cf101-c12d-44da-a761-3d200f9f14b2",
-    "type": "fact",
-    "content": "[paling besar saat ini] detikNews - Berita hari ini di Indonesia dan Internasional — Info berita terbaru hari ini baik peristiwa, kecelakaan, kriminal, hukum, berita unik, Politik, dan liputan khusus di Indonesia dan Internasional",
-    "tags": "[\"learned\",\"paling besar saat ini\"]",
-    "importance": 0.5,
-    "source": "web_search_synthesized",
-    "created_at": 1788909474861,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "536bcc11-6d28-4469-bf85-ebd799ce5f6b",
-    "type": "fact",
-    "content": "[paling banyak menurut lembaga riset lokal] legi.sn https://legi.sn › legislation Code g&#233;n&#233;ral des imp&#244;ts — Texte int&#233;gral | Legi.sn Ce code r&#233;git les imp&#244;ts directs et indirects, les droits d'enregistrement, de timbre et de publicit&#233; fonci&#232;re, ainsi que les taxes assimil&#233;es et les …",
-    "tags": "[\"learned\",\"paling banyak menurut lembaga riset lokal\"]",
-    "importance": 0.5,
-    "source": "web_search_synthesized",
-    "created_at": 1788909527704,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "6e3eaaca-4019-459a-bd6e-d3c552f2fb70",
-    "type": "context",
-    "content": "[2026-09-08] User menanyakan tentang: paling banyak menurut lembaga riset lokal",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788909528929,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
     "owner_id": 6812604983
    },
    {
@@ -11280,32 +11833,6 @@
     "owner_id": 6812604983
    },
    {
-    "id": "56a550ed-ce4b-48b6-b83c-1ab4fbcfd5bc",
-    "type": "fact",
-    "content": "[kode python] zhihu.com https://www.zhihu.com › question 披萨馅料有哪些经典的种类？都用了哪些食材？ - 知乎 15个回答 默认排序 知乎用户 我是PIZZA脑残粉。 一般吃一整个PIZZA是不过瘾的~ 5555 以下讨论仅限意式PIZZA~ 一般意大利的pizza店有两种： 一种做的是 …",
-    "tags": "[\"learned\",\"kode python\"]",
-    "importance": 0.5,
-    "source": "web_search_synthesized",
-    "created_at": 1788915973077,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "d5ea38c2-af23-4260-b4c8-8acfe3bcfd02",
-    "type": "context",
-    "content": "[2026-09-09] User menanyakan tentang: kode python",
-    "tags": "[\"observation\",\"interest\"]",
-    "importance": 0.5,
-    "source": "observation",
-    "created_at": 1788915974284,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
     "id": "2a9816f9-51c1-4fbe-893a-d05f7373b491",
     "type": "fact",
     "content": "[itu] itu.int https://www. itu .int ITU : Connecting the world and beyond Global dialogue shapes unified digital policy priorities. Opinions on key telecommunications and technology issues discussed at WTPF-26 …",
@@ -11349,25 +11876,12 @@
     "type": "fact",
     "content": "[bukan kerja remote yang saya maksud memiliki bisnis sendiri tanpa tim] wikipedia.org https:// en.wikipedia.org › wiki › Bukan Bukan - Wikipedia This page was last edited on 6 August 2026, at 04:49 (UTC).",
     "tags": "[\"learned\",\"bukan kerja remote yang saya maksud memiliki bisni\"]",
-    "importance": 2.5,
+    "importance": 0.5,
     "source": "web_search_synthesized",
     "created_at": 1788949595179,
     "expires_at": 0,
     "last_retrieved": 1791259947070,
     "access_count": 8,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "cbfeaa59-7f39-4435-bc4a-cffb573dea2b",
-    "type": "fact",
-    "content": "[bukan malang tapi alur kerja no-code] wikipedia.org https:// en.wikipedia.org › wiki › Bukan Bukan - Wikipedia This page was last edited on 6 August 2026, at 04:49 (UTC).",
-    "tags": "[\"learned\",\"bukan malang tapi alur kerja no-code\"]",
-    "importance": 0.5,
-    "source": "web_search_synthesized",
-    "created_at": 1788951620861,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
     "owner_id": 6812604983
    },
    {
@@ -11384,19 +11898,6 @@
     "owner_id": 6812604983
    },
    {
-    "id": "87a3cc73-0038-4d88-8cb9-5aecf5fea567",
-    "type": "fact",
-    "content": "Eksekusi cloud #29 berhasil: > build · openai/gpt-oss-120b **Ringkasan Mingguan – Perkembangan AI Open‑Source (7‑13 September 2026)** | Area | Highlight Utama | Dampak /",
-    "tags": "[\"agent_task\",\"executor\"]",
-    "importance": 0.5,
-    "source": "agent_task",
-    "created_at": 1789130940963,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
     "id": "c6438a6a-066a-46bd-bc75-0a26ff486622",
     "type": "fact",
     "content": "[bisnis terbaik tahun ini] roblox.com https://devforum.roblox.com Developer Forum | Roblox Chat with other creators, learn about Roblox platform updates, and report issues with the platform.",
@@ -11407,32 +11908,6 @@
     "expires_at": 0,
     "last_retrieved": 1789233614306,
     "access_count": 23,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "d52fbd2b-e749-40f0-9ece-a673e383f5b7",
-    "type": "fact",
-    "content": "[kompetitor openai 2026] vseinstrumenti.ru https://www.vseinstrumenti.ru › category Краскопульты пневматические - купить краскораспылитель пневм… Купить Краскопульты пневматические - 1667 оригинальных товаров с гарантией от 739 р. Доставка в срок. Бесплатно в 1200 …",
-    "tags": "[\"learned\",\"kompetitor openai 2026\"]",
-    "importance": 0.5,
-    "source": "web_search_synthesized",
-    "created_at": 1789178652714,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 6812604983
-   },
-   {
-    "id": "b9d8f9f1-6e38-4899-8857-a29a24c08715",
-    "type": "fact",
-    "content": "Eksekusi pinjaman riset #31: Saya tidak memiliki data pasti tentang siapa saja yang menjadi kompetitor utama OpenAI pada tahun 2026, namun biasanya perusahaan seperti An",
-    "tags": "[\"agent_task\",\"executor\",\"borrowed\"]",
-    "importance": 0.5,
-    "source": "agent_task",
-    "created_at": 1789178652901,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
     "owner_id": 6812604983
    },
    {
@@ -11462,24 +11937,11 @@
     "owner_id": 6812604983
    },
    {
-    "id": "a2773098-5332-45c5-a565-536ab49cb5a3",
-    "type": "fact",
-    "content": "[rumus suku ke-n dari 20,17,14, 11,] Rumus suku ke-n untuk barisan bilangan 20, 17, 14,... - Roboguru — Rumus suku ke-n untuk barisan bilangan 20, 17, 14, 11, 8,... adalah... Ikuti Tryout SNBT & Menangkan E-Wallet 100rb Habis dalam 02 :",
-    "tags": "[\"learned\",\"rumus suku ke-n dari 20,17,14, 11,\"]",
-    "importance": 1.79,
-    "source": "web_search_synthesized",
-    "created_at": 1790694563983,
-    "expires_at": 0,
-    "last_retrieved": 0,
-    "access_count": 0,
-    "owner_id": 1271640062
-   },
-   {
     "id": "19fce803-ab98-400a-bedf-1bd409b0628f",
     "type": "fact",
     "content": "[maksud dari world index] mlb.com https:// www.mlb.com › yankees › scores Yankees Scores : Scoreboard, Results and Highlights | New York Yankees The official scoreboard of the New York Yankees including Gameday, video, highlights and box score.",
     "tags": "[\"learned\",\"maksud dari world index\"]",
-    "importance": 2.5,
+    "importance": 0.5,
     "source": "web_search_synthesized",
     "created_at": 1791251852894,
     "expires_at": 0,
@@ -11492,7 +11954,7 @@
     "type": "fact",
     "content": "Eksekusi cloud #37 berhasil: Uji jalur pelaporan delegasi berhasil.",
     "tags": "[\"agent_task\",\"executor\"]",
-    "importance": 3,
+    "importance": 0.5,
     "source": "agent_task",
     "created_at": 1791296448217,
     "expires_at": 0,
@@ -11504,32 +11966,32 @@
   "cron_locks": [
    {
     "lock_name": "cron:0 */6 * * *",
-    "locked_by": "1791331217717-n96wt7h9",
-    "locked_at": 1791331217717,
+    "locked_by": "1793772043241-pcl5r01w",
+    "locked_at": 1793772043241,
     "expires_at": 0
    },
    {
     "lock_name": "cron:0 3 * * *",
-    "locked_by": "1791255645669-r99oofq8",
-    "locked_at": 1791255645669,
+    "locked_by": "1793761243162-qzcextej",
+    "locked_at": 1793761243162,
     "expires_at": 0
    },
    {
     "lock_name": "cron:0 7 * * *",
-    "locked_by": "1791270053686-pxrsj4of",
-    "locked_at": 1791270053686,
+    "locked_by": "1793775643637-boz52n69",
+    "locked_at": 1793775643637,
     "expires_at": 0
    },
    {
     "lock_name": "cron:0 8 * * *",
-    "locked_by": "1791273653741-v6dsft65",
-    "locked_at": 1791273653741,
+    "locked_by": "1793779242461-fd5o7s89",
+    "locked_at": 1793779242461,
     "expires_at": 0
    },
    {
     "lock_name": "cron:* * * * *",
-    "locked_by": "1791332117720-e8fn6uab",
-    "locked_at": 1791332117720,
+    "locked_by": "1793783259153-k8naigy4",
+    "locked_at": 1793783259153,
     "expires_at": 0
    }
   ],
@@ -11865,7 +12327,7 @@
     "last_validated_at": 1789354822109,
     "disabled": 0,
     "created_at": 1789354822109,
-    "updated_at": 1791255646044
+    "updated_at": 1793761243530
    }
   ],
   "dream_cycles": [
@@ -12183,6 +12645,267 @@
     "archived": 30,
     "briefing_sent": 0,
     "errors": 0
+   },
+   {
+    "id": 36,
+    "ran_at": 1791356418259,
+    "memories_scanned": 1,
+    "insights_extracted": 0,
+    "archived": 45,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 37,
+    "ran_at": 1791442811589,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 20,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 38,
+    "ran_at": 1791529259955,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 25,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 39,
+    "ran_at": 1791615673397,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 5,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 40,
+    "ran_at": 1791702066774,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 41,
+    "ran_at": 1791788466769,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 15,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 42,
+    "ran_at": 1791874863867,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 43,
+    "ran_at": 1791961230550,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 44,
+    "ran_at": 1792047627269,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 45,
+    "ran_at": 1792134017694,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 46,
+    "ran_at": 1792220431622,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 47,
+    "ran_at": 1792306831546,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 48,
+    "ran_at": 1792393241469,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 49,
+    "ran_at": 1792479644139,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 50,
+    "ran_at": 1792566041172,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 51,
+    "ran_at": 1792652458299,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 52,
+    "ran_at": 1792738868630,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 53,
+    "ran_at": 1792825262610,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 54,
+    "ran_at": 1792911658452,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 55,
+    "ran_at": 1792998062780,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 56,
+    "ran_at": 1793084462664,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 57,
+    "ran_at": 1793170864206,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 58,
+    "ran_at": 1793257252898,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 59,
+    "ran_at": 1793343650520,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 5,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 60,
+    "ran_at": 1793430016393,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 61,
+    "ran_at": 1793516416422,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 62,
+    "ran_at": 1793602847101,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 63,
+    "ran_at": 1793689245420,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
+   },
+   {
+    "id": 64,
+    "ran_at": 1793775644170,
+    "memories_scanned": 0,
+    "insights_extracted": 0,
+    "archived": 0,
+    "briefing_sent": 0,
+    "errors": 0
    }
   ],
   "suggestions": [
@@ -12233,1024 +12956,19 @@
   ],
   "system_errors": [
    {
-    "id": "err_1789711233584_2z1s3t",
-    "timestamp": 1789711233584,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12636:3)\n    at async refreshQuotaSnapshot (index.js:15858:3)\n    at async Object.scheduled (index.js:16648:9)",
-    "diagnosis": "1. Penyebab utama adalah cron yang mengeksekusi `updateQuotaSnapshot` mencoba menyisipkan baris ke tabel **degradation_state** dengan nilai `owner_id` yang sudah ada, sehingga melanggar constraint unik pada kolom tersebut.  \n2. Akibatnya proses cron gagal dan snapshot kuota tidak ter‑update, yang dapat menyebabkan data kuota menjadi tidak sinkron dan potensi gangguan pada layanan yang bergantung pada informasi kuota terbaru.  \n3. Perbaiki dengan menambahkan logika *upsert* (misalnya `INSERT ... ",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789711233584,
-    "updated_at": 1791266450290
-   },
-   {
-    "id": "err_1789732837334_k7lr0a",
-    "timestamp": 1789732837334,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12636:3)\n    at async refreshQuotaSnapshot (index.js:15858:3)\n    at async Object.scheduled (index.js:16648:9)",
-    "diagnosis": "1. Penyebab utama adalah proses cron `updateQuotaSnapshot` mencoba menyisipkan baris dengan `owner_id` yang sudah ada di tabel `degradation_state`, sehingga melanggar constraint primary‑key/unique.  \n2. Akibatnya cron gagal dan snapshot kuota tidak ter‑update, yang dapat menyebabkan data kuota tidak akurat dan potensi penolakan layanan bagi pemilik yang terpengaruh.  \n3. Perbaiki dengan menambahkan logika *upsert* (misalnya `INSERT … ON CONFLICT(owner_id) DO UPDATE`) atau memastikan tidak ada du",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789732837334,
-    "updated_at": 1791266451577
-   },
-   {
-    "id": "err_1789754425581_yvktu3",
-    "timestamp": 1789754425581,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah cron job mencoba menyisipkan baris ke tabel **degradation_state** dengan `owner_id` yang sudah ada, sehingga melanggar batasan unik pada kolom primary‑key.  \n2. Akibatnya proses pembaruan snapshot kuota gagal, sehingga data kuota tidak ter‑refresh dan cron terhenti hingga error teratasi.  \n3. Perbaiki dengan menambahkan logika *upsert* (misalnya `INSERT … ON CONFLICT(owner_id) DO UPDATE`) atau memeriksa keberadaan `owner_id` sebelum insert, serta pastikan cron tidak meng",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789754425581,
-    "updated_at": 1791266452822
-   },
-   {
-    "id": "err_1789776023797_0goxn7",
-    "timestamp": 1789776023797,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah cron job mencoba menyisipkan baris ke tabel **degradation_state** dengan `owner_id` yang sudah ada, sehingga melanggar constraint unik pada kolom tersebut.  \n2. Akibatnya proses `updateQuotaSnapshot`/`refreshQuotaSnapshot` gagal, sehingga snapshot kuota tidak ter‑update dan dapat menyebabkan ketidaksesuaian data kuota atau gangguan pada layanan yang bergantung pada informasi tersebut.  \n3. Perbaiki dengan menambahkan logika *upsert* (misalnya `INSERT ... ON CONFLICT(owne",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789776023797,
-    "updated_at": 1791266453956
-   },
-   {
-    "id": "err_1789797631085_06984f",
-    "timestamp": 1789797631085,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama: cron mencoba menyisipkan baris ke tabel **degradation_state** dengan `owner_id` yang sudah ada, sehingga melanggar batasan PRIMARY KEY/UNIQUE.  \n2. Dampak: job terjadwal gagal memperbarui snapshot kuota, yang dapat menyebabkan data kuota tidak ter‑sync dan potensi gangguan pada mekanisme pembatasan sumber daya.  \n3. Perbaikan: ubah logika pembaruan menjadi *upsert* (misalnya `INSERT … ON CONFLICT(owner_id) DO UPDATE`) atau pastikan baris lama di‑hapus/sembunyikan sebelum inser",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789797631085,
-    "updated_at": 1791266455226
-   },
-   {
-    "id": "err_1789819223763_l4otp6",
-    "timestamp": 1789819223763,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah fungsi `updateQuotaSnapshot` mencoba menyisipkan baris ke tabel `degradation_state` dengan nilai `owner_id` yang sudah ada, sehingga melanggar batas UNIQUE/PRIMARY KEY.  \n2. Akibatnya cron job yang memperbarui snapshot kuota gagal, sehingga data kuota tidak ter‑sync dan dapat menyebabkan ketidaksesuaian batas penggunaan layanan.  \n3. Perbaiki dengan menambahkan logika upsert atau `INSERT … ON CONFLICT REPLACE/DO UPDATE` untuk menangani duplikat, atau bersihkan entri dupl",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789819223763,
-    "updated_at": 1791288060876
-   },
-   {
-    "id": "err_1789840827762_3ehqk9",
-    "timestamp": 1789840827762,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama: cron yang memperbarui tabel **degradation_state** mencoba menyisipkan baris dengan **owner_id** yang sudah ada, sehingga melanggar constraint PRIMARY KEY/UNIQUE.  \n2. Dampak: proses cron gagal (error D1_ERROR) sehingga snapshot kuota tidak ter‑refresh, yang dapat menyebabkan data kuota tidak akurat atau layanan yang bergantung pada snapshot menjadi tidak konsisten.  \n3. Perbaikan: ubah logika cron menjadi **upsert** (misalnya `INSERT ... ON CONFLICT(owner_id) DO UPDATE`) atau ",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789840827762,
-    "updated_at": 1791288063234
-   },
-   {
-    "id": "err_1789862425803_p9lq3j",
-    "timestamp": 1789862425803,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah proses cron `updateQuotaSnapshot` mencoba menyisipkan baris dengan `owner_id` yang sudah ada di tabel `degradation_state`, sehingga melanggar constraint unik pada kolom tersebut.  \n2. Akibatnya, job terjadwal gagal dan snapshot kuota tidak ter‑update, yang dapat menyebabkan data kuota tidak akurat atau layanan yang bergantung pada snapshot menjadi tidak konsisten.  \n3. Perbaiki dengan menambahkan logika upsert/`ON CONFLICT` (misalnya `INSERT OR REPLACE`) atau cek keberad",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789862425803,
-    "updated_at": 1791288064877
-   },
-   {
-    "id": "err_1789884025397_kr4udl",
-    "timestamp": 1789884025397,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama: cron mencoba menyisipkan baris ke tabel **degradation_state** dengan `owner_id` yang sudah ada, sehingga melanggar constraint unik pada primary key.  \n2. Dampak: proses `updateQuotaSnapshot`/`refreshQuotaSnapshot` gagal, sehingga snapshot kuota tidak ter‑update dan fungsi yang bergantung pada data tersebut (misalnya pembatasan kuota) dapat menjadi tidak akurat.  \n3. Perbaikan: ubah logika cron menjadi idempotent—misalnya gunakan **INSERT OR REPLACE**/UPSERT atau cek keberadaan",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789884025397,
-    "updated_at": 1791288066779
-   },
-   {
-    "id": "err_1789905624732_xft8br",
-    "timestamp": 1789905624732,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah cron job `updateQuotaSnapshot` mencoba menyisipkan baris ke tabel **degradation_state** dengan nilai `owner_id` yang sudah ada, sehingga melanggar constraint PRIMARY KEY/UNIQUE.  \n2. Akibatnya eksekusi cron gagal, snapshot kuota tidak ter‑update, yang dapat menyebabkan data kuota tidak akurat dan potensi penolakan layanan yang bergantung pada informasi tersebut.  \n3. Perbaiki dengan mengubah operasi menjadi **upsert** (misalnya `INSERT OR REPLACE`/`ON CONFLICT DO UPDATE`",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789905624732,
-    "updated_at": 1791288068623
-   },
-   {
-    "id": "err_1789927226156_20imta",
-    "timestamp": 1789927226156,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah cron job mencoba menyisipkan baris ke tabel **degradation_state** dengan `owner_id` yang sudah ada, sehingga melanggar constraint unik pada kolom tersebut.  \n2. Akibatnya proses `updateQuotaSnapshot`/`refreshQuotaSnapshot` gagal, sehingga snapshot kuota tidak ter‑update dan layanan yang bergantung pada data kuota dapat menjadi tidak akurat atau terhenti.  \n3. Perbaiki dengan menambahkan logika *upsert* (misalnya `INSERT … ON CONFLICT(owner_id) DO UPDATE`) atau memeriksa ",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789927226156,
-    "updated_at": 1791309699211
-   },
-   {
-    "id": "err_1789948819587_v4uk3a",
-    "timestamp": 1789948819587,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah cron yang mengeksekusi `updateQuotaSnapshot` mencoba menyisipkan baris baru ke tabel `degradation_state` dengan `owner_id` yang sudah ada, sehingga melanggar constraint unik pada kolom tersebut.  \n2. Akibatnya, tugas terjadwal gagal, sehingga snapshot kuota tidak diperbarui dan dapat menyebabkan data kuota menjadi tidak sinkron atau layanan yang bergantung pada snapshot tersebut menjadi tidak akurat.  \n3. Perbaiki dengan membuat operasi menjadi idempotent—misalnya gunaka",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789948819587,
-    "updated_at": 1791309700714
-   },
-   {
-    "id": "err_1789970423653_cgeyp2",
-    "timestamp": 1789970423653,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama: cron `updateQuotaSnapshot` mencoba menyisipkan baris ke tabel **degradation_state** dengan `owner_id` yang sudah ada, sehingga melanggar constraint unik pada kolom tersebut.  \n2. Dampak: job terjadwal gagal, sehingga snapshot kuota tidak ter‑refresh dan mekanisme pembatasan kuota dapat menjadi tidak akurat atau tidak ter‑update.  \n3. Perbaikan: ubah logika cron menjadi *upsert* (INSERT ON CONFLICT DO UPDATE) atau cek keberadaan `owner_id` sebelum insert, serta pastikan tidak a",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789970423653,
-    "updated_at": 1791309702567
-   },
-   {
-    "id": "err_1789992022748_yto7fg",
-    "timestamp": 1789992022748,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah upaya menyimpan data pada tabel **degradation_state** dengan nilai `owner_id` yang sudah ada, sehingga melanggar constraint unik/primary key pada kolom tersebut.  \n2. Akibatnya, proses cron yang memperbarui atau menyegarkan kuota (fungsi `updateQuotaSnapshot`/`refreshQuotaSnapshot`) gagal, yang dapat menyebabkan data kuota tidak ter‑update dan potensi inkonsistensi dalam pemantauan degradasi layanan.  \n3. Perbaiki dengan memastikan logika penulisan tidak mencoba memasukk",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1789992022748,
-    "updated_at": 1791309704214
-   },
-   {
-    "id": "err_1790013635460_jr54fw",
-    "timestamp": 1790013635460,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah percobaan menyisipkan atau memperbarui baris pada tabel **degradation_state** dengan nilai **owner_id** yang sudah ada, sehingga melanggar constraint unik/primary key pada kolom tersebut.  \n2. Akibatnya, job cron yang bertanggung jawab memperbarui snapshot kuota gagal, sehingga data kuota tidak ter‑refresh dan dapat menyebabkan ketidaksesuaian atau penurunan akurasi pemantauan layanan.  \n3. Perbaiki dengan memastikan logika upsert (INSERT ON CONFLICT DO UPDATE) atau peng",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790013635460,
-    "updated_at": 1791309705862
-   },
-   {
-    "id": "err_1790035220014_ytgj0d",
-    "timestamp": 1790035220014,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah cron job mencoba menyisipkan baris baru ke tabel **degradation_state** dengan `owner_id` yang sudah ada, sehingga melanggar constraint unik pada kolom tersebut.  \n2. Akibatnya proses pembaruan snapshot kuota gagal, yang dapat menyebabkan data kuota tidak ter‑refresh dan potensi gangguan pada mekanisme pembatasan atau pelaporan penggunaan.  \n3. Perbaiki dengan menambahkan logika *upsert* (misalnya `INSERT ... ON CONFLICT(owner_id) DO UPDATE`) atau memeriksa keberadaan `ow",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790035220014,
-    "updated_at": 1791331222954
-   },
-   {
-    "id": "err_1790056824960_skzzqy",
-    "timestamp": 1790056824960,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah cron job `updateQuotaSnapshot` mencoba menyisipkan baris dengan `owner_id` yang sudah ada di tabel `degradation_state`, sehingga melanggar constraint primary‑key unik.  \n2. Akibatnya proses terjadwal gagal, sehingga snapshot kuota tidak ter‑update dan dapat menyebabkan ketidaksesuaian data kuota atau penurunan layanan yang bergantung pada informasi tersebut.  \n3. Perbaiki dengan menambahkan logika *upsert* (misalnya `INSERT ... ON CONFLICT(owner_id) DO UPDATE`) atau past",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790056824960,
-    "updated_at": 1791331224456
-   },
-   {
-    "id": "err_1790078420193_6ga1pb",
-    "timestamp": 1790078420193,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah upaya memasukkan atau memperbarui baris pada tabel **degradation_state** dengan nilai `owner_id` yang sudah ada, sehingga melanggar constraint unik/primary key pada kolom tersebut.  \n2. Akibatnya, proses cron yang menjalankan `updateQuotaSnapshot`/`refreshQuotaSnapshot` gagal, sehingga snapshot kuota tidak ter‑update dan dapat menyebabkan data kuota menjadi tidak sinkron atau layanan yang bergantung pada snapshot tersebut mengalami penurunan performa.  \n3. Perbaiki denga",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790078420193,
-    "updated_at": 1791331225876
-   },
-   {
-    "id": "err_1790100024803_ozq9cs",
-    "timestamp": 1790100024803,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah proses cron mencoba menyisipkan baris ke tabel **degradation_state** dengan nilai **owner_id** yang sudah ada, sehingga melanggar constraint primary key yang bersifat unik.  \n2. Akibatnya fungsi `updateQuotaSnapshot`/`refreshQuotaSnapshot` gagal dijalankan, sehingga snapshot kuota tidak ter‑update dan layanan yang bergantung pada data kuota dapat mengalami inkonsistensi atau penolakan permintaan.  \n3. Perbaiki dengan menambahkan logika *upsert* atau pengecekan keberadaan",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790100024803,
-    "updated_at": 1791331226944
-   },
-   {
-    "id": "err_1790121605217_abu5jw",
-    "timestamp": 1790121605217,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": "1. Penyebab utama adalah cron job `refreshQuotaSnapshot` mencoba menyisipkan baris ke tabel **degradation_state** dengan `owner_id` yang sudah ada, sehingga melanggar batasan unik pada kolom primary‑key.  \n2. Akibatnya proses cron gagal dan snapshot kuota tidak ter‑update, yang dapat menyebabkan data kuota tidak akurat dan potensi gangguan pada layanan yang bergantung pada informasi tersebut.  \n3. Perbaiki dengan menambahkan logika *upsert* (INSERT … ON CONFLICT DO UPDATE) atau memastikan `owner",
-    "status": "DIAGNOSED",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790121605217,
-    "updated_at": 1791331227961
-   },
-   {
-    "id": "err_1790143206372_cr4d5p",
-    "timestamp": 1790143206372,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16038:3)\n    at async Object.scheduled (index.js:16828:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790143206372,
-    "updated_at": 1790143206372
-   },
-   {
-    "id": "err_1790164806264_krc0dv",
-    "timestamp": 1790164806264,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16053:3)\n    at async Object.scheduled (index.js:16843:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790164806264,
-    "updated_at": 1790164806264
-   },
-   {
-    "id": "err_1790186405390_qiwjjk",
-    "timestamp": 1790186405390,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16053:3)\n    at async Object.scheduled (index.js:16843:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790186405390,
-    "updated_at": 1790186405390
-   },
-   {
-    "id": "err_1790208005451_sdyzfq",
-    "timestamp": 1790208005451,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16053:3)\n    at async Object.scheduled (index.js:16843:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790208005451,
-    "updated_at": 1790208005451
-   },
-   {
-    "id": "err_1790229605143_fugoay",
-    "timestamp": 1790229605143,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16053:3)\n    at async Object.scheduled (index.js:16843:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790229605143,
-    "updated_at": 1790229605143
-   },
-   {
-    "id": "err_1790251205345_z7887j",
-    "timestamp": 1790251205345,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16053:3)\n    at async Object.scheduled (index.js:16843:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790251205345,
-    "updated_at": 1790251205345
-   },
-   {
-    "id": "err_1790254605422_0lii5i",
-    "timestamp": 1790254605422,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16053:3)\n    at async Object.scheduled (index.js:16843:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790254605422,
-    "updated_at": 1790254605422
-   },
-   {
-    "id": "err_1790272805221_vbzkdh",
-    "timestamp": 1790272805221,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16053:3)\n    at async Object.scheduled (index.js:16843:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790272805221,
-    "updated_at": 1790272805221
-   },
-   {
-    "id": "err_1790294405191_xfhicl",
-    "timestamp": 1790294405191,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16053:3)\n    at async Object.scheduled (index.js:16843:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790294405191,
-    "updated_at": 1790294405191
-   },
-   {
-    "id": "err_1790316007366_9y7ils",
-    "timestamp": 1790316007366,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16053:3)\n    at async Object.scheduled (index.js:16843:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790316007366,
-    "updated_at": 1790316007366
-   },
-   {
-    "id": "err_1790337605136_r913ia",
-    "timestamp": 1790337605136,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12810:3)\n    at async refreshQuotaSnapshot (index.js:16053:3)\n    at async Object.scheduled (index.js:16843:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790337605136,
-    "updated_at": 1790337605136
-   },
-   {
-    "id": "err_1790359205129_yoso8x",
-    "timestamp": 1790359205129,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12826:3)\n    at async refreshQuotaSnapshot (index.js:16054:3)\n    at async Object.scheduled (index.js:16844:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790359205129,
-    "updated_at": 1790359205129
-   },
-   {
-    "id": "err_1790359241310_lkwosd",
-    "timestamp": 1790359241310,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:12826:3)\n    at async refreshQuotaSnapshot (index.js:16054:3)\n    at async Object.scheduled (index.js:16844:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790359241310,
-    "updated_at": 1790359241310
-   },
-   {
-    "id": "err_1790380861042_q9iz6p",
-    "timestamp": 1790380861042,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31121:3)\n    at async refreshQuotaSnapshot (index.js:34400:3)\n    at async Object.scheduled (index.js:44473:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790380861042,
-    "updated_at": 1790380861042
-   },
-   {
-    "id": "err_1790402428634_c9vcdt",
-    "timestamp": 1790402428634,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31121:3)\n    at async refreshQuotaSnapshot (index.js:34400:3)\n    at async Object.scheduled (index.js:44473:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790402428634,
-    "updated_at": 1790402428634
-   },
-   {
-    "id": "err_1790424015904_5exs4m",
-    "timestamp": 1790424015904,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31121:3)\n    at async refreshQuotaSnapshot (index.js:34400:3)\n    at async Object.scheduled (index.js:44473:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790424015904,
-    "updated_at": 1790424015904
-   },
-   {
-    "id": "err_1790445629856_h7gijs",
-    "timestamp": 1790445629856,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31121:3)\n    at async refreshQuotaSnapshot (index.js:34400:3)\n    at async Object.scheduled (index.js:44473:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790445629856,
-    "updated_at": 1790445629856
-   },
-   {
-    "id": "err_1790467210863_41dkmo",
-    "timestamp": 1790467210863,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31121:3)\n    at async refreshQuotaSnapshot (index.js:34400:3)\n    at async Object.scheduled (index.js:44473:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790467210863,
-    "updated_at": 1790467210863
-   },
-   {
-    "id": "err_1790488817881_d8f7ia",
-    "timestamp": 1790488817881,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31121:3)\n    at async refreshQuotaSnapshot (index.js:34400:3)\n    at async Object.scheduled (index.js:44473:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790488817881,
-    "updated_at": 1790488817881
-   },
-   {
-    "id": "err_1790510415777_5bpomn",
-    "timestamp": 1790510415777,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31121:3)\n    at async refreshQuotaSnapshot (index.js:34400:3)\n    at async Object.scheduled (index.js:44473:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790510415777,
-    "updated_at": 1790510415777
-   },
-   {
-    "id": "err_1790532024247_i263la",
-    "timestamp": 1790532024247,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31121:3)\n    at async refreshQuotaSnapshot (index.js:34400:3)\n    at async Object.scheduled (index.js:44473:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790532024247,
-    "updated_at": 1790532024247
-   },
-   {
-    "id": "err_1790553620714_qyajwo",
-    "timestamp": 1790553620714,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31121:3)\n    at async refreshQuotaSnapshot (index.js:34400:3)\n    at async Object.scheduled (index.js:44473:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790553620714,
-    "updated_at": 1790553620714
-   },
-   {
-    "id": "err_1790575315887_issb72",
-    "timestamp": 1790575315887,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31121:3)\n    at async refreshQuotaSnapshot (index.js:34400:3)\n    at async Object.scheduled (index.js:44473:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790575315887,
-    "updated_at": 1790575315887
-   },
-   {
-    "id": "err_1790683244181_e9ruua",
-    "timestamp": 1790683244181,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31178:3)\n    at async refreshQuotaSnapshot (index.js:34457:3)\n    at async Object.scheduled (index.js:44545:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790683244181,
-    "updated_at": 1790683244181
-   },
-   {
-    "id": "err_1790704844879_9e7uwl",
-    "timestamp": 1790704844879,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790704844879,
-    "updated_at": 1790704844879
-   },
-   {
-    "id": "err_1790726457795_enolvv",
-    "timestamp": 1790726457795,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790726457795,
-    "updated_at": 1790726457795
-   },
-   {
-    "id": "err_1790748048488_una83k",
-    "timestamp": 1790748048488,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790748048488,
-    "updated_at": 1790748048488
-   },
-   {
-    "id": "err_1790769646713_awern6",
-    "timestamp": 1790769646713,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790769646713,
-    "updated_at": 1790769646713
-   },
-   {
-    "id": "err_1790791248927_wirxjq",
-    "timestamp": 1790791248927,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790791248927,
-    "updated_at": 1790791248927
-   },
-   {
-    "id": "err_1790812842049_ooafvj",
-    "timestamp": 1790812842049,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790812842049,
-    "updated_at": 1790812842049
-   },
-   {
-    "id": "err_1790834456853_cfa8lf",
-    "timestamp": 1790834456853,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790834456853,
-    "updated_at": 1790834456853
-   },
-   {
-    "id": "err_1790856036885_4489mk",
-    "timestamp": 1790856036885,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790856036885,
-    "updated_at": 1790856036885
-   },
-   {
-    "id": "err_1790877642801_9ushl6",
-    "timestamp": 1790877642801,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790877642801,
-    "updated_at": 1790877642801
-   },
-   {
-    "id": "err_1790899237431_vzjiqv",
-    "timestamp": 1790899237431,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790899237431,
-    "updated_at": 1790899237431
-   },
-   {
-    "id": "err_1790920864553_37rlpg",
-    "timestamp": 1790920864553,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790920864553,
-    "updated_at": 1790920864553
-   },
-   {
-    "id": "err_1790942450828_gti8dg",
-    "timestamp": 1790942450828,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790942450828,
-    "updated_at": 1790942450828
-   },
-   {
-    "id": "err_1790964033003_yehum5",
-    "timestamp": 1790964033003,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790964033003,
-    "updated_at": 1790964033003
-   },
-   {
-    "id": "err_1790985631210_9vdcsr",
-    "timestamp": 1790985631210,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1790985631210,
-    "updated_at": 1790985631210
-   },
-   {
-    "id": "err_1791007233234_dbdii1",
-    "timestamp": 1791007233234,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1791007233234,
-    "updated_at": 1791007233234
-   },
-   {
-    "id": "err_1791028840153_q4vl8i",
-    "timestamp": 1791028840153,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1791028840153,
-    "updated_at": 1791028840153
-   },
-   {
-    "id": "err_1791050447486_gunfpl",
-    "timestamp": 1791050447486,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1791050447486,
-    "updated_at": 1791050447486
-   },
-   {
-    "id": "err_1791072034563_p36hpz",
-    "timestamp": 1791072034563,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1791072034563,
-    "updated_at": 1791072034563
-   },
-   {
-    "id": "err_1791093636217_b1oj7r",
-    "timestamp": 1791093636217,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1791093636217,
-    "updated_at": 1791093636217
-   },
-   {
-    "id": "err_1791115242800_upcylm",
-    "timestamp": 1791115242800,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31209:3)\n    at async refreshQuotaSnapshot (index.js:34988:3)\n    at async Object.scheduled (index.js:45077:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1791115242800,
-    "updated_at": 1791115242800
-   },
-   {
-    "id": "err_1791136835689_4b5mcj",
-    "timestamp": 1791136835689,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31308:3)\n    at async refreshQuotaSnapshot (index.js:35170:3)\n    at async Object.scheduled (index.js:45259:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1791136835689,
-    "updated_at": 1791136835689
-   },
-   {
-    "id": "err_1791158456310_cp0bj0",
-    "timestamp": 1791158456310,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31308:3)\n    at async refreshQuotaSnapshot (index.js:35170:3)\n    at async Object.scheduled (index.js:45259:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1791158456310,
-    "updated_at": 1791158456310
-   },
-   {
-    "id": "err_1791180041442_9hzw7l",
-    "timestamp": 1791180041442,
-    "severity": "high",
-    "category": "cron_error",
-    "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
-    "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31308:3)\n    at async refreshQuotaSnapshot (index.js:35170:3)\n    at async Object.scheduled (index.js:45259:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
-    "context": "cron:0 */6 * * *",
-    "fix_attempted": null,
-    "fix_result": null,
-    "created_at": 1791180041442,
-    "updated_at": 1791180041442
-   },
-   {
     "id": "err_1791201633141_kv1gcf",
     "timestamp": 1791201633141,
     "severity": "high",
     "category": "cron_error",
     "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
     "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31308:3)\n    at async refreshQuotaSnapshot (index.js:35170:3)\n    at async Object.scheduled (index.js:45259:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
+    "diagnosis": "1. Penyebab utama: cron mencoba menyisipkan baris ke tabel `degradation_state` dengan `owner_id` yang sudah ada, sehingga melanggar constraint UNIQUE/PRIMARY‑KEY.  \n2. Dampak: proses cron yang memperbarui snapshot kuota gagal, sehingga data kuota tidak ter‑refresh dan dapat menyebabkan keputusan alokasi sumber daya yang tidak akurat.  \n3. Perbaikan: ubah logika cron menjadi *upsert* (misalnya `INSERT … ON CONFLICT(owner_id) DO UPDATE`) atau cek keberadaan `owner_id` sebelum insert, serta bersihk",
+    "status": "DIAGNOSED",
     "context": "cron:0 */6 * * *",
     "fix_attempted": null,
     "fix_result": null,
     "created_at": 1791201633141,
-    "updated_at": 1791201633141
+    "updated_at": 1791547256753
    },
    {
     "id": "err_1791223234209_w55w26",
@@ -13259,13 +12977,13 @@
     "category": "cron_error",
     "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
     "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31308:3)\n    at async refreshQuotaSnapshot (index.js:35170:3)\n    at async Object.scheduled (index.js:45259:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
+    "diagnosis": "1. Penyebab utama adalah cron job mencoba menyisipkan baris ke tabel **degradation_state** dengan `owner_id` yang sudah ada, sehingga melanggar constraint unik pada kolom tersebut.  \n2. Akibatnya proses pembaruan snapshot kuota gagal, yang dapat menyebabkan data kuota tidak ter‑sync dan potensi gangguan pada mekanisme pembatasan (quota) sistem.  \n3. Perbaiki dengan menambahkan logika *upsert* (misalnya `INSERT … ON CONFLICT(owner_id) DO UPDATE`) atau memeriksa keberadaan `owner_id` sebelum inser",
+    "status": "DIAGNOSED",
     "context": "cron:0 */6 * * *",
     "fix_attempted": null,
     "fix_result": null,
     "created_at": 1791223234209,
-    "updated_at": 1791223234209
+    "updated_at": 1791547258630
    },
    {
     "id": "err_1791244837773_1zh7jl",
@@ -13274,13 +12992,13 @@
     "category": "cron_error",
     "message": "D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)",
     "stack_trace": "Error: D1_ERROR: UNIQUE constraint failed: degradation_state.owner_id: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)\n    at D1DatabaseSessionAlwaysPrimary._sendOrThrow (cloudflare-internal:d1-api:188:19)\n    at async cloudflare-internal:d1-api:478:19\n    at async updateQuotaSnapshot (index.js:31624:3)\n    at async refreshQuotaSnapshot (index.js:35511:3)\n    at async Object.scheduled (index.js:45600:9)",
-    "diagnosis": null,
-    "status": "PENDING_FIX",
+    "diagnosis": "1. Penyebab utama: proses cron mencoba memasukkan atau memperbarui baris pada tabel **degradation_state** dengan nilai `owner_id` yang sudah ada, sehingga melanggar constraint unik/primary key.  \n2. Dampak: operasi cron gagal, sehingga snapshot kuota tidak ter‑update dan layanan yang bergantung pada data degradasi/kuota dapat memberikan informasi yang usang atau tidak akurat.  \n3. Perbaikan: pastikan logika cron melakukan **upsert** (INSERT ON CONFLICT DO UPDATE) atau cek keberadaan `owner_id` s",
+    "status": "DIAGNOSED",
     "context": "cron:0 */6 * * *",
     "fix_attempted": null,
     "fix_result": null,
     "created_at": 1791244837773,
-    "updated_at": 1791244837773
+    "updated_at": 1791568848463
    }
   ],
   "deploy_versions": [
@@ -13591,6 +13309,110 @@
    {
     "version": "a327b2e1-85e0-4fae-8fd8-c1ef5216474c",
     "deployed_at": 1791330859043,
+    "deployed_by": "cf-deploy",
+    "error_rate": 0,
+    "status": "superseded",
+    "notes": "recorded from version_metadata binding"
+   },
+   {
+    "version": "3d341ac0-9ae2-4cfa-b7c5-5d8271c13250",
+    "deployed_at": 1791383659167,
+    "deployed_by": "cf-deploy",
+    "error_rate": 0,
+    "status": "superseded",
+    "notes": "recorded from version_metadata binding"
+   },
+   {
+    "version": "758b60e9-50b9-4165-b20f-06bf99eed198",
+    "deployed_at": 1791383951970,
+    "deployed_by": "cf-deploy",
+    "error_rate": 0,
+    "status": "superseded",
+    "notes": "recorded from version_metadata binding"
+   },
+   {
+    "version": "0c92ad60-f856-421a-b845-bd17c1edf7a6",
+    "deployed_at": 1791385572156,
+    "deployed_by": "cf-deploy",
+    "error_rate": 0,
+    "status": "superseded",
+    "notes": "recorded from version_metadata binding"
+   },
+   {
+    "version": "c0282871-8973-4e92-b6c4-c7f26a43368b",
+    "deployed_at": 1791385692174,
+    "deployed_by": "cf-deploy",
+    "error_rate": 0,
+    "status": "superseded",
+    "notes": "recorded from version_metadata binding"
+   },
+   {
+    "version": "de590034-b9f1-4b0d-bdfd-55023131a7a2",
+    "deployed_at": 1791386052202,
+    "deployed_by": "cf-deploy",
+    "error_rate": 0,
+    "status": "superseded",
+    "notes": "recorded from version_metadata binding"
+   },
+   {
+    "version": "0e5951cb-f9ee-47c2-8c71-a7d8ab0ef5ad",
+    "deployed_at": 1791386412114,
+    "deployed_by": "cf-deploy",
+    "error_rate": 0,
+    "status": "superseded",
+    "notes": "recorded from version_metadata binding"
+   },
+   {
+    "version": "c4610646-4ee6-47f8-9d69-11ca2edde5af",
+    "deployed_at": 1791387612217,
+    "deployed_by": "cf-deploy",
+    "error_rate": 0,
+    "status": "superseded",
+    "notes": "recorded from version_metadata binding"
+   },
+   {
+    "version": "07186d78-0a30-4b27-809a-d2b386445613",
+    "deployed_at": 1791387792226,
+    "deployed_by": "cf-deploy",
+    "error_rate": 0,
+    "status": "superseded",
+    "notes": "recorded from version_metadata binding"
+   },
+   {
+    "version": "61cd3f02-4d63-48a2-b5c0-5bf299ae30d9",
+    "deployed_at": 1791389472156,
+    "deployed_by": "cf-deploy",
+    "error_rate": 0,
+    "status": "superseded",
+    "notes": "recorded from version_metadata binding"
+   },
+   {
+    "version": "0b28b332-4be5-4922-a532-b5258de04516",
+    "deployed_at": 1791391092222,
+    "deployed_by": "cf-deploy",
+    "error_rate": 0,
+    "status": "superseded",
+    "notes": "recorded from version_metadata binding"
+   },
+   {
+    "version": "9f542243-91b1-4e86-b6e4-c37ed5ab8ade",
+    "deployed_at": 1791609164969,
+    "deployed_by": "cf-deploy",
+    "error_rate": 0,
+    "status": "superseded",
+    "notes": "recorded from version_metadata binding"
+   },
+   {
+    "version": "47f9b246-fa9a-4f50-a842-79d61632e248",
+    "deployed_at": 1791609821895,
+    "deployed_by": "cf-deploy",
+    "error_rate": 0,
+    "status": "superseded",
+    "notes": "recorded from version_metadata binding"
+   },
+   {
+    "version": "e51d2edf-9ff9-46c3-a290-edcb86e98449",
+    "deployed_at": 1791905516090,
     "deployed_by": "cf-deploy",
     "error_rate": 0,
     "status": "active",
@@ -22355,53 +22177,7 @@
   "orders": [],
   "order_items": [],
   "reminders": [],
-  "agent_tasks": [
-   {
-    "id": 35,
-    "owner_id": 6812604983,
-    "task": "Buat artikel panduan lengkap tentang bekerja remote dalam Bahasa Indonesia dengan ketentuan berikut:\n\n- **Panjang artikel:** sekitar 1.500–2.000 kata.\n- **Format:** Markdown, gunakan heading (##) untuk tiap bagian utama dan sub‑heading (###) untuk sub‑bagian.\n- **Struktur konten:**\n  1. **Pendahuluan** – definisi kerja remote, tren terkini, mengapa semakin populer.\n  2. **Keuntungan kerja remote** – fleksibilitas waktu, penghematan biaya, keseimbangan hidup‑kerja, dll.\n  3. **Tantangan utama** – isolasi sosial, manajemen waktu, gangguan di rumah, keamanan data, dll.\n  4. **Tips praktis untuk meningkatkan produktivitas**:\n     - Penataan ruang kerja (ergonomi, pencahayaan, kebisingan).\n     - Teknik manajemen waktu (metode Pomodoro, time‑blocking).\n     - Rutinitas harian (jam kerja, istirahat, olahraga).\n  5. **Alat‑alat penting**:\n     - Komunikasi (Slack, Microsoft Teams, Zoom).\n     - Kolaborasi dokumen (Google Workspace, Notion, Miro).\n     - Manajemen proyek (Trello, Asana, ClickUp).\n     - Keamanan (VPN, manajemen kata sandi).\n  6. **Strategi komunikasi efektif dengan tim** – meeting rutin, update status, budaya transparansi.\n  7. **Membangun budaya tim secara virtual** – kegiatan ice‑breaking, perayaan pencapaian, ruang sosial online.\n  8. **Keseimbangan kerja‑hidup** – batasan waktu, “off‑hours”, teknik relaksasi.\n  9. **Kesimpulan** – rangkuman poin penting dan ajakan untuk menerapkan praktik terbaik.\n\n- **Gaya penulisan:** informatif, mudah dipahami, bersahabat, dengan contoh konkret dan tip yang dapat langsung dipraktikkan.\n- **Elemen tambahan:** gunakan bullet points atau numbered list bila diperlukan, sertakan contoh tabel singkat untuk perbandingan alat, dan sisipkan kutipan singkat (quote) relevan untuk memperkuat poin.\n- **Target audiens:** pekerja profesional, freelancer, dan manajer yang ingin atau sudah menjalankan kerja remote di Indonesia.",
-    "executor": "github",
-    "status": "failed",
-    "run_id": null,
-    "created_at": 1790682131777,
-    "started_at": null,
-    "finished_at": 1790780597341,
-    "result": null,
-    "error": "executor timeout (no report within 30 menit)",
-    "artifact_url": null,
-    "rule_id": null
-   },
-   {
-    "id": 36,
-    "owner_id": 6812604983,
-    "task": " verifikasi jalur pelaporanDelegasi",
-    "executor": "github",
-    "status": "running",
-    "run_id": null,
-    "created_at": 1791296359000,
-    "started_at": null,
-    "finished_at": null,
-    "result": null,
-    "error": null,
-    "artifact_url": null,
-    "rule_id": null
-   },
-   {
-    "id": 37,
-    "owner_id": 6812604983,
-    "task": "verifikasi jalur pelaporan delegasi",
-    "executor": "github",
-    "status": "done",
-    "run_id": null,
-    "created_at": 1791297000000,
-    "started_at": null,
-    "finished_at": 1791296448043,
-    "result": "Uji jalur pelaporan delegasi berhasil.",
-    "error": null,
-    "artifact_url": "https://github.com/vikricahya64-alt/jarvis/blob/main/artifacts/task_900020.md",
-    "rule_id": null
-   }
-  ],
+  "agent_tasks": [],
   "agent_task_rules": []
  }
 }
